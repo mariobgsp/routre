@@ -60,7 +60,16 @@ make build test bench        # bench gates 90% (fails on regression)
 
 ## Install
 
-### npm (macOS / Windows / Linux) — recommended
+### npm (macOS / Windows / Linux) — planned
+
+> **⚠️ Not yet published to the npm registry.**
+>
+> The npm distribution is built and verified (`npm/dist/*.tgz`, all 7
+> packages, bench gate PASS), and the GitHub Actions trusted-publishing
+> workflow (`.github/workflows/publish.yml`) is ready — but the packages
+> have not been released yet. `npm install -g routre-cli` will fail with
+> E404 until the maintainer completes the one-time npm account setup
+> (account + package creation + trusted publisher) and pushes a `v*` tag.
 
 ```bash
 npm install -g routre-cli
