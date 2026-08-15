@@ -1,8 +1,18 @@
 {
   "listen": "127.0.0.1:20128",
   "log_level": "info",
-  "rtk": { "enabled": true, "min_bytes": 500, "max_bytes": 10485760 },
-  "cache": { "enabled": true, "max_entries": 512, "ttl_seconds": 3600, "prefix_order": false },
+  "rtk": {
+    "enabled": true,
+    "min_bytes": 0,
+    "max_bytes": 10485760
+  },
+  "cache": {
+    "enabled": true,
+    "max_entries": 4096,
+    "ttl_seconds": 86400,
+    "prefix_order": true,
+    "max_bytes": 67108864
+  },
   "tiers": [
     {
       "name": "subscription",
@@ -12,14 +22,20 @@
           "kind": "anthropic",
           "base_url": "https://api.anthropic.com",
           "api_key_env": "ANTHROPIC_API_KEY",
-          "models": ["claude-sonnet-4-5", "claude-opus-4-1"]
+          "models": [
+            "claude-sonnet-4-5",
+            "claude-opus-4-1"
+          ]
         },
         {
           "name": "openai-sub",
           "kind": "openai",
           "base_url": "https://api.openai.com/v1",
           "api_key_env": "OPENAI_API_KEY",
-          "models": ["gpt-5", "gpt-5-mini"]
+          "models": [
+            "gpt-5",
+            "gpt-5-mini"
+          ]
         }
       ]
     },
@@ -31,14 +47,18 @@
           "kind": "openai",
           "base_url": "https://api.z.ai/api/paas/v4",
           "api_key_env": "GLM_API_KEY",
-          "models": ["glm-4.7"]
+          "models": [
+            "glm-4.7"
+          ]
         },
         {
           "name": "minimax",
           "kind": "openai",
           "base_url": "https://api.minimax.io/v1",
           "api_key_env": "MINIMAX_API_KEY",
-          "models": ["MiniMax-M2.1"]
+          "models": [
+            "MiniMax-M2.1"
+          ]
         }
       ]
     },
@@ -50,7 +70,9 @@
           "kind": "openai",
           "base_url": "https://api.iflow.cn/v1",
           "api_key_env": "IFLOW_API_KEY",
-          "models": ["qwen3-coder"]
+          "models": [
+            "qwen3-coder"
+          ]
         }
       ]
     }

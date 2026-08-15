@@ -24,6 +24,7 @@ type Server struct {
 	http      *http.Server
 	Name      string
 	FailWith  int           // if != 0, respond with this status
+	FailBody  string        // optional custom failure body (used when FailWith != 0)
 	ResetConn bool          // close connection without a response
 	AbortMid  bool          // start SSE then abort
 	Stream    bool          // force SSE responses
@@ -66,6 +67,13 @@ func (m *Server) SetFail(status int) {
 	m.FailWith = status
 }
 
+// SetFailBody configures a custom failure response body (with SetFail).
+func (m *Server) SetFailBody(body string) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.FailBody = body
+}
+
 // SetResetConn makes the next requests die at the socket level.
 func (m *Server) SetResetConn(on bool) {
 	m.mu.Lock()
@@ -105,6 +113,7 @@ func (m *Server) handle(w http.ResponseWriter, r *http.Request) {
 
 	m.mu.Lock()
 	fail := m.FailWith
+	failBody := m.FailBody
 	reset := m.ResetConn
 	abort := m.AbortMid
 	stream := m.Stream
@@ -124,7 +133,11 @@ func (m *Server) handle(w http.ResponseWriter, r *http.Request) {
 	if fail != 0 {
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(fail)
-		_, _ = w.Write([]byte(fmt.Sprintf(`{"error":{"message":"mock %s failure %d","type":"mock"}}`, m.Name, fail)))
+		if failBody != "" {
+			_, _ = w.Write([]byte(failBody))
+		} else {
+			_, _ = w.Write([]byte(fmt.Sprintf(`{"error":{"message":"mock %s failure %d","type":"mock"}}`, m.Name, fail)))
+		}
 		return
 	}
 

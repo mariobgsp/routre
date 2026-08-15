@@ -20,7 +20,10 @@ node npm/build.mjs
 if [ -n "${NPM_TOKEN:-}" ]; then
   npm config set //registry.npmjs.org/:_authToken "$NPM_TOKEN"
 fi
-npm whoami >/dev/null || { echo "not logged in: run 'npm login' or set NPM_TOKEN" >&2; exit 1; }
+npm whoami >/dev/null || {
+  echo "not logged in: run 'npm login' or set NPM_TOKEN" >&2
+  exit 1
+}
 
 cd npm/dist
 for pkg in \

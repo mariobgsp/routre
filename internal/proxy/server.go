@@ -76,6 +76,7 @@ func (s *Server) Serve(ln net.Listener) error {
 	mux.HandleFunc("GET /v1/models", s.handlers.Models)
 	mux.HandleFunc("GET /v1/status", s.handlers.Status)
 	mux.HandleFunc("GET /v1/usage", s.handlers.UsageReport)
+	mux.HandleFunc("GET /metrics", s.handlers.MetricsHandler)
 	mux.HandleFunc("POST /v1/chat/completions", s.handlers.ChatCompletions)
 	mux.HandleFunc("POST /v1/messages", s.handlers.Messages)
 	mux.HandleFunc("/", s.handlers.NotFound)

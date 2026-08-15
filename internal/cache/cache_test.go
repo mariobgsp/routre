@@ -58,6 +58,18 @@ func TestOversizedSkipped(t *testing.T) {
 	}
 }
 
+func TestByteCapEviction(t *testing.T) {
+	c := New(Config{Enabled: true, MaxEntries: 100, TTLSeconds: 3600, MaxBytes: 10})
+	c.Put("a", Entry{Body: []byte("aaaaaa")}) // 6
+	c.Put("b", Entry{Body: []byte("bbbbb")})  // 5 -> 11 > 10, evict a
+	if _, ok := c.Get("a"); ok {
+		t.Fatal("a must be evicted by the byte cap")
+	}
+	if _, ok := c.Get("b"); !ok {
+		t.Fatal("b must survive")
+	}
+}
+
 func TestKeyDeterministic(t *testing.T) {
 	if Key([]byte("x")) != Key([]byte("x")) {
 		t.Fatal("key must be deterministic")

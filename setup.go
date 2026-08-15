@@ -119,6 +119,28 @@ func cmdSetup(cfgPath string, logger *log.Logger) error {
 	if len(cfg.Tiers) == 0 {
 		logger.Printf("warning: no providers configured; the gateway will start but answer 503")
 	}
+
+	// Preferred model + fallbacks (up to 10): the user picks the default
+	// model (their preferred provider) and the models to fall back to when
+	// it fails — free tiers, or any other model they have access to.
+	fmt.Println()
+	fmt.Println("routing preference")
+	fmt.Println("(preferred model first; then up to 9 fallback models, in order)")
+	preferred := ask("preferred model (default)", firstModel(cfg))
+	fmt.Println("fallback models — any model you have access to (free tiers, or paid models on another provider); press Enter after the last one:")
+	var fallbacks []string
+	for i := 0; i < 9; i++ {
+		m := ask(fmt.Sprintf("  fallback %d", i+1), "")
+		if m == "" {
+			break
+		}
+		fallbacks = append(fallbacks, m)
+	}
+	if preferred != "" {
+		cfg.PreferredModel = preferred
+	}
+	cfg.Fallbacks = fallbacks
+
 	if err := cfg.Validate(); err != nil {
 		return err
 	}
@@ -155,6 +177,19 @@ func splitModels(s string) []string {
 		}
 	}
 	return out
+}
+
+// firstModel returns the first model of the first provider (used as the
+// default for the "preferred model" setup question).
+func firstModel(cfg config.Config) string {
+	for _, t := range cfg.Tiers {
+		for _, p := range t.Providers {
+			if len(p.Models) > 0 {
+				return p.Models[0]
+			}
+		}
+	}
+	return ""
 }
 
 // suggestEnvName derives an env var name from a provider name:
