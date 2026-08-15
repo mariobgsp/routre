@@ -3,17 +3,94 @@ package proxy
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
 	"os"
 	"strings"
+	"time"
 
 	"routre-cli/internal/cache"
+	"routre-cli/internal/reqlog"
 	"routre-cli/internal/router"
 	"routre-cli/internal/tokenize"
 	"routre-cli/internal/usage"
 )
+
+// attemptTimeout bounds a single non-streaming upstream attempt. Streaming
+// relays are exempt (they can legitimately run for minutes; the transport
+// already bounds dial + response headers).
+const attemptTimeout = 120 * time.Second
+
+// rewriteModel swaps the model field of a JSON request body, returning the
+// new body. On malformed input it returns the original body unchanged.
+func rewriteModel(body []byte, model string) ([]byte, error) {
+	var doc map[string]any
+	if err := json.Unmarshal(body, &doc); err != nil {
+		return body, nil
+	}
+	doc["model"] = model
+	out, err := json.Marshal(doc)
+	if err != nil {
+		return body, nil
+	}
+	return out, nil
+}
+
+// clampMaxTokens caps the max_tokens field of a JSON request body so that
+// the total context (prompt + max_tokens) fits the provider's ceiling. The
+// ceiling is the provider's TOTAL context window; upstreams reject
+// requests where prompt tokens + max_tokens exceed it, so the clamp
+// subtracts an estimate of the prompt size plus a small safety margin.
+// Returns the original body when the ceiling is 0 (unset), the body has
+// no max_tokens, or it is already within bounds.
+func clampMaxTokens(body []byte, ceiling int64) ([]byte, error) {
+	if ceiling <= 0 {
+		return body, nil
+	}
+	var doc map[string]any
+	if err := json.Unmarshal(body, &doc); err != nil {
+		return body, nil
+	}
+	mt, ok := doc["max_tokens"]
+	if !ok {
+		return body, nil
+	}
+	var n int64
+	switch v := mt.(type) {
+	case float64:
+		n = int64(v)
+	case json.Number:
+		n, _ = v.Int64()
+	default:
+		return body, nil
+	}
+	// Estimate the prompt side (messages/system/tools) from the body with
+	// the max_tokens field excluded so the estimate is not inflated by it.
+	promptEst := int64(0)
+	if msgs, ok := doc["messages"]; ok {
+		if mb, err := json.Marshal(msgs); err == nil {
+			promptEst = int64(tokenize.Estimate(string(mb)))
+		}
+	}
+	// Reserve margin for tokenizer drift between our estimate and the
+	// provider's exact count.
+	const margin = 512
+	maxAllowed := ceiling - promptEst - margin
+	if maxAllowed < 1024 {
+		maxAllowed = 1024
+	}
+	if n <= maxAllowed {
+		return body, nil
+	}
+	doc["max_tokens"] = maxAllowed
+	out, err := json.Marshal(doc)
+	if err != nil {
+		return body, nil
+	}
+	return out, nil
+}
 
 // apiFormat is the API dialect a request arrives in.
 type apiFormat int
@@ -43,17 +120,28 @@ func detectFormat(path string, body []byte) apiFormat {
 // order (cache), exact-match cache lookup, tiered failover relay, cache
 // write. It is shared by the /v1/chat/completions and /v1/messages handlers.
 func (h *Handlers) route(w http.ResponseWriter, r *http.Request, api apiFormat) {
+	start := time.Now()
 	ctx := r.Context()
 	client := clientName(r)
 
+	// Request-log + metrics emission on every exit path.
+	logReq := func(e reqlog.Entry) {
+		e.LatencyMS = time.Since(start).Milliseconds()
+		reqlog.Write(e)
+	}
+
 	body, err := readBody(r.Body, maxRequestBody)
 	if err != nil {
+		logReq(reqlog.Entry{Client: client, Status: http.StatusRequestEntityTooLarge, Class: "error"})
+		h.Metrics.Request(client, "", "", "error")
 		writeJSON(w, http.StatusRequestEntityTooLarge, map[string]any{
 			"error": map[string]any{"message": "request body too large", "type": "invalid_request_error"},
 		})
 		return
 	}
 	if len(body) == 0 {
+		logReq(reqlog.Entry{Client: client, Status: http.StatusBadRequest, Class: "error"})
+		h.Metrics.Request(client, "", "", "error")
 		writeJSON(w, http.StatusBadRequest, map[string]any{
 			"error": map[string]any{"message": "empty request body", "type": "invalid_request_error"},
 		})
@@ -61,13 +149,16 @@ func (h *Handlers) route(w http.ResponseWriter, r *http.Request, api apiFormat) 
 	}
 
 	streaming := isStreaming(body)
+	requested := modelFromBody(body)
 
 	// 1) RTK compression (token reduction).
 	processed, rtkChanged := h.RTK.Apply(body)
 	rtkSaved := 0
 	if rtkChanged {
 		rtkSaved = tokenize.Estimate(string(body)) - tokenize.Estimate(string(processed))
+		h.Metrics.RTKApplied()
 	}
+	h.Metrics.RTKSaved(int64(rtkSaved))
 	// 2) Cache-friendly ordering (only when enabled; keeps stable prefix).
 	if cfg := h.Cfg.Get(); cfg.Cache.PrefixOrder {
 		processed = orderPrompt(processed)
@@ -83,28 +174,78 @@ func (h *Handlers) route(w http.ResponseWriter, r *http.Request, api apiFormat) 
 			if cacheSaved > 0 {
 				h.Usage.Record(client, modelFromBody(processed), 0, 0, 0, int64(cacheSaved), usage.Prices{}, 0)
 			}
+			h.Metrics.CacheHit()
+			logReq(reqlog.Entry{Client: client, Model: requested, Status: http.StatusOK, Class: "cache", PromptTokens: int64(cacheSaved), RTKSavedTokens: int64(rtkSaved)})
 			w.Header().Set("Content-Type", e.ContentType)
 			w.Header().Set("X-Llrouter-Cache", "hit")
 			w.WriteHeader(http.StatusOK)
 			_, _ = w.Write(e.Body)
 			return
 		}
+		h.Metrics.CacheMiss()
 	}
 
-	// 4) Tiered failover relay.
+	// 4) Tiered failover relay, model-aware: only providers that can serve
+	// the requested model (exact or free variant) are candidates, in tier
+	// order. If the requested model has no working candidate, the
+	// configured fallback models are tried in order — the gateway degrades
+	// to the user's fallback models (free tiers, or paid models on another
+	// provider) instead of erroring. Providers already attempted for this
+	// request are not retried.
+	cands := h.Router.CandidatesWithFallbacks(requested, h.Cfg.Get().Fallbacks)
+	if len(cands) == 0 {
+		h.Metrics.Request(client, "", requested, "model_not_found")
+		logReq(reqlog.Entry{Client: client, Model: requested, Status: http.StatusServiceUnavailable, Class: "model_not_found"})
+		writeJSON(w, http.StatusServiceUnavailable, map[string]any{
+			"error": map[string]any{"message": fmt.Sprintf("no configured provider serves model %q (check config tiers/models)", requested), "type": "model_not_found"},
+		})
+		return
+	}
+
 	var lastErr error
-	idx := 0
-	for {
-		p := h.Router.Next(idx)
-		if p == nil {
-			break
-		}
-		idx++ // next iteration continues after this provider
+	for _, cand := range cands {
+		p := cand.Provider
 
 		payload := processed
 		kind := p.Provider.Kind
+		// Model rewrite: send the candidate's upstream model when it differs
+		// from what the client asked for. This covers free-variant routing
+		// (deepseek-v4-flash -> deepseek-v4-flash-free) AND fallback-model
+		// routing (deepseek-v4-flash -> openai/gpt-oss-20b:free when the
+		// requested model's providers all failed).
+		if cand.Upstream != requested {
+			rewritten, rerr := rewriteModel(processed, cand.Upstream)
+			if rerr == nil {
+				payload = rewritten
+			}
+		}
+		// Max-tokens clamp: cap the request's max_tokens to this provider's
+		// ceiling when set. Without it a request sized for the preferred
+		// model (subagents routinely ask for deepseek-v4-flash's full 384k
+		// ceiling) is rejected by a fallback with a smaller context window
+		// (e.g. OpenRouter free models, 131072) instead of failing over.
+		if p.Provider.MaxTokens > 0 {
+			clamped, cerr := clampMaxTokens(payload, p.Provider.MaxTokens)
+			if cerr == nil {
+				payload = clamped
+			}
+		}
+
+		// Per-attempt timeout: a stuck provider must not hang the request
+		// forever. Non-streaming relays get a hard deadline; streaming
+		// relays keep the connection (they have their own first-byte
+		// timeout in the transport).
+		attemptCtx := ctx
+		var cancel context.CancelFunc
+		if !streaming {
+			attemptCtx, cancel = context.WithTimeout(ctx, attemptTimeout)
+		} else {
+			attemptCtx, cancel = context.WithCancel(ctx)
+		}
+
 		if (api == fmtOpenAI && kind == "anthropic") || (api == fmtAnthropic && kind == "openai") {
 			if streaming {
+				cancel()
 				writeJSON(w, http.StatusNotImplemented, map[string]any{
 					"error": map[string]any{
 						"message": "cross-kind streaming translation is not implemented; request a non-streaming call or point the client at a same-kind provider",
@@ -115,6 +256,7 @@ func (h *Handlers) route(w http.ResponseWriter, r *http.Request, api apiFormat) 
 			}
 			translated, terr := translateBody(api, kindOf(kind), processed)
 			if terr != nil {
+				cancel()
 				h.Router.ReportFailure(p, router.ErrServer)
 				lastErr = terr
 				continue
@@ -122,7 +264,9 @@ func (h *Handlers) route(w http.ResponseWriter, r *http.Request, api apiFormat) 
 			payload = translated
 		}
 
-		status, respBody, ct, rerr := h.relay(ctx, w, p.Provider.BaseURL, r, payload, streaming, kind, p.Provider.APIKeyEnv)
+		status, respBody, ct, rerr := h.relay(attemptCtx, w, p.Provider.BaseURL, r, payload, streaming, kind, p.Provider.APIKeyEnv)
+		cancel()
+
 		if rerr != nil {
 			// Network/transport failure: retryable (unless mid-stream).
 			if router.IsStreamAborted(rerr) {
@@ -131,11 +275,14 @@ func (h *Handlers) route(w http.ResponseWriter, r *http.Request, api apiFormat) 
 			}
 			class := router.Classify(rerr)
 			if !router.IsRetryableClass(class) {
+				h.Metrics.Request(client, p.Provider.Name, requested, "error")
+				logReq(reqlog.Entry{Client: client, Model: requested, Provider: p.Provider.Name, Stream: streaming, Status: http.StatusBadGateway, Class: "error"})
 				writeJSON(w, http.StatusBadGateway, map[string]any{
 					"error": map[string]any{"message": rerr.Error(), "type": "upstream_error"},
 				})
 				return
 			}
+			h.Metrics.Failure(p.Provider.Name, class.String())
 			h.Router.ReportFailure(p, class)
 			lastErr = rerr
 			h.Logger.Printf("provider %s failed (%v): %v; failing over", p.Provider.Name, class, rerr)
@@ -149,6 +296,8 @@ func (h *Handlers) route(w http.ResponseWriter, r *http.Request, api apiFormat) 
 			h.Router.ReportSuccess(p)
 			prompt := tokenize.Estimate(string(processed))
 			h.Usage.Record(client, modelFromBody(body), int64(prompt), 0, int64(rtkSaved), 0, pricesOf(h.Cfg.Get(), p.Provider.Name), 0)
+			h.Metrics.Request(client, p.Provider.Name, requested, "ok")
+			logReq(reqlog.Entry{Client: client, Model: requested, UpstreamModel: cand.Upstream, Provider: p.Provider.Name, Stream: true, Status: http.StatusOK, Class: "ok", PromptTokens: int64(prompt), RTKSavedTokens: int64(rtkSaved)})
 			return
 		}
 
@@ -159,26 +308,37 @@ func (h *Handlers) route(w http.ResponseWriter, r *http.Request, api apiFormat) 
 			}
 			// Usage: parse provider-reported tokens when present; fall back
 			// to estimates. RTK savings land on the provider's row.
-			prompt, completion, reportedCost := usageFromBody(respBody, body)
-			h.Usage.Record(client, modelFromBody(body), prompt, completion, int64(rtkSaved), 0, pricesOf(h.Cfg.Get(), p.Provider.Name), reportedCost)
+			prompt, completion, reportedCost, cacheRead := usageFromBody(respBody, body)
+			h.Usage.RecordFull(client, modelFromBody(body), prompt, completion, int64(rtkSaved), 0, cacheRead, pricesOf(h.Cfg.Get(), p.Provider.Name), reportedCost)
 			h.Cache.Put(key, cacheEntry(respBody, ct))
+			h.Metrics.Request(client, p.Provider.Name, requested, "ok")
+			h.Metrics.CacheRead(cacheRead)
+			logReq(reqlog.Entry{Client: client, Model: requested, UpstreamModel: cand.Upstream, Provider: p.Provider.Name, Stream: false, Status: status, Class: "ok", PromptTokens: prompt, CompletionTokens: completion, RTKSavedTokens: int64(rtkSaved), CacheReadTokens: cacheRead, CostUSD: reportedCost})
 			w.Header().Set("Content-Type", ct)
 			w.Header().Set("X-Llrouter-Cache", "miss")
 			w.Header().Set("X-Llrouter-Provider", p.Provider.Name)
+			if cand.IsFree {
+				w.Header().Set("X-Llrouter-Free", cand.Upstream)
+			}
 			w.WriteHeader(status)
 			_, _ = w.Write(respBody)
 			return
 		}
 
-		// Upstream error status.
-		class := router.ClassifyStatus(status)
+		// Upstream error status. Credits failures (402, or 401 with a
+		// credits body) fail over WITHOUT cooldown escalation — the provider
+		// may still serve free variants.
+		class := router.ClassifyStatusBody(status, respBody)
 		if !router.IsRetryableClass(class) {
 			// Client-caused (400/404/422...): surface it, no failover.
+			h.Metrics.Request(client, p.Provider.Name, requested, "client_error")
+			logReq(reqlog.Entry{Client: client, Model: requested, Provider: p.Provider.Name, Stream: streaming, Status: status, Class: "client_error"})
 			writeStatus(w, status, respBody, ct)
 			return
 		}
+		h.Metrics.Failure(p.Provider.Name, class.String())
 		h.Router.ReportFailure(p, class)
-		lastErr = fmt.Errorf("provider %s: status %d", p.Provider.Name, status)
+		lastErr = fmt.Errorf("provider %s: status %d (%v)", p.Provider.Name, status, class)
 		h.Logger.Printf("provider %s status %d (%v); failing over", p.Provider.Name, status, class)
 	}
 
@@ -187,6 +347,8 @@ func (h *Handlers) route(w http.ResponseWriter, r *http.Request, api apiFormat) 
 	if lastErr != nil {
 		msg = lastErr.Error()
 	}
+	h.Metrics.Request(client, "", requested, "all_failed")
+	logReq(reqlog.Entry{Client: client, Model: requested, Status: http.StatusServiceUnavailable, Class: "all_failed"})
 	w.Header().Set("Retry-After", "5")
 	writeJSON(w, http.StatusServiceUnavailable, map[string]any{
 		"error": map[string]any{"message": msg, "type": "all_providers_failed"},

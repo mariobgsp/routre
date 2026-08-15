@@ -30,6 +30,10 @@ type Provider struct {
 	// unknown (reported as n/a).
 	PriceIn  float64 `json:"price_in,omitempty"`
 	PriceOut float64 `json:"price_out,omitempty"`
+	// MaxTokens: ceiling applied to the request's max_tokens when relaying
+	// to this provider (0 = no clamp). Lets a fallback provider with a
+	// smaller context window accept requests sized for the preferred one.
+	MaxTokens int64 `json:"max_tokens,omitempty"`
 }
 
 // Tier is an ordered fallback group.
@@ -51,6 +55,7 @@ type CacheConfig struct {
 	MaxEntries  int   `json:"max_entries"`
 	TTLSeconds  int64 `json:"ttl_seconds"`
 	PrefixOrder bool  `json:"prefix_order"`
+	MaxBytes    int64 `json:"max_bytes"`
 }
 
 // Config is the root document.
@@ -61,6 +66,18 @@ type Config struct {
 	Tiers    []Tier      `json:"tiers"`
 	RTK      RTKConfig   `json:"rtk"`
 	Cache    CacheConfig `json:"cache"`
+	// RequestLog: path of the per-request JSONL log ("" = disabled).
+	RequestLog string `json:"request_log"`
+	// PreferredModel: the user's default model (their preferred provider).
+	// Informational for routing — clients request it explicitly — but used
+	// by `setup` to seed the config and by `check` to display the default.
+	PreferredModel string `json:"preferred_model"`
+	// Fallbacks: ordered list of models tried after the requested model's
+	// own candidates fail. Any model the user has access to: free tiers,
+	// paid models on other providers, or same-provider alternatives. Each
+	// entry is routed through the normal candidate logic (exact + free
+	// variants).
+	Fallbacks []string `json:"fallbacks"`
 }
 
 // Default returns the built-in defaults (3-tier shape must come from the
@@ -70,8 +87,8 @@ func Default() Config {
 		Listen:   "127.0.0.1:20128",
 		LogLevel: "info",
 		Tiers:    []Tier{},
-		RTK:      RTKConfig{Enabled: true, MinBytes: 500, MaxBytes: 10 << 20},
-		Cache:    CacheConfig{Enabled: true, MaxEntries: 512, TTLSeconds: 3600, PrefixOrder: false},
+		RTK:      RTKConfig{Enabled: true, MinBytes: 0, MaxBytes: 10 << 20},
+		Cache:    CacheConfig{Enabled: true, MaxEntries: 4096, TTLSeconds: 86400, PrefixOrder: true, MaxBytes: 64 << 20},
 	}
 }
 
@@ -124,6 +141,9 @@ func (c *Config) Validate() error {
 	}
 	if c.Cache.TTLSeconds < 0 {
 		return errors.New("config: cache.ttl_seconds must be >= 0")
+	}
+	if c.Cache.MaxBytes < 0 {
+		return errors.New("config: cache.max_bytes must be >= 0")
 	}
 	return nil
 }

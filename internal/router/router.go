@@ -13,6 +13,7 @@ package router
 import (
 	"errors"
 	"fmt"
+	"strings"
 	"sync"
 	"time"
 )
@@ -33,6 +34,12 @@ const (
 	ErrServer
 	// ErrClient: 4xx other than auth/rate-limit (400, 404, 422...).
 	ErrClient
+	// ErrCredits: 402, or a credits/billing error surfaced as 401
+	// (opencode-zen returns 401 CreditsError). Retryable in the sense that
+	// the next candidate should be tried, but the provider itself is NOT
+	// put into cooldown — it is a billing state, not an outage, and the
+	// provider may still serve its free variants.
+	ErrCredits
 	// ErrStream: failure after the first stream byte — the client already
 	// received a partial response; retrying would duplicate output.
 	ErrStream
@@ -45,6 +52,7 @@ var errClassNames = map[ErrClass]string{
 	ErrAuth:      "auth",
 	ErrServer:    "server",
 	ErrClient:    "client",
+	ErrCredits:   "credits",
 	ErrStream:    "stream",
 }
 
@@ -87,6 +95,8 @@ func ClassifyStatus(status int) ErrClass {
 	switch {
 	case status == 401 || status == 403:
 		return ErrAuth
+	case status == 402:
+		return ErrCredits
 	case status == 429:
 		return ErrRateLimit
 	case status >= 500:
@@ -98,11 +108,30 @@ func ClassifyStatus(status int) ErrClass {
 	}
 }
 
+// ClassifyStatusBody maps an HTTP status plus a response body to a class,
+// refining 401s that are actually billing failures (opencode-zen returns
+// 401 with a CreditsError body when the account balance is exhausted).
+func ClassifyStatusBody(status int, body []byte) ErrClass {
+	c := ClassifyStatus(status)
+	if c == ErrAuth && bodyHasCredits(body) {
+		return ErrCredits
+	}
+	return c
+}
+
+// bodyHasCredits reports whether an error body mentions a balance/credits
+// problem ("insufficient balance", "CreditsError", "credits").
+func bodyHasCredits(body []byte) bool {
+	low := strings.ToLower(string(body))
+	return strings.Contains(low, "credit") || strings.Contains(low, "insufficient balance") || strings.Contains(low, "balance")
+}
+
 // IsRetryableClass reports whether a failure should escalate cooldown and
-// trigger failover. Stream aborts and client-caused 4xx do not.
+// trigger failover. Stream aborts and client-caused 4xx do not. Credits
+// failures fail over but never escalate cooldown (see ReportFailure).
 func IsRetryableClass(c ErrClass) bool {
 	switch c {
-	case ErrNetwork, ErrTimeout, ErrRateLimit, ErrAuth, ErrServer:
+	case ErrNetwork, ErrTimeout, ErrRateLimit, ErrAuth, ErrServer, ErrCredits:
 		return true
 	default:
 		return false
@@ -116,6 +145,8 @@ type ProviderInput struct {
 	BaseURL   string
 	APIKeyEnv string
 	Models    []string
+	// MaxTokens: ceiling applied to max_tokens on relay (0 = no clamp).
+	MaxTokens int64
 }
 
 // TierInput is the public shape accepted by New.
@@ -140,6 +171,8 @@ type ProviderInfo struct {
 	Models    []string
 	Tier      string
 	TierIndex int
+	// MaxTokens: ceiling applied to max_tokens on relay (0 = no clamp).
+	MaxTokens int64
 }
 
 // Router is a concurrency-safe tiered provider list with cooldowns.
@@ -148,6 +181,122 @@ type Router struct {
 	provs  []*ProviderState // flattened in tier order
 	policy CooldownPolicy
 	now    func() time.Time // clock injection for tests
+}
+
+// CandidatesWithFallbacks returns Candidates(model), then the candidates
+// of each fallback model in order, deduplicated by provider. A provider
+// tried for the requested model is never tried again for a fallback.
+func (r *Router) CandidatesWithFallbacks(model string, fallbacks []string) []Candidate {
+	out := r.Candidates(model)
+	seen := map[string]bool{}
+	for _, c := range out {
+		seen[c.Provider.Provider.Name] = true
+	}
+	for _, f := range fallbacks {
+		if f == "" || f == model {
+			continue
+		}
+		for _, c := range r.Candidates(f) {
+			if seen[c.Provider.Provider.Name] {
+				continue
+			}
+			seen[c.Provider.Provider.Name] = true
+			out = append(out, c)
+		}
+	}
+	return out
+}
+
+// Candidate is a provider eligible to serve a requested model, with the
+// concrete upstream model name to send (may be a free variant).
+type Candidate struct {
+	Provider *ProviderState
+	Upstream string // model name to send upstream (free variant or original)
+	IsFree   bool
+}
+
+// freeVariantOf returns the free variant name of a model for a provider's
+// model list, or "" when none exists. OpenCode-style: "m" -> "m-free";
+// OpenRouter-style: "org/m" -> "org/m:free". Matching is tolerant of
+// provider qualification on either side: client "m" matches provider
+// "org/m:free", and client "org/m" matches provider "org/m:free".
+func freeVariantOf(models []string, model string) string {
+	tail := model
+	if i := strings.LastIndex(model, "/"); i >= 0 {
+		tail = model[i+1:]
+	}
+	for _, m := range models {
+		base := m
+		switch {
+		case strings.HasSuffix(m, ":free"):
+			base = strings.TrimSuffix(m, ":free")
+		case strings.HasSuffix(m, "-free"):
+			base = strings.TrimSuffix(m, "-free")
+		default:
+			continue
+		}
+		if base == model || base == tail {
+			return m
+		}
+		if i := strings.LastIndex(base, "/"); i >= 0 && base[i+1:] == tail {
+			return m
+		}
+	}
+	return ""
+}
+
+// providerServes reports whether the provider's model list includes model
+// (exact match, or provider-qualified client model "provider/model").
+func providerServes(models []string, model string) bool {
+	for _, m := range models {
+		if m == model {
+			return true
+		}
+	}
+	// Client may send "provider/model"; match the tail against the list.
+	if i := strings.LastIndex(model, "/"); i >= 0 {
+		tail := model[i+1:]
+		for _, m := range models {
+			if m == tail {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// Candidates returns every provider (in tier order, cooldown respected)
+// that can serve the requested model, with the upstream model name to use.
+// Free variants are preferred over the paid model: a provider listing
+// "m-free" serves "m" requests via the free variant first. Providers that
+// list neither the model nor a free variant are skipped entirely, so a
+// request for a model a provider cannot serve never lands there (this is
+// what eliminated the OpenRouter 402 cascade: OpenRouter was being asked
+// for models it could not serve for free).
+func (r *Router) Candidates(model string) []Candidate {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	now := r.now()
+	var out []Candidate
+	for _, p := range r.provs {
+		if now.Before(p.until) {
+			continue
+		}
+		if providerServes(p.Provider.Models, model) {
+			// Prefer the free variant when the provider has one.
+			if fv := freeVariantOf(p.Provider.Models, model); fv != "" {
+				out = append(out, Candidate{Provider: p, Upstream: fv, IsFree: true})
+				continue
+			}
+			out = append(out, Candidate{Provider: p, Upstream: model, IsFree: false})
+			continue
+		}
+		// Provider does not list the model but has a free variant of it.
+		if fv := freeVariantOf(p.Provider.Models, model); fv != "" {
+			out = append(out, Candidate{Provider: p, Upstream: fv, IsFree: true})
+		}
+	}
+	return out
 }
 
 // New builds a Router from the config tiers.
@@ -164,6 +313,7 @@ func New(tiers []TierInput, policy CooldownPolicy) *Router {
 					Models:    p.Models,
 					Tier:      t.Name,
 					TierIndex: ti,
+					MaxTokens: p.MaxTokens,
 				},
 			})
 		}
@@ -211,11 +361,13 @@ func (r *Router) ReportSuccess(p *ProviderState) {
 }
 
 // ReportFailure records a failure and computes the next cooldown window.
-// Stream aborts (ErrStream) never escalate.
+// Stream aborts (ErrStream) never escalate. Credits failures (ErrCredits)
+// also never escalate: the provider is out of money, not out of service —
+// it may still serve free variants, so it must not be cooldowned.
 func (r *Router) ReportFailure(p *ProviderState, class ErrClass) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	if class == ErrStream {
+	if class == ErrStream || class == ErrCredits {
 		return
 	}
 	if p.failures < r.policy.MaxHits {

@@ -29,13 +29,17 @@ type Config struct {
 	// order hit the same entry. It is also the prompt-cache-friendly ordering
 	// (stable prefix first) for upstream providers.
 	PrefixOrder bool `json:"prefix_order"`
+	// MaxBytes caps the total RAM held by cached bodies (0 = unbounded).
+	// Eviction is LRU: oldest entries drop first when the cap is exceeded.
+	MaxBytes int64 `json:"max_bytes"`
 }
 
-// DefaultConfig matches the research recommendation: 512 entries, 1h TTL,
-// prefix ordering off by default (order stability is the client's job; the
-// flag exists for clients that shuffle messages).
+// DefaultConfig targets a near-100% hit rate for repeat traffic: a large
+// entry budget (4096), a long TTL (24h), and prefix ordering ON so that
+// requests differing only in message order collide on the same key. The
+// 64MiB byte cap keeps the cache bounded even with big responses cached.
 func DefaultConfig() Config {
-	return Config{Enabled: true, MaxEntries: 512, TTLSeconds: 3600, PrefixOrder: false}
+	return Config{Enabled: true, MaxEntries: 4096, TTLSeconds: 86400, PrefixOrder: true, MaxBytes: 64 << 20}
 }
 
 // Cache is a concurrency-safe exact-match LRU with TTL.
@@ -118,7 +122,8 @@ func (c *Cache) Put(key string, e Entry) {
 	el := c.ll.PushFront(&item{key: key, e: e, exp: now.Add(time.Duration(c.cfg.TTLSeconds) * time.Second)})
 	c.m[key] = el
 	c.size += len(e.Body)
-	// Evict expired (from the back), then over-capacity (also back).
+	// Evict expired (from the back), then over-capacity (entries and
+	// bytes, both from the back).
 	for c.ll.Len() > 0 {
 		back := c.ll.Back()
 		if time.Now().Before(back.Value.(*item).exp) {
@@ -126,7 +131,7 @@ func (c *Cache) Put(key string, e Entry) {
 		}
 		c.remove(back)
 	}
-	for c.ll.Len() > c.cfg.MaxEntries {
+	for c.ll.Len() > c.cfg.MaxEntries || (c.cfg.MaxBytes > 0 && c.size > int(c.cfg.MaxBytes)) {
 		c.remove(c.ll.Back())
 	}
 }

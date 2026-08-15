@@ -9,6 +9,8 @@ import (
 
 	"routre-cli/internal/cache"
 	"routre-cli/internal/config"
+	"routre-cli/internal/metrics"
+	"routre-cli/internal/reqlog"
 	"routre-cli/internal/router"
 	"routre-cli/internal/rtk"
 	"routre-cli/internal/usage"
@@ -25,6 +27,7 @@ type Handlers struct {
 	Start      time.Time
 	HTTPClient *http.Client
 	Usage      *usage.Store
+	Metrics    *metrics.Metrics
 }
 
 // newHTTPClient builds the upstream transport. Note: no overall timeout —
@@ -55,6 +58,7 @@ func NewHandlers(st *config.Store, rtr *router.Router, cch *cache.Cache, tk *rtk
 		Start:      time.Now(),
 		HTTPClient: newHTTPClient(),
 		Usage:      use,
+		Metrics:    metrics.New(),
 	}
 	st.SetOnLoad(func(c config.Config) {
 		// Rebuild router (provider lists may have changed). Cooldowns reset.
@@ -70,9 +74,16 @@ func NewHandlers(st *config.Store, rtr *router.Router, cch *cache.Cache, tk *rtk
 			MinBytes: c.RTK.MinBytes,
 			MaxBytes: c.RTK.MaxBytes,
 		})
+		reqlog.SetPath(c.RequestLog)
 		logger.Printf("config reloaded: %d tiers, %d providers", len(c.Tiers), rtr.Len())
 	})
 	return h
+}
+
+// MetricsHandler renders Prometheus exposition text for the gateway.
+func (h *Handlers) MetricsHandler(w http.ResponseWriter, _ *http.Request) {
+	w.Header().Set("Content-Type", "text/plain; version=0.0.4")
+	h.Metrics.WriteProm(w)
 }
 
 // Health is the liveness probe (systemd / monitoring).
@@ -125,11 +136,13 @@ func (h *Handlers) Status(w http.ResponseWriter, _ *http.Request) {
 		})
 	}
 	writeJSON(w, http.StatusOK, map[string]any{
-		"uptime_seconds": int(time.Since(h.Start).Seconds()),
-		"cache_entries":  h.Cache.Len(),
-		"cache_bytes":    h.Cache.SizeBytes(),
-		"rtk_enabled":    h.RTK.Enabled(),
-		"providers":      provs,
+		"uptime_seconds":  int(time.Since(h.Start).Seconds()),
+		"cache_entries":   h.Cache.Len(),
+		"cache_bytes":     h.Cache.SizeBytes(),
+		"rtk_enabled":     h.RTK.Enabled(),
+		"providers":       provs,
+		"cache_hit_ratio": h.Metrics.CacheHitRatio(),
+		"rtk_applied":     h.Metrics.RTKAppliedCount(),
 	})
 }
 

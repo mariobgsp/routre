@@ -139,6 +139,212 @@ func TestFailoverOrder(t *testing.T) {
 	}
 }
 
+// TestFreeVariantFailover: the user's default provider (paid model) fails;
+// the request must fall through to a provider serving a FREE variant of the
+// same model, with the upstream body rewritten to the free model name.
+func TestFreeVariantFailover(t *testing.T) {
+	paid, _ := mock.New("paid")
+	defer paid.Close()
+	free, _ := mock.New("free")
+	defer free.Close()
+
+	cfgJSON := `{"listen":"127.0.0.1:0","tiers":[
+		{"name":"subscription","providers":[{"name":"paid","kind":"openai","base_url":"` + paid.URL() + `/v1","api_key_env":"TEST_KEY_A","models":["m"]}]},
+		{"name":"free","providers":[{"name":"free","kind":"openai","base_url":"` + free.URL() + `/v1","api_key_env":"TEST_KEY_B","models":["m-free"]}]}
+	]}`
+	base, _ := testEnv(t, cfgJSON)
+
+	paid.SetFail(500)
+
+	body := chatBody(false, "")
+	resp, data := post(t, base, "/v1/chat/completions", body)
+	if resp.StatusCode != 200 {
+		t.Fatalf("expected 200 from free provider after paid 500, got %d: %s", resp.StatusCode, data)
+	}
+	if got := resp.Header.Get("X-Llrouter-Provider"); got != "free" {
+		t.Fatalf("expected provider free to serve, got %q", got)
+	}
+	if got := resp.Header.Get("X-Llrouter-Free"); got != "m-free" {
+		t.Fatalf("expected X-Llrouter-Free: m-free, got %q", got)
+	}
+	// The upstream must have received the rewritten model name.
+	var sent struct {
+		Model string `json:"model"`
+	}
+	if err := json.Unmarshal(free.Body(), &sent); err != nil || sent.Model != "m-free" {
+		t.Fatalf("upstream must receive model m-free, got %q (err %v)", sent.Model, err)
+	}
+}
+
+// TestCreditsFailover: a 402 (or 401 CreditsError) from the preferred
+// provider must fail over to the next candidate instead of surfacing.
+func TestCreditsFailover(t *testing.T) {
+	cred, _ := mock.New("cred")
+	defer cred.Close()
+	ok, _ := mock.New("ok")
+	defer ok.Close()
+
+	cfgJSON := `{"listen":"127.0.0.1:0","tiers":[
+		{"name":"subscription","providers":[{"name":"cred","kind":"openai","base_url":"` + cred.URL() + `/v1","api_key_env":"TEST_KEY_A","models":["m"]}]},
+		{"name":"cheap","providers":[{"name":"ok","kind":"openai","base_url":"` + ok.URL() + `/v1","api_key_env":"TEST_KEY_B","models":["m"]}]}
+	]}`
+	base, _ := testEnv(t, cfgJSON)
+
+	cred.SetFail(402)
+
+	resp, _ := post(t, base, "/v1/chat/completions", chatBody(false, ""))
+	if resp.StatusCode != 200 {
+		t.Fatalf("expected 200 from ok after 402 failover, got %d", resp.StatusCode)
+	}
+	if ok.Requests() != 1 {
+		t.Fatal("ok must serve after 402")
+	}
+	// Credits failures must not cooldown the provider: a second request
+	// still tries it first (use a different body to bypass the cache).
+	cred.SetFail(0)
+	body2 := chatBody(false, "")
+	body2 = bytes.Replace(body2, []byte("\"content\":\"hello\""), []byte("\"content\":\"hello again\""), 1)
+	resp, _ = post(t, base, "/v1/chat/completions", body2)
+	if got := resp.Header.Get("X-Llrouter-Provider"); got != "cred" {
+		t.Fatalf("cred must recover immediately (no cooldown), got %q", got)
+	}
+}
+
+// TestCreditsErrorBodyFailover: opencode-zen style 401 with a CreditsError
+// body must be treated as credits (fail over, no cooldown), while a plain
+// 401 stays auth.
+func TestCreditsErrorBodyFailover(t *testing.T) {
+	cred, _ := mock.New("cred")
+	defer cred.Close()
+	ok, _ := mock.New("ok")
+	defer ok.Close()
+
+	cfgJSON := `{"listen":"127.0.0.1:0","tiers":[
+		{"name":"subscription","providers":[{"name":"cred","kind":"openai","base_url":"` + cred.URL() + `/v1","api_key_env":"TEST_KEY_A","models":["m"]}]},
+		{"name":"cheap","providers":[{"name":"ok","kind":"openai","base_url":"` + ok.URL() + `/v1","api_key_env":"TEST_KEY_B","models":["m"]}]}
+	]}`
+	base, _ := testEnv(t, cfgJSON)
+
+	cred.SetFail(401)
+	cred.SetFailBody(`{"type":"error","error":{"type":"CreditsError","message":"Insufficient balance"}}`)
+
+	resp, _ := post(t, base, "/v1/chat/completions", chatBody(false, ""))
+	if resp.StatusCode != 200 {
+		t.Fatalf("expected 200 from ok after credits-401 failover, got %d", resp.StatusCode)
+	}
+	if ok.Requests() != 1 {
+		t.Fatal("ok must serve after credits-401")
+	}
+
+	// Same 401 but WITHOUT a credits body stays auth — and auth failures
+	// DO escalate cooldown (unlike credits). Verify the distinction at the
+	// classification level.
+	if got := router.ClassifyStatusBody(401, []byte(`{"type":"error","error":{"type":"CreditsError","message":"Insufficient balance"}}`)); got != router.ErrCredits {
+		t.Fatalf("credits-401 must classify as ErrCredits, got %v", got)
+	}
+	if got := router.ClassifyStatusBody(401, []byte(`{"error":{"message":"invalid key"}}`)); got != router.ErrAuth {
+		t.Fatalf("plain 401 must classify as ErrAuth, got %v", got)
+	}
+}
+
+// TestFallbackModelChain: when the requested model's own providers all
+// fail, the request must fall through to the configured fallback models
+// (free tiers) with the upstream body rewritten to the fallback model.
+func TestFallbackModelChain(t *testing.T) {
+	pref, _ := mock.New("pref")
+	defer pref.Close()
+	freeSrv, _ := mock.New("free")
+	defer freeSrv.Close()
+
+	cfgJSON := `{"listen":"127.0.0.1:0","fallbacks":["free-model"],"tiers":[
+		{"name":"subscription","providers":[{"name":"pref","kind":"openai","base_url":"` + pref.URL() + `/v1","api_key_env":"TEST_KEY_A","models":["m"]}]},
+		{"name":"free","providers":[{"name":"free","kind":"openai","base_url":"` + freeSrv.URL() + `/v1","api_key_env":"TEST_KEY_B","models":["free-model"]}]}
+	]}`
+	base, _ := testEnv(t, cfgJSON)
+
+	pref.SetFail(500)
+
+	body := chatBody(false, "")
+	resp, data := post(t, base, "/v1/chat/completions", body)
+	if resp.StatusCode != 200 {
+		t.Fatalf("expected 200 from fallback provider, got %d: %s", resp.StatusCode, data)
+	}
+	if got := resp.Header.Get("X-Llrouter-Provider"); got != "free" {
+		t.Fatalf("expected provider free to serve, got %q", got)
+	}
+	// The upstream must have received the FALLBACK model, not the
+	// requested one — this is the exact bug the live test caught (the
+	// request reached OpenRouter with the paid model name verbatim).
+	var sent struct {
+		Model string `json:"model"`
+	}
+	if err := json.Unmarshal(freeSrv.Body(), &sent); err != nil || sent.Model != "free-model" {
+		t.Fatalf("upstream must receive model free-model, got %q (err %v)", sent.Model, err)
+	}
+}
+
+// TestClampMaxTokens: a fallback provider with a max_tokens ceiling must
+// receive the request with max_tokens capped, not the original (a request
+// sized for deepseek-v4-flash's 384k would be rejected by OpenRouter free
+// models).
+func TestClampMaxTokens(t *testing.T) {
+	pref, _ := mock.New("pref")
+	defer pref.Close()
+	freeSrv, _ := mock.New("free")
+	defer freeSrv.Close()
+
+	cfgJSON := `{"listen":"127.0.0.1:0","fallbacks":["free-model"],"tiers":[
+		{"name":"subscription","providers":[{"name":"pref","kind":"openai","base_url":"` + pref.URL() + `/v1","api_key_env":"TEST_KEY_A","models":["m"]}]},
+		{"name":"free","providers":[{"name":"free","kind":"openai","base_url":"` + freeSrv.URL() + `/v1","api_key_env":"TEST_KEY_B","models":["free-model"],"max_tokens":131072}]}
+	]}`
+	base, _ := testEnv(t, cfgJSON)
+
+	pref.SetFail(500)
+
+	// Simulate a subagent asking for the full 384k ceiling.
+	var doc map[string]any
+	_ = json.Unmarshal(chatBody(false, ""), &doc)
+	doc["max_tokens"] = 384000
+	body, _ := json.Marshal(doc)
+	resp, data := post(t, base, "/v1/chat/completions", body)
+	if resp.StatusCode != 200 {
+		t.Fatalf("expected 200 from fallback with clamped max_tokens, got %d: %s", resp.StatusCode, data)
+	}
+	var sent struct {
+		Model     string `json:"model"`
+		MaxTokens int64  `json:"max_tokens"`
+	}
+	if err := json.Unmarshal(freeSrv.Body(), &sent); err != nil {
+		t.Fatal(err)
+	}
+	if sent.Model != "free-model" {
+		t.Fatalf("expected model free-model, got %q", sent.Model)
+	}
+	if sent.MaxTokens >= 131072 || sent.MaxTokens < 100000 {
+		t.Fatalf("expected max_tokens clamped below 131072 (prompt-aware), got %d", sent.MaxTokens)
+	}
+}
+
+// TestMetricsEndpoint: /metrics must render Prometheus text with counters.
+func TestMetricsEndpoint(t *testing.T) {
+	a, _ := mock.New("a")
+	defer a.Close()
+	base, _ := testEnv(t, buildConfigWithMocks(t, map[string]*mock.Server{"a": a}))
+
+	post(t, base, "/v1/chat/completions", chatBody(false, ""))
+
+	resp, data := get(t, base, "/metrics")
+	if resp.StatusCode != 200 {
+		t.Fatalf("metrics: %d", resp.StatusCode)
+	}
+	s := string(data)
+	for _, want := range []string{"routre_requests_total", "routre_uptime_seconds", "routre_cache_misses_total"} {
+		if !strings.Contains(s, want) {
+			t.Fatalf("metrics output missing %q:\n%s", want, s)
+		}
+	}
+}
+
 func TestFailoverStopsAtClientError(t *testing.T) {
 	a, _ := mock.New("a")
 	defer a.Close()

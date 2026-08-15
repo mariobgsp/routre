@@ -26,6 +26,10 @@ type Row struct {
 	// CacheSavedTokens: tokens that never reached any provider because the
 	// exact-match cache served the response.
 	CacheSavedTokens int64 `json:"cache_saved_tokens"`
+	// CacheReadTokens: input tokens billed at the provider's prompt-cache
+	// read rate (0.1x) instead of full price — provider-reported
+	// prompt-cache hits. Zero when the provider does not report them.
+	CacheReadTokens int64 `json:"cache_read_tokens"`
 
 	// CostUSD: billed cost at the provider's price (0 = pricing unknown).
 	CostUSD float64 `json:"cost_usd"`
@@ -41,6 +45,7 @@ func (r *Row) Add(o Row) {
 	r.CompletionTokens += o.CompletionTokens
 	r.RTKSavedTokens += o.RTKSavedTokens
 	r.CacheSavedTokens += o.CacheSavedTokens
+	r.CacheReadTokens += o.CacheReadTokens
 	r.CostUSD += o.CostUSD
 	r.SavedUSD += o.SavedUSD
 	r.Requests += o.Requests
@@ -106,7 +111,14 @@ func Load(path string) (*Store, error) {
 // Record adds a usage delta. Cost is taken from providerReportedCost when
 // the provider reports it (OpenRouter does); otherwise it is computed from
 // the configured prices (zero prices = unknown, reported as n/a).
+// cacheRead counts provider-reported prompt-cache hit tokens (billed at
+// the discounted rate); they are not savings, just cheaper input.
 func (s *Store) Record(provider, model string, prompt, completion int64, rtkSaved, cacheSaved int64, p Prices, providerReportedCost float64) {
+	s.RecordFull(provider, model, prompt, completion, rtkSaved, cacheSaved, 0, p, providerReportedCost)
+}
+
+// RecordFull is Record plus provider-reported prompt-cache read tokens.
+func (s *Store) RecordFull(provider, model string, prompt, completion int64, rtkSaved, cacheSaved, cacheRead int64, p Prices, providerReportedCost float64) {
 	computedCost, saved := p.CostOf(prompt, completion, rtkSaved, cacheSaved)
 	cost := computedCost
 	if providerReportedCost > 0 {
@@ -124,7 +136,8 @@ func (s *Store) Record(provider, model string, prompt, completion int64, rtkSave
 		Provider: provider, Model: model,
 		PromptTokens: prompt, CompletionTokens: completion,
 		RTKSavedTokens: rtkSaved, CacheSavedTokens: cacheSaved,
-		CostUSD: cost, SavedUSD: saved,
+		CacheReadTokens: cacheRead,
+		CostUSD:         cost, SavedUSD: saved,
 		Requests: 1,
 	})
 }

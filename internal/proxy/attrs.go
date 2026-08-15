@@ -49,19 +49,31 @@ func modelFromBody(body []byte) string {
 // usageFromBody parses provider-reported token usage and cost out of a
 // non-streaming upstream response. Falls back to length-based estimates
 // when the provider did not report usage. OpenRouter reports a `cost`
-// field; when present it is used verbatim.
-func usageFromBody(respBody, reqBody []byte) (prompt, completion int64, cost float64) {
+// field; when present it is used verbatim. cacheRead is the provider-
+// reported prompt-cache hit count (Anthropic: usage.cache_read_input_tokens;
+// OpenAI-style: usage.prompt_tokens_details.cached_tokens).
+func usageFromBody(respBody, reqBody []byte) (prompt, completion int64, cost float64, cacheRead int64) {
 	var doc struct {
 		Usage struct {
 			PromptTokens     int64   `json:"prompt_tokens"`
 			CompletionTokens int64   `json:"completion_tokens"`
 			Cost             float64 `json:"cost"`
+			// Anthropic-style prompt caching.
+			CacheReadInputTokens int64 `json:"cache_read_input_tokens"`
+			// OpenAI-style prompt caching.
+			PromptTokensDetails struct {
+				CachedTokens int64 `json:"cached_tokens"`
+			} `json:"prompt_tokens_details"`
 		} `json:"usage"`
 	}
 	if err := json.Unmarshal(respBody, &doc); err == nil && doc.Usage.PromptTokens > 0 {
-		return doc.Usage.PromptTokens, doc.Usage.CompletionTokens, doc.Usage.Cost
+		cr := doc.Usage.CacheReadInputTokens
+		if cr == 0 {
+			cr = doc.Usage.PromptTokensDetails.CachedTokens
+		}
+		return doc.Usage.PromptTokens, doc.Usage.CompletionTokens, doc.Usage.Cost, cr
 	}
-	return int64(tokenize.Estimate(string(reqBody))), 0, 0
+	return int64(tokenize.Estimate(string(reqBody))), 0, 0, 0
 }
 
 // pricesOf returns the configured prices for a provider by name.

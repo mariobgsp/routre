@@ -3,14 +3,15 @@
   "log_level": "info",
   "rtk": {
     "enabled": true,
-    "min_bytes": 500,
+    "min_bytes": 0,
     "max_bytes": 10485760
   },
   "cache": {
     "enabled": true,
-    "max_entries": 512,
-    "ttl_seconds": 3600,
-    "prefix_order": false
+    "max_entries": 4096,
+    "ttl_seconds": 86400,
+    "prefix_order": true,
+    "max_bytes": 67108864
   },
   "tiers": [
     {
@@ -544,9 +545,23 @@
             "openai/gpt-3.5-turbo",
             "openai/gpt-3.5-turbo:batch",
             "openai/gpt-4"
-          ]
+          ],
+          "max_tokens": 131072
         }
       ]
     }
-  ]
+  ],
+  "preferred_model": "opencode-go/deepseek-v4-flash",
+  "fallbacks": [
+    "deepseek-v4-flash-free",
+    "openai/gpt-oss-20b:free",
+    "google/gemma-4-31b-it:free",
+    "nvidia/nemotron-3-super-120b-a12b:free",
+    "google/gemma-4-26b-a4b-it:free",
+    "hy3-free",
+    "nvidia/nemotron-3.5-lightning:free",
+    "mimo-v2.5-free",
+    "cohere/north-mini-code:free"
+  ],
+  "request_log": "/home/mariobgsp/.routre-cli/requests.jsonl"
 }

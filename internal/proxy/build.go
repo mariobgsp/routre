@@ -17,6 +17,7 @@ func tiersFromConfig(c config.Config) []router.TierInput {
 				BaseURL:   p.BaseURL,
 				APIKeyEnv: p.APIKeyEnv,
 				Models:    p.Models,
+				MaxTokens: p.MaxTokens,
 			})
 		}
 		tiers = append(tiers, router.TierInput{Name: t.Name, Providers: provs})

@@ -145,6 +145,9 @@ func printUsage(rows []usage.Row, live bool) {
 			cr.TotalTokens(), cr.PromptTokens, cr.CompletionTokens)
 		fmt.Printf("    saved:    %d tokens (rtk %d + cache %d)\n",
 			cr.TotalSavedTokens(), cr.RTKSavedTokens, cr.CacheSavedTokens)
+		if cr.CacheReadTokens > 0 {
+			fmt.Printf("    cache read: %d tokens (provider-reported)\n", cr.CacheReadTokens)
+		}
 		costStr := "n/a (no prices configured)"
 		savedStr := "n/a"
 		if cr.CostUSD > 0 || cr.SavedUSD > 0 {
@@ -163,8 +166,12 @@ func printUsage(rows []usage.Row, live bool) {
 				return rows[i].Model < rows[j].Model
 			})
 			for _, r := range rows {
-				fmt.Printf("      %s/%s  %d req  %d tok  saved %d\n",
+				line := fmt.Sprintf("      %s/%s  %d req  %d tok  saved %d",
 					r.Provider, r.Model, r.Requests, r.TotalTokens(), r.TotalSavedTokens())
+				if r.CacheReadTokens > 0 {
+					line += fmt.Sprintf("  cache-read %d", r.CacheReadTokens)
+				}
+				fmt.Println(line)
 			}
 		}
 	}

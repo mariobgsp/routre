@@ -9,6 +9,7 @@
 //	routre-cli serve  [-config config.json] [-port :20128]
 //	routre-cli check  [-config config.json]        # validate config + keys
 //	routre-cli bench  [-config config.json] [-target 90]  # token-reduction benchmark
+//	routre-cli logs   [-n 50] [-f] [-config config.json]   # tail the request log
 //	routre-cli version
 package main
 
@@ -25,6 +26,7 @@ import (
 	"routre-cli/internal/cache"
 	"routre-cli/internal/config"
 	"routre-cli/internal/proxy"
+	"routre-cli/internal/reqlog"
 	"routre-cli/internal/router"
 	"routre-cli/internal/rtk"
 	"routre-cli/internal/usage"
@@ -52,8 +54,14 @@ func run(args []string, logger *log.Logger) error {
 	port := fs.String("port", "", "override listen address (e.g. :20128)")
 	target := fs.Float64("target", 90, "bench: required token-reduction %% (0 disables the gate)")
 	url := fs.String("url", "http://127.0.0.1:20128", "list: gateway base URL to query")
-	if err := fs.Parse(args); err != nil {
-		return err
+
+	// `logs` owns its own flag set (-n, -f, -config); the shared flags
+	// above would reject -n, so skip parsing here and hand the raw args
+	// to cmdLogs.
+	if sub != "logs" {
+		if err := fs.Parse(args); err != nil {
+			return err
+		}
 	}
 
 	switch sub {
@@ -73,11 +81,14 @@ func run(args []string, logger *log.Logger) error {
 	case "list":
 		return cmdList(*cfgPath, *url, logger)
 
+	case "logs":
+		return cmdLogs("", args, logger)
+
 	case "bench":
 		return cmdBench(*cfgPath, *target, logger)
 
 	default:
-		return fmt.Errorf("unknown subcommand %q (want setup, serve, check, list, bench, version)", sub)
+		return fmt.Errorf("unknown subcommand %q (want setup, serve, check, list, logs, bench, version)", sub)
 	}
 }
 
@@ -110,6 +121,9 @@ func cmdServe(cfgPath, port string, logger *log.Logger) error {
 	tk := rtk.New(rtk.Config{Enabled: cfg.RTK.Enabled, MinBytes: cfg.RTK.MinBytes, MaxBytes: cfg.RTK.MaxBytes})
 
 	h := proxy.NewHandlers(st, rtr, cch, tk, logger, use)
+	// Request log path: the OnLoad callback only fires on reload, so set it
+	// explicitly for the initial config too.
+	reqlog.SetPath(cfg.RequestLog)
 	srv := proxy.New(h, logger)
 
 	ln, err := srv.Listen(cfg.Listen)
@@ -188,7 +202,7 @@ func buildRouter(cfg config.Config) *router.Router {
 		for _, p := range t.Providers {
 			provs = append(provs, router.ProviderInput{
 				Name: p.Name, Kind: string(p.Kind), BaseURL: p.BaseURL,
-				APIKeyEnv: p.APIKeyEnv, Models: p.Models,
+				APIKeyEnv: p.APIKeyEnv, Models: p.Models, MaxTokens: p.MaxTokens,
 			})
 		}
 		tiers = append(tiers, router.TierInput{Name: t.Name, Providers: provs})

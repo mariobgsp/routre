@@ -140,3 +140,93 @@ func TestAllExhausted(t *testing.T) {
 		t.Fatalf("all providers in cooldown: Next must return nil, got %+v", p)
 	}
 }
+
+func mkModelTiers() []TierInput {
+	// opencode-go serves the paid model; opencode-zen serves paid + free
+	// variant; openrouter only the free variant. Tier order = preference.
+	return []TierInput{
+		{Name: "subscription", Providers: []ProviderInput{
+			{Name: "opencode-go", Kind: "openai", BaseURL: "https://go", APIKeyEnv: "GO", Models: []string{"deepseek-v4-flash", "hy3"}},
+			{Name: "opencode-zen", Kind: "openai", BaseURL: "https://zen", APIKeyEnv: "ZEN", Models: []string{"deepseek-v4-flash", "deepseek-v4-flash-free", "hy3", "hy3-free"}},
+		}},
+		{Name: "openrouter", Providers: []ProviderInput{
+			{Name: "openrouter", Kind: "openai", BaseURL: "https://or", APIKeyEnv: "OR", Models: []string{"deepseek/deepseek-v4-flash:free"}},
+		}},
+	}
+}
+
+func TestCandidatesPrefersPaidTierThenFreeVariant(t *testing.T) {
+	r := New(mkModelTiers(), DefaultCooldownPolicy())
+	cands := r.Candidates("deepseek-v4-flash")
+	if len(cands) != 3 {
+		t.Fatalf("want 3 candidates, got %d: %+v", len(cands), cands)
+	}
+	// Preference order: opencode-go (paid) first, then opencode-zen's free
+	// variant, then openrouter's free variant. The client asked for the
+	// paid model, so the user's default provider is tried first; free
+	// variants are the 2nd/3rd fallback.
+	if cands[0].Provider.Provider.Name != "opencode-go" || cands[0].IsFree || cands[0].Upstream != "deepseek-v4-flash" {
+		t.Fatalf("candidate 0 must be paid opencode-go: %+v", cands[0])
+	}
+	if cands[1].Provider.Provider.Name != "opencode-zen" || !cands[1].IsFree || cands[1].Upstream != "deepseek-v4-flash-free" {
+		t.Fatalf("candidate 1 must be free variant on opencode-zen: %+v", cands[1])
+	}
+	if cands[2].Provider.Provider.Name != "openrouter" || !cands[2].IsFree || cands[2].Upstream != "deepseek/deepseek-v4-flash:free" {
+		t.Fatalf("candidate 2 must be free variant on openrouter: %+v", cands[2])
+	}
+}
+
+func TestCandidatesSkipsProvidersWithoutModel(t *testing.T) {
+	r := New(mkModelTiers(), DefaultCooldownPolicy())
+	// "hy3" is served paid by go and zen; openrouter has no hy3 at all.
+	cands := r.Candidates("hy3")
+	if len(cands) != 2 {
+		t.Fatalf("want 2 candidates (no openrouter), got %d", len(cands))
+	}
+	for _, c := range cands {
+		if c.Provider.Provider.Name == "openrouter" {
+			t.Fatal("openrouter must not be a candidate for hy3")
+		}
+	}
+}
+
+func TestCandidatesQualifiedModel(t *testing.T) {
+	r := New(mkModelTiers(), DefaultCooldownPolicy())
+	// Client may send "opencode-go/deepseek-v4-flash"; the tail must match.
+	cands := r.Candidates("opencode-go/deepseek-v4-flash")
+	if len(cands) == 0 || cands[0].Provider.Provider.Name != "opencode-go" {
+		t.Fatalf("qualified model must match opencode-go: %+v", cands)
+	}
+}
+
+func TestCreditsFailureDoesNotCooldown(t *testing.T) {
+	r := New(mkModelTiers(), DefaultCooldownPolicy())
+	zen := r.Next(1)
+	r.ReportFailure(zen, ErrCredits)
+	if got := r.CooldownRemaining(zen); got != 0 {
+		t.Fatalf("credits failure must not escalate cooldown, got %v", got)
+	}
+	// And the provider must still be a candidate (free variants may work).
+	cands := r.Candidates("deepseek-v4-flash")
+	found := false
+	for _, c := range cands {
+		if c.Provider.Provider.Name == "opencode-zen" {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatal("opencode-zen must remain a candidate after a credits failure")
+	}
+}
+
+func TestClassifyStatusBodyCredits(t *testing.T) {
+	if got := ClassifyStatusBody(401, []byte(`{"type":"error","error":{"type":"CreditsError","message":"Insufficient balance"}}`)); got != ErrCredits {
+		t.Fatalf("401 with CreditsError body must classify as ErrCredits, got %v", got)
+	}
+	if got := ClassifyStatusBody(402, nil); got != ErrCredits {
+		t.Fatalf("402 must classify as ErrCredits, got %v", got)
+	}
+	if got := ClassifyStatusBody(401, []byte(`{"error":"bad key"}`)); got != ErrAuth {
+		t.Fatalf("plain 401 must stay ErrAuth, got %v", got)
+	}
+}
