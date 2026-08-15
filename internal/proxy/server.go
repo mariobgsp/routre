@@ -1,0 +1,124 @@
+// Package proxy implements the local OpenAI-compatible gateway: it exposes
+// /v1/chat/completions and /v1/messages on 127.0.0.1, applies RTK
+// compression and the exact-match cache, then relays to the tiered upstream
+// providers with automatic failover.
+package proxy
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"io"
+	"log"
+	"net"
+	"net/http"
+	"os"
+	"sync"
+	"time"
+)
+
+// Sizes bounding memory use per request.
+const (
+	maxRequestBody   = 64 << 20  // 64 MiB inbound
+	maxResponseRead  = 128 << 20 // 128 MiB non-streaming upstream response
+	maxUpstreamError = 1 << 20   // error body read cap
+	flushInterval    = 32 << 10  // SSE flush granularity
+)
+
+// Server is the HTTP gateway.
+type Server struct {
+	handlers *Handlers
+	logger   *log.Logger
+	httpSrv  *http.Server
+	mu       sync.Mutex
+	ln       net.Listener
+	started  bool
+}
+
+// New creates a Server. handlers must be non-nil.
+func New(h *Handlers, logger *log.Logger) *Server {
+	return &Server{
+		handlers: h,
+		logger:   logger,
+	}
+}
+
+// Listen binds the HTTP listener. If systemd socket activation passed a
+// socket (LISTEN_PID == our pid, LISTEN_FDS == 1, fd 3), it is adopted so
+// the daemon can idle at ~0 MB until first connection. Otherwise a fresh
+// listener on cfg.Listen is created.
+func (s *Server) Listen(addr string) (net.Listener, error) {
+	if os.Getenv("LISTEN_PID") != "" || os.Getenv("LISTEN_FDS") != "" {
+		if pid := os.Getenv("LISTEN_PID"); pid == fmt.Sprintf("%d", os.Getpid()) && os.Getenv("LISTEN_FDS") == "1" {
+			f := os.NewFile(3, "systemd-socket")
+			if f != nil {
+				ln, err := net.FileListener(f)
+				_ = f.Close() // FileListener dup'd the fd
+				if err == nil {
+					s.logger.Printf("adopted systemd-activated listener on %s", ln.Addr())
+					return ln, nil
+				}
+			}
+		}
+		s.logger.Printf("socket-activation env present but unusable; falling back to bind")
+	}
+	ln, err := net.Listen("tcp", addr)
+	if err != nil {
+		return nil, fmt.Errorf("proxy: listen %s: %w", addr, err)
+	}
+	return ln, nil
+}
+
+// Serve runs the HTTP server on ln until Shutdown is called. Blocks.
+func (s *Server) Serve(ln net.Listener) error {
+	mux := http.NewServeMux()
+	mux.HandleFunc("GET /healthz", s.handlers.Health)
+	mux.HandleFunc("GET /v1/models", s.handlers.Models)
+	mux.HandleFunc("GET /v1/status", s.handlers.Status)
+	mux.HandleFunc("GET /v1/usage", s.handlers.UsageReport)
+	mux.HandleFunc("POST /v1/chat/completions", s.handlers.ChatCompletions)
+	mux.HandleFunc("POST /v1/messages", s.handlers.Messages)
+	mux.HandleFunc("/", s.handlers.NotFound)
+
+	s.httpSrv = &http.Server{
+		Handler:           mux,
+		ReadHeaderTimeout: 10 * time.Second,
+		IdleTimeout:       120 * time.Second,
+		MaxHeaderBytes:    1 << 20,
+		// No WriteTimeout: streaming responses can run arbitrarily long.
+	}
+	s.mu.Lock()
+	s.ln = ln
+	s.started = true
+	s.mu.Unlock()
+	err := s.httpSrv.Serve(ln)
+	if errors.Is(err, http.ErrServerClosed) {
+		return nil
+	}
+	return err
+}
+
+// Shutdown gracefully stops the server (bounded by timeout).
+func (s *Server) Shutdown(timeout time.Duration) error {
+	s.mu.Lock()
+	started := s.started
+	s.mu.Unlock()
+	if !started {
+		return nil
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
+	return s.httpSrv.Shutdown(ctx)
+}
+
+// readBody reads r with an upper bound, rejecting oversized payloads.
+func readBody(r io.Reader, limit int64) ([]byte, error) {
+	data, err := io.ReadAll(io.LimitReader(r, limit+1))
+	if err != nil {
+		return nil, err
+	}
+	if int64(len(data)) > limit {
+		return nil, errors.New("request body too large")
+	}
+	return data, nil
+}

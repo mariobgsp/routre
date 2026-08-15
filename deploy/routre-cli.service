@@ -1,0 +1,35 @@
+# routre-cli service (always-on, auto-restart, RAM-capped).
+# Socket activation: uncomment Requisite + Sockets to idle at ~0 MB until
+# the first request (requires routre-cli.socket).
+[Unit]
+Description=routre-cli: low-RAM LLM gateway with auto failover and RTK token compression
+After=network-online.target
+Wants=network-online.target
+# Requisite=routre-cli.socket
+# After=routre-cli.socket
+
+[Service]
+Type=simple
+ExecStart=/usr/local/bin/routre-cli serve -config /usr/local/etc/routre-cli/config.json
+Restart=always
+RestartSec=2
+# Hard RAM budget guard (research target: idle <=100MB, hard cap 200MB).
+MemoryMax=200M
+MemoryHigh=120M
+# Socket activation: pass the listening socket as fd 3.
+# Sockets=routre-cli.socket
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+LockPersonality=true
+# API keys come from the environment; use an EnvironmentFile owned by root.
+EnvironmentFile=-/usr/local/etc/routre-cli/env
+
+[Install]
+WantedBy=multi-user.target

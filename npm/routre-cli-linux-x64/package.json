@@ -1,0 +1,15 @@
+{
+  "name": "routre-cli-linux-x64",
+  "version": "0.1.0",
+  "description": "routre-cli binary for linux-amd64",
+  "license": "MIT",
+  "os": [
+    "linux"
+  ],
+  "cpu": [
+    "x64"
+  ],
+  "files": [
+    "binary"
+  ]
+}

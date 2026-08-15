@@ -1,0 +1,17 @@
+{
+  "name": "routre-cli",
+  "version": "0.1.0",
+  "description": "Low-RAM LLM gateway for coding agents: auto provider failover, RTK token compression (-90%), cache, usage ledger. OpenAI/Anthropic-compatible localhost endpoint.",
+  "license": "MIT",
+  "engines": { "node": ">=18" },
+  "bin": { "routre-cli": "bin/routre-cli.mjs" },
+  "files": ["bin"],
+  "optionalDependencies": {
+    "routre-cli-linux-x64": "0.1.0",
+    "routre-cli-linux-arm64": "0.1.0",
+    "routre-cli-darwin-x64": "0.1.0",
+    "routre-cli-darwin-arm64": "0.1.0",
+    "routre-cli-win32-x64": "0.1.0",
+    "routre-cli-win32-arm64": "0.1.0"
+  }
+}

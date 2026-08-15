@@ -1,0 +1,15 @@
+{
+  "name": "routre-cli-darwin-arm64",
+  "version": "0.1.0",
+  "description": "routre-cli binary for darwin-arm64",
+  "license": "MIT",
+  "os": [
+    "darwin"
+  ],
+  "cpu": [
+    "arm64"
+  ],
+  "files": [
+    "binary"
+  ]
+}

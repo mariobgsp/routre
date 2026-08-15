@@ -1,0 +1,9 @@
+/llm-router
+/bench-results.txt
+*.log
+
+npm/dist
+npm/routre-cli/binary/
+npm/routre-cli-*/binary/
+/routre-cli
+/cmd/mock-upstream/mock-upstream
