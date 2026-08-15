@@ -1,0 +1,63 @@
+name: publish
+
+# Publishes all 7 routre-cli packages to the npm registry using npm
+# Trusted Publishing (OIDC) — no npm token, no 2FA required on CI.
+#
+# Setup (one-time, ~3 min, browser on npmjs.com):
+#   1. Create a free npm account
+#      (https://www.npmjs.com/signup) and verify email.
+#   2. For EACH package below, open its npmjs.com page settings → "Trusted
+#      Publishing" → Add publisher:
+#        - Provider: GitHub Actions
+#        - Owner (org/user): mariobgsp
+#        - Repository: routre-cli
+#        - Workflow file name: publish.yml
+#      The 7 packages: routre-cli, routre-cli-linux-x64, routre-cli-linux-arm64,
+#      routre-cli-darwin-x64, routre-cli-darwin-arm64, routre-cli-win32-x64,
+#      routre-cli-win32-arm64
+#   3. Push a tag:  git tag v0.1.0 && git push origin v0.1.0
+#      → this workflow runs and publishes everything.
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  id-token: write # required for npm trusted publishing (OIDC)
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22 # >= 22.14 required for trusted publishing
+          registry-url: https://registry.npmjs.org
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.26"
+
+      - name: Build platform binaries + pack tarballs
+        run: |
+          export PATH="${HOME}/go/bin:${PATH}"
+          node npm/build.mjs
+
+      # Platform packages first (the launcher depends on them), then the
+      # launcher. No NODE_AUTH_TOKEN: npm CLI 11.5.1+ exchanges the OIDC
+      # token automatically when no registry auth is configured.
+      - name: Publish platform packages
+        working-directory: npm/dist
+        run: |
+          for pkg in routre-cli-linux-x64 routre-cli-linux-arm64 \
+                     routre-cli-darwin-x64 routre-cli-darwin-arm64 \
+                     routre-cli-win32-x64 routre-cli-win32-arm64; do
+            npm publish "$pkg"-*.tgz --access public
+          done
+
+      - name: Publish launcher
+        working-directory: npm/dist
+        run: npm publish routre-cli-*.tgz --access public
