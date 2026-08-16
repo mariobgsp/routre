@@ -144,8 +144,10 @@ func TestFailoverOrder(t *testing.T) {
 	if resp.StatusCode != 200 {
 		t.Fatalf("expected 200 from c after failover, got %d: %s", resp.StatusCode, data)
 	}
-	if a.Requests() != 1 || b.Requests() != 1 || c.Requests() != 1 {
-		t.Fatalf("expected exactly one request per provider, got a=%d b=%d c=%d", a.Requests(), b.Requests(), c.Requests())
+	// Transient 5xx are retried once per candidate before failover, so a
+	// and b each see 2 attempts (original + 1 retry); c serves first try.
+	if a.Requests() != 2 || b.Requests() != 2 || c.Requests() != 1 {
+		t.Fatalf("expected retry-then-failover counts a=2 b=2 c=1, got a=%d b=%d c=%d", a.Requests(), b.Requests(), c.Requests())
 	}
 	if got := resp.Header.Get("X-Llrouter-Provider"); got != "c" {
 		t.Fatalf("expected provider c to serve, got %q", got)
@@ -624,6 +626,29 @@ func TestCacheHit(t *testing.T) {
 	}
 	if a.Requests() != 1 {
 		t.Fatalf("upstream must be called once, got %d", a.Requests())
+	}
+
+	// The cache hit must credit the upstream-reported prompt count (the
+	// mock reports 10) as saved tokens, not the gateway's estimate.
+	_, usageData := get(t, base, "/v1/usage")
+	var out struct {
+		Rows []usage.Row `json:"rows"`
+	}
+	if err := json.Unmarshal(usageData, &out); err != nil {
+		t.Fatalf("usage parse: %v", err)
+	}
+	var found *usage.Row
+	for i, row := range out.Rows {
+		if row.CacheSavedTokens > 0 {
+			found = &out.Rows[i]
+			break
+		}
+	}
+	if found == nil {
+		t.Fatal("expected a usage row with cache-saved tokens")
+	}
+	if found.CacheSavedTokens != 10 {
+		t.Fatalf("cache hit must credit upstream-reported prompt tokens (10), got %d", found.CacheSavedTokens)
 	}
 }
 

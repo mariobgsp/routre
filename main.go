@@ -35,7 +35,7 @@ import (
 	"routre-cli/internal/usage"
 )
 
-const version = "0.1.0-dev"
+const version = "0.1.2"
 
 func main() {
 	logger := log.New(os.Stderr, "[routre-cli] ", log.LstdFlags)
@@ -118,13 +118,25 @@ func cmdServe(cfgPath, port string, logger *log.Logger) error {
 	logger.Printf("config %s loaded (%d tiers)", cfgPath, len(cfg.Tiers))
 
 	// Usage store persisted under the data dir so `routre-cli list` shows
-	// history across restarts.
+	// history across restarts. Autosave keeps the ledger fresh on crash/
+	// restart (SIGKILL, OOM, power loss) — a shutdown-only save was losing
+	// up to hours of token history.
 	usagePath := usageFilePath()
 	use, err := usage.Load(usagePath)
 	if err != nil {
 		logger.Printf("usage: %v (starting empty)", err)
 		use = usage.New(usagePath)
 	}
+	const usageAutosaveInterval = 60 * time.Second
+	usageTicker := time.NewTicker(usageAutosaveInterval)
+	defer usageTicker.Stop()
+	go func() {
+		for range usageTicker.C {
+			if serr := use.Save(); serr != nil {
+				logger.Printf("usage autosave failed: %v", serr)
+			}
+		}
+	}()
 
 	rtr := buildRouter(cfg)
 	cch := cache.New(cache.Config{
@@ -163,6 +175,12 @@ func cmdServe(cfgPath, port string, logger *log.Logger) error {
 			case syscall.SIGHUP:
 				if err := st.Reload(); err != nil {
 					logger.Printf("reload failed (keeping previous config): %v", err)
+				}
+				// Persist the ledger on reload too; config reloads often
+				// accompany daemon maintenance where a later crash would
+				// otherwise cost the unsaved window.
+				if serr := use.Save(); serr != nil {
+					logger.Printf("usage save on reload failed: %v", serr)
 				}
 			case syscall.SIGINT, syscall.SIGTERM:
 				logger.Printf("shutting down")

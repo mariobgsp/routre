@@ -12,10 +12,15 @@ import (
 	"time"
 )
 
-// Entry is a cached upstream response.
+// Entry is a cached upstream response. PromptTokens/CompletionTokens are
+// the upstream-reported usage of the request that produced the response;
+// cache hits report them so the ledger matches the provider's counts
+// instead of the gateway's length-based estimates.
 type Entry struct {
-	Body        []byte
-	ContentType string
+	Body             []byte
+	ContentType      string
+	PromptTokens     int64
+	CompletionTokens int64
 }
 
 // Config controls the cache. Zero value disables nothing by default;
