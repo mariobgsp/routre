@@ -1,6 +1,6 @@
 {
   "name": "@mariobgsp/routre-cli-win32-arm64",
-  "version": "0.1.0",
+  "version": "0.1.2",
   "description": "routre-cli binary for win32-arm64",
   "license": "MIT",
   "os": [

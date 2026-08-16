@@ -279,10 +279,19 @@ opencode run --model <provider>/<model> "hello"
 ```
 
 Usage is attributed per coding agent by User-Agent, persisted to
-`~/.routre-cli/usage.json` (survives restarts), and works offline from the
-persisted file when the gateway is down. Costs come from provider-reported
-usage (OpenRouter reports real `usage.cost`) or from `price_in` /
-`price_out` in the config (USD per 1M tokens).
+`~/.routre-cli/usage.json` (survives restarts, autosaved every 60s and on
+SIGHUP so a crash loses at most one minute of ledger), and works offline
+from the persisted file when the gateway is down. Costs come from
+provider-reported usage (OpenRouter reports real `usage.cost`) or from
+`price_in` / `price_out` in the config (USD per 1M tokens). Cache hits
+credit the upstream-reported prompt token count stored on the cached
+response, so the ledger matches the provider's billing numbers instead of
+the gateway's length-based estimates.
+
+Transient upstream failures (network errors, 5xx) are retried once per
+candidate (500ms delay) before failover and cooldown escalation — an
+hour-long upstream 503 blip no longer burns every fallback in the same
+window.
 
 ---
 

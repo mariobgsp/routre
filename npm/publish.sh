@@ -12,6 +12,8 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
+VERSION="${VERSION:-0.1.2}"
+
 # Ensure we have a fresh dist build.
 export PATH="${HOME}/go-sdk/go/bin:${PATH}"
 node npm/build.mjs
@@ -33,15 +35,15 @@ for pkg in \
   routre-cli-linux-x64 routre-cli-linux-arm64 \
   routre-cli-darwin-x64 routre-cli-darwin-arm64; do
   echo "==> publishing $pkg"
-  npm publish "$pkg"-0.1.0.tgz --access public
+  npm publish "$pkg"-"$VERSION".tgz --access public
 done
 for pkg in \
   mariobgsp-routre-cli-win32-x64 mariobgsp-routre-cli-win32-arm64; do
   echo "==> publishing @$pkg"
-  npm publish "$pkg"-0.1.0.tgz --access public
+  npm publish "$pkg"-"$VERSION".tgz --access public
 done
 echo "==> publishing routre-cli"
-npm publish routre-cli-0.1.1.tgz --access public
+npm publish routre-cli-"$VERSION".tgz --access public
 
 echo
 echo "published. verify with: npm view routre-cli"
