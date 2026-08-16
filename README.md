@@ -9,6 +9,9 @@ RAM idle) that runs as an always-on daemon on macOS, Windows, and Linux.
 npm install -g routre-cli     # one command, no Go toolchain needed
 routre-cli setup              # wizard: provider URLs + API keys
 routre-cli serve              # gateway on 127.0.0.1:20128
+routre-cli start              # start the daemon (systemd/launchd or detached)
+routre-cli stop               # stop the daemon
+routre-cli restart            # restart the daemon (keeps auto-start state)
 routre-cli list               # connected providers + token/cost ledger
 ```
 
@@ -29,7 +32,7 @@ Built as a decision-driven spike from two research passes
 - **Not LiteLLM/Portkey self-host** — Python/Postgres/Redis stacks sized in
   gigabytes.
 - **Single static Go binary, stdlib only** — proven low-RAM pattern (Go ~5K
-  QPS at ~11 ms proxy overhead), cross-compiled for 6 platforms.
+  QPS at ~11 ms proxy overhead), cross-compiled for 6 platforms (7 npm packages, incl. scoped win32).
 - **Honest metrics** — the 90% claim is defined, gated, and reproducible
   (`routre-cli bench` fails the build if it regresses).
 
@@ -93,7 +96,7 @@ make build          # needs Go ≥ 1.22
 ### Build the npm distribution
 
 ```bash
-make dist-npm       # cross-compiles all 6 platforms → npm/dist/*.tgz
+make dist-npm       # cross-compiles all 6 platforms → npm/dist/*.tgz (7 packages)
 ```
 
 ### Publish to npm
@@ -219,11 +222,29 @@ opencode run --model <provider>/<model> "hello"
 | Command | Purpose |
 | --- | --- |
 | `routre-cli setup [-config f]` | interactive wizard (providers, URLs, API keys) |
-| `routre-cli serve [-config f] [-port :p]` | run the gateway |
+| `routre-cli serve [-config f] [-port :p]` | run the gateway in the foreground |
+| `routre-cli start [-config f] [--autostart]` | start the daemon (systemd/launchd, or detached process) |
+| `routre-cli stop [-config f] [--autostart]` | stop the daemon (+ disable auto-start) |
+| `routre-cli restart [-config f]` | restart the daemon (keeps auto-start state) |
 | `routre-cli check [-config f]` | validate config + API keys |
 | `routre-cli list [-config f] [-url http://127.0.0.1:20128]` | connected providers + token/cost ledger |
+| `routre-cli logs [-n 50] [-f] [-config f]` | tail the per-request log |
 | `routre-cli bench [-config f] [-target 90]` | RTK token-reduction benchmark (gated) |
 | `routre-cli version` | print version |
+
+### `start` / `stop` / `restart` — daemon lifecycle
+
+- The gateway is managed through the OS service manager when installed as
+  one — **systemd** (system or `--user` scope, auto-detected) or **launchd**
+  on macOS (see `deploy/`). Without an installed service, `start` spawns a
+  detached `serve` background process logging to
+  `~/.routre-cli/daemon.log` and waits for the port to come up; `stop`
+  finds the process listening on the configured port and sends SIGTERM
+  (graceful shutdown, usage saved first).
+- `start --autostart` / `stop --autostart` also enable / disable
+  boot/login auto-start (`systemctl enable` / `disable`, `launchctl load` /
+  `unload -w`). Auto-start requires an installed service.
+- `restart` keeps the current auto-start state.
 
 ### `list` — everything connected, per agent, with totals
 
@@ -273,9 +294,18 @@ usage (OpenRouter reports real `usage.cost`) or from `price_in` /
   tried in order; within a tier, providers are tried in order.
 - Failures (5xx, 429, 401/403, network errors) fail over to the next
   provider; the failed one enters an **exponential cooldown** (2 s base →
-  30 min cap). Success resets.
-- **Mid-stream SSE aborts never fail over** (no duplicated output);
-  client-caused errors (400/404/422) are surfaced, not retried.
+  30 min cap). Success resets. Cooldowns are per provider — one failing
+  provider never cools down the others.
+- **Streaming requests fail over too**: an upstream 5xx/429 answered
+  before the first stream byte is treated like a non-streaming failure
+  (cooldown + next provider); only after the first byte does a stream
+  abort stop the request (no duplicated output). Client-caused errors
+  (400/404/422, e.g. context-length) are surfaced, not retried.
+- **Honest error identity**: `model_not_found` (503) is only returned when
+  no configured provider (and no fallback) can serve the model; when every
+  provider that could serve it is in cooldown, the gateway returns
+  `providers_unavailable` (503) with a `Retry-After` header instead — the
+  remedy is waiting, not editing the config.
 - The gateway **holds the provider API keys** (from `api_key_env` /
   `routre-cli.env`) and injects them upstream — a client's `Authorization`
   header is a placeholder and is never forwarded.
@@ -375,7 +405,7 @@ internal/mock/           mock upstream (tests + keyless e2e)
 benchdata/               tool-heavy request bodies for the bench gate
 scripts/measure-ram.sh   RSS/peak/growth measurement
 deploy/                  systemd unit+socket, launchd plist
-npm/                     npm distribution (6 platform packages + launcher)
+npm/                     npm distribution (7 packages: 4 Unix + 2 scoped win32 + launcher)
 ```
 
 ---
