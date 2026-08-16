@@ -19,7 +19,7 @@ grounded in two research passes: external evidence
 | D3 | **OpenAI-compatible HTTP on 127.0.0.1** (`/v1/chat/completions` + `/v1/messages`). CLI tools (Claude Code, Codex, Cursor…) only accept base-URL env vars (`ANTHROPIC_BASE_URL` / `OPENAI_BASE_URL`), not unix sockets. Unix socket reserved for future control channel. | research.md F6; context.md §6 |
 | D4 | **Failover = tiered providers + per-provider exponential cooldown** (2 s base → 30 min cap), retry only before the first stream byte; mid-stream SSE aborts never fail over (no duplicated output); client-caused 4xx (400/404/422) surface without failover. Mirrors 9router's accountFallback policy (MIT, reusable pattern) minus the dashboard. | research.md §5; context.md §3 |
 | D5 | **Token reduction = heuristic tool_result compression (RTK-style) + exact-match response cache + optional stable-prefix ordering.** No local LM compressor (LLMLingua-class would add a model and break the RAM budget), no semantic cache (needs embeddings/DB), no vector store. | research.md §3, F3; context.md §4 |
-| D6 | **Always-on via systemd unit (MemoryMax=200M) with optional socket activation (~0 MB idle)**; launchd plist for macOS. SIGHUP reload, no drop of connections. | research.md F7; deploy/ |
+| D6 | **Always-on via systemd unit (MemoryMax=200M) with optional socket activation (~0 MB idle)**; launchd plist for macOS. SIGHUP reload, no drop of connections. Lifecycle commands `start [--autostart]`, `stop [--autostart]`, `restart` (systemd `--user` scope supported). | research.md F7; deploy/ |
 | D7 | **Honest metric definition.** The 90% guarantee applies to **tool-result tokens in tool-heavy payloads** — the same narrow sense in which the "90%" claim is defensible at all (Anthropic's 90% cache-read discount is a price discount, not token removal; RouteLLM's 85% is cost, not tokens; LLMLingua's 95% is input-only with a local LM). Whole-payload reduction is reported separately and depends on the workload mix. | research.md §3 |
 
 ## 2. Metrics (the promises)
@@ -100,7 +100,11 @@ writes config + key file interactively; `routre-cli list` shows the
 per-client ledger.
 
 Signal handling: SIGHUP → reload config (router/cache/rtk updated in place);
-SIGINT/SIGTERM → graceful shutdown (5 s bound).
+SIGINT/SIGTERM → graceful shutdown (5 s bound). Daemon lifecycle:
+`routre-cli start [--autostart]` / `stop [--autostart]` / `restart`
+drive systemd (system or `--user` scope) or launchd; without an
+installed service they fall back to a detached `serve` process
+(`~/.routre-cli/daemon.log`) and a port scan.
 
 ## 4. Failover policy table
 
@@ -113,9 +117,16 @@ SIGINT/SIGTERM → graceful shutdown (5 s bound).
 | 400 / 404 / 422 | client | surface to client, no failover |
 | stream error before first byte | network | cooldown++, fail over |
 | stream error after first byte | stream-abort | stop; never retry (duplication) |
+| upstream non-2xx on a streaming request | same as non-streaming | fail over before the first byte (nothing streamed yet); only 2xx streams |
 
 Cooldown: `failures` count → `base·2^(failures-1)`, capped at 30 min;
 success resets. Stream aborts never escalate.
+
+Error identity: `model_not_found` (503) is reserved for models no
+configured provider lists (and no fallback matches). When every provider
+that could serve the model is in cooldown, the gateway returns
+`providers_unavailable` (503) with a `Retry-After` header instead — the
+remedy is waiting, not editing the config.
 
 ## 5. Token reduction design
 

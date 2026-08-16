@@ -435,6 +435,48 @@ func (r *Router) Status() []Status {
 	return out
 }
 
+// ServesModel reports whether any provider (regardless of cooldown)
+// lists model or a free variant of it. Used to tell "model not
+// configured" apart from "all matching providers are in cooldown".
+func (r *Router) ServesModel(model string) bool {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	for _, p := range r.provs {
+		if providerServes(p.Provider.Models, model) {
+			return true
+		}
+		if freeVariantOf(p.Provider.Models, model) != "" {
+			return true
+		}
+	}
+	return false
+}
+
+// MinCooldownForModel returns the shortest cooldown remaining among
+// providers that could serve model (or a free variant of it), and whether
+// at least one such provider exists. Callers use it to set Retry-After
+// when every candidate is cooling down.
+func (r *Router) MinCooldownForModel(model string) (time.Duration, bool) {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	now := r.now()
+	best := time.Duration(0)
+	found := false
+	for _, p := range r.provs {
+		if !providerServes(p.Provider.Models, model) && freeVariantOf(p.Provider.Models, model) == "" {
+			continue
+		}
+		found = true
+		if now.Before(p.until) {
+			rem := p.until.Sub(now)
+			if best == 0 || rem < best {
+				best = rem
+			}
+		}
+	}
+	return best, found
+}
+
 // Reset replaces the provider list and policy (config reload). The old
 // failure state is discarded; cooldowns restart fresh.
 func (r *Router) Reset(tiers []TierInput, policy CooldownPolicy) {

@@ -194,6 +194,22 @@ func (h *Handlers) route(w http.ResponseWriter, r *http.Request, api apiFormat) 
 	// request are not retried.
 	cands := h.Router.CandidatesWithFallbacks(requested, h.Cfg.Get().Fallbacks)
 	if len(cands) == 0 {
+		// Distinguish "model never configured" from "every provider that
+		// could serve it is in cooldown" — both collapse to an empty
+		// candidate list, but the remedies are different (fix the config
+		// vs wait/check the provider).
+		if retryAfter, served := h.Router.MinCooldownForModel(requested); served {
+			h.Metrics.Request(client, "", requested, "providers_unavailable")
+			logReq(reqlog.Entry{Client: client, Model: requested, Status: http.StatusServiceUnavailable, Class: "providers_unavailable"})
+			if retryAfter < time.Second {
+				retryAfter = time.Second
+			}
+			w.Header().Set("Retry-After", fmt.Sprintf("%d", int(retryAfter.Seconds())))
+			writeJSON(w, http.StatusServiceUnavailable, map[string]any{
+				"error": map[string]any{"message": fmt.Sprintf("all providers that serve model %q are cooling down (retry in %s)", requested, retryAfter.Round(time.Second)), "type": "providers_unavailable"},
+			})
+			return
+		}
 		h.Metrics.Request(client, "", requested, "model_not_found")
 		logReq(reqlog.Entry{Client: client, Model: requested, Status: http.StatusServiceUnavailable, Class: "model_not_found"})
 		writeJSON(w, http.StatusServiceUnavailable, map[string]any{
@@ -289,10 +305,13 @@ func (h *Handlers) route(w http.ResponseWriter, r *http.Request, api apiFormat) 
 			continue
 		}
 
-		if streaming {
+		if streaming && status >= 200 && status < 300 {
 			// relay already streamed the response to the client. Report the
 			// prompt side (streamed completion tokens are collected from the
 			// SSE stream by streamRelay, which fills h.lastStreamUsage).
+			// A non-2xx was returned by relayStream as (status, body, ...)
+			// with nothing streamed yet, so it falls through to the shared
+			// error handling below (classify, report failure, fail over).
 			h.Router.ReportSuccess(p)
 			prompt := tokenize.Estimate(string(processed))
 			h.Usage.Record(client, modelFromBody(body), int64(prompt), 0, int64(rtkSaved), 0, pricesOf(h.Cfg.Get(), p.Provider.Name), 0)
@@ -301,7 +320,7 @@ func (h *Handlers) route(w http.ResponseWriter, r *http.Request, api apiFormat) 
 			return
 		}
 
-		if status >= 200 && status < 300 {
+		if !streaming && status >= 200 && status < 300 {
 			h.Router.ReportSuccess(p)
 			if ct == "" {
 				ct = "application/json"
@@ -355,11 +374,17 @@ func (h *Handlers) route(w http.ResponseWriter, r *http.Request, api apiFormat) 
 	})
 }
 
-// isStreaming detects stream:true in the request body (both spacing
-// variants). This is deliberately simple; exotic whitespace inside the
-// literal is the documented limitation.
+// isStreaming detects stream:true in the request body via JSON parsing.
+// A literal `"stream":true` inside user content (a quoted string) is
+// NOT treated as a streaming request; only the top-level field counts.
 func isStreaming(body []byte) bool {
-	return bytes.Contains(body, []byte(`"stream":true`)) || bytes.Contains(body, []byte(`"stream": true`))
+	var probe struct {
+		Stream bool `json:"stream"`
+	}
+	if err := json.Unmarshal(body, &probe); err != nil {
+		return false
+	}
+	return probe.Stream
 }
 
 // cacheKey is the exact-match key over the processed body (post-RTK,
@@ -431,6 +456,9 @@ func (h *Handlers) relay(ctx context.Context, w http.ResponseWriter, baseURL str
 	} else {
 		req.Header.Set("Authorization", "Bearer "+providerKey)
 	}
+	// Content-Type is required by some upstreams (opencode.ai returns 500
+	// without it); the streaming path sets it too.
+	req.Header.Set("Content-Type", "application/json")
 	// Provider-specific passthroughs.
 	for _, hdr := range []string{"Anthropic-Version", "Anthropic-Beta", "OpenAI-Beta"} {
 		if v := r.Header.Get(hdr); v != "" {
@@ -444,7 +472,14 @@ func (h *Handlers) relay(ctx context.Context, w http.ResponseWriter, baseURL str
 	}
 	defer resp.Body.Close()
 
-	body, err := readBody(resp.Body, maxResponseRead)
+	// Error bodies are capped well below the success-body limit: a
+	// provider's giant error payload must not be buffered in full or
+	// classified as a network failure.
+	limit := int64(maxResponseRead)
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		limit = maxUpstreamError
+	}
+	body, err := readBody(resp.Body, limit)
 	if err != nil {
 		return 0, nil, "", fmt.Errorf("read upstream response: %w", err)
 	}
@@ -452,9 +487,13 @@ func (h *Handlers) relay(ctx context.Context, w http.ResponseWriter, baseURL str
 }
 
 // relayStream streams an SSE response to the client, copying upstream
-// headers. On success it returns (0, nil, "", nil); the caller must not
-// write anything further. Errors before the first byte are retryable;
-// errors after the first byte are router.StreamAborted().
+// headers. On success it returns (http.StatusOK, nil, "", nil) and the
+// caller must not write anything further — the status reports that the
+// stream was relayed, while upstream 4xx/5xx are returned as
+// (status, body, ct, nil) with nothing written yet so the caller can
+// classify, report the failure, and fail over. Errors before the first
+// byte are retryable; errors after the first byte are
+// router.StreamAborted().
 func (h *Handlers) relayStream(ctx context.Context, w http.ResponseWriter, baseURL string, r *http.Request, payload []byte, kind, apiKeyEnv string) (int, []byte, string, error) {
 	path := "/v1/chat/completions"
 	if kind == "anthropic" {
@@ -469,7 +508,13 @@ func (h *Handlers) relayStream(ctx context.Context, w http.ResponseWriter, baseU
 		return 0, nil, "", err
 	}
 	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Accept", r.Header.Get("Accept"))
+	// Upstreams that sniff Accept for SSE negotiation should see an
+	// explicit event-stream intent; default it when the client sent none.
+	accept := r.Header.Get("Accept")
+	if accept == "" {
+		accept = "text/event-stream"
+	}
+	req.Header.Set("Accept", accept)
 	// Same key policy as relay: the gateway's key wins, never the client's.
 	providerKey, missing := upstreamKey(apiKeyEnv)
 	if missing {
@@ -481,6 +526,13 @@ func (h *Handlers) relayStream(ctx context.Context, w http.ResponseWriter, baseU
 	} else {
 		req.Header.Set("Authorization", "Bearer "+providerKey)
 	}
+	// Beta-feature passthroughs (mirror the non-streaming relay; beta-gated
+	// features must work identically on both paths).
+	for _, hdr := range []string{"Anthropic-Version", "Anthropic-Beta", "OpenAI-Beta"} {
+		if v := r.Header.Get(hdr); v != "" {
+			req.Header.Set(hdr, v)
+		}
+	}
 
 	resp, err := h.HTTPClient.Do(req)
 	if err != nil {
@@ -488,10 +540,23 @@ func (h *Handlers) relayStream(ctx context.Context, w http.ResponseWriter, baseU
 	}
 	defer resp.Body.Close()
 
+	// A non-2xx response is NOT a stream: return it so the caller can
+	// classify, report the failure, and fail over to the next candidate
+	// instead of streaming an error body to the client (which used to
+	// reset the provider's cooldown via ReportSuccess). Error bodies are
+	// capped like the non-streaming path.
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		body, rerr := readBody(resp.Body, maxUpstreamError)
+		if rerr != nil {
+			return 0, nil, "", rerr
+		}
+		return resp.StatusCode, body, resp.Header.Get("Content-Type"), nil
+	}
+
 	if err := h.streamRelay(w, resp); err != nil {
 		return 0, nil, "", err
 	}
-	return 0, nil, "", nil
+	return http.StatusOK, nil, "", nil
 }
 
 // streamRelay copies an SSE stream to the client. flushAfter counts bytes
