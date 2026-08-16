@@ -115,6 +115,19 @@ func get(t *testing.T, url, path string) (*http.Response, []byte) {
 	return resp, data
 }
 
+// routerStatus fetches /v1/status and returns the provider snapshot.
+func routerStatus(t *testing.T, base string) []router.Status {
+	t.Helper()
+	_, data := get(t, base, "/v1/status")
+	var out struct {
+		Providers []router.Status `json:"providers"`
+	}
+	if err := json.Unmarshal(data, &out); err != nil {
+		t.Fatalf("status parse: %v", err)
+	}
+	return out.Providers
+}
+
 func TestFailoverOrder(t *testing.T) {
 	a, _ := mock.New("a")
 	defer a.Close()
@@ -394,6 +407,144 @@ func TestAllFailed(t *testing.T) {
 	}
 }
 
+// TestStreamingUpstream500FailsOver: a streaming request whose upstream
+// answers 500 must fail over to the next provider and report the failure
+// (cooldown escalation), not stream the error body or reset cooldown.
+func TestStreamingUpstream500FailsOver(t *testing.T) {
+	a, _ := mock.New("a")
+	defer a.Close()
+	b, _ := mock.New("b")
+	defer b.Close()
+	base, _ := testEnv(t, buildConfigWithMocks(t, map[string]*mock.Server{"a": a, "b": b}))
+
+	a.SetFail(500)
+	resp, data := post(t, base, "/v1/chat/completions", chatBody(true, ""))
+	if resp.StatusCode != 200 {
+		t.Fatalf("expected failover to b (200), got %d: %s", resp.StatusCode, data)
+	}
+	if !strings.Contains(string(data), "from-b") {
+		t.Fatalf("expected stream from b after a failed: %s", data)
+	}
+	if b.Requests() == 0 {
+		t.Fatal("b must receive the request after a 500s")
+	}
+	// a must be cooling down (failure reported, not reset by a success).
+	st := routerStatus(t, base)
+	for _, p := range st {
+		if p.Provider == "a" && p.CooldownRemaining <= 0 {
+			t.Fatalf("provider a must be in cooldown after streaming 500, got %+v", p)
+		}
+	}
+}
+
+// TestStreamingUpstream429Surfaces: when every provider 429s on a
+// streaming request, the client must get a clean 503 all_providers_failed
+// (not a raw error stream) and providers must be cooling down.
+func TestStreamingUpstream429Surfaces(t *testing.T) {
+	a, _ := mock.New("a")
+	defer a.Close()
+	b, _ := mock.New("b")
+	defer b.Close()
+	base, _ := testEnv(t, buildConfigWithMocks(t, map[string]*mock.Server{"a": a, "b": b}))
+
+	a.SetFail(429)
+	b.SetFail(429)
+	resp, data := post(t, base, "/v1/chat/completions", chatBody(true, ""))
+	if resp.StatusCode != 503 {
+		t.Fatalf("expected 503 all_providers_failed, got %d: %s", resp.StatusCode, data)
+	}
+	if !strings.Contains(string(data), "all_providers_failed") && !strings.Contains(string(data), "all providers") {
+		t.Fatalf("expected all-failed error body, got: %s", data)
+	}
+}
+
+// TestModelNotConfiguredVsCooldown: a model no provider lists must 503
+// with model_not_found; a model every serving provider is cooling down on
+// must 503 with providers_unavailable + Retry-After (never the misleading
+// "no configured provider serves model").
+func TestModelNotConfiguredVsCooldown(t *testing.T) {
+	a, _ := mock.New("a")
+	defer a.Close()
+	base, _ := testEnv(t, buildConfigWithMocks(t, map[string]*mock.Server{"a": a}))
+
+	// Model absent from every provider list.
+	body := bytes.Replace(chatBody(false, ""), []byte(`"m"`), []byte(`"no-such-model"`), 1)
+	resp, data := post(t, base, "/v1/chat/completions", body)
+	if resp.StatusCode != 503 {
+		t.Fatalf("expected 503, got %d", resp.StatusCode)
+	}
+	if !strings.Contains(string(data), "model_not_found") {
+		t.Fatalf("expected model_not_found, got: %s", data)
+	}
+
+	// Provider serves the model but is in cooldown (from the 503 above).
+	// Force a cooldown via two quick 500s, then check the distinction.
+	a.SetFail(500)
+	_, _ = post(t, base, "/v1/chat/completions", chatBody(false, ""))
+	_, _ = post(t, base, "/v1/chat/completions", chatBody(false, ""))
+	resp, data = post(t, base, "/v1/chat/completions", chatBody(false, ""))
+	if resp.StatusCode != 503 {
+		t.Fatalf("expected 503, got %d", resp.StatusCode)
+	}
+	if !strings.Contains(string(data), "providers_unavailable") {
+		t.Fatalf("expected providers_unavailable (not model_not_found), got: %s", data)
+	}
+	if resp.Header.Get("Retry-After") == "" {
+		t.Fatal("expected Retry-After on providers_unavailable")
+	}
+}
+
+// TestStreamingAcceptHeader: the streaming relay must send an explicit
+// Accept: text/event-stream to the upstream when the client sent none.
+func TestStreamingAcceptHeader(t *testing.T) {
+	a, _ := mock.New("a")
+	defer a.Close()
+	base, _ := testEnv(t, buildConfigWithMocks(t, map[string]*mock.Server{"a": a}))
+
+	_, _ = post(t, base, "/v1/chat/completions", chatBody(true, ""))
+	if got := a.Header().Get("Accept"); got != "text/event-stream" {
+		t.Fatalf("upstream Accept = %q, want text/event-stream", got)
+	}
+}
+
+// TestStreamingBetaPassthrough: beta headers the client sent must reach
+// the upstream on the streaming path (parity with the non-streaming
+// relay).
+func TestStreamingBetaPassthrough(t *testing.T) {
+	a, _ := mock.New("a")
+	defer a.Close()
+	base, _ := testEnv(t, buildConfigWithMocks(t, map[string]*mock.Server{"a": a}))
+
+	req, _ := http.NewRequest(http.MethodPost, base+"/v1/chat/completions", bytes.NewReader(chatBody(true, "")))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Anthropic-Beta", "prompt-caching-2024-07-31")
+	req.Header.Set("OpenAI-Beta", "responses")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, _ = io.ReadAll(resp.Body)
+	resp.Body.Close()
+	if got := a.Header().Get("Anthropic-Beta"); got != "prompt-caching-2024-07-31" {
+		t.Fatalf("Anthropic-Beta upstream = %q", got)
+	}
+	if got := a.Header().Get("OpenAI-Beta"); got != "responses" {
+		t.Fatalf("OpenAI-Beta upstream = %q", got)
+	}
+}
+
+// TestIsStreamingFalsePositive: a literal "stream":true inside user
+// content must NOT switch a request into streaming mode.
+func TestIsStreamingFalsePositive(t *testing.T) {
+	body := []byte(`{"model":"m","messages":[{"role":"user","content":"the flag is \"stream\":true here"}]}`)
+	if isStreaming(body) {
+		t.Fatal("literal \"stream\":true in content must not mark the request streaming")
+	}
+	if !isStreaming([]byte(`{"model":"m","stream":true,"messages":[]}`)) {
+		t.Fatal("top-level stream:true must be detected")
+	}
+}
+
 func TestStreamingPassThrough(t *testing.T) {
 	a, _ := mock.New("a")
 	defer a.Close()
@@ -408,6 +559,29 @@ func TestStreamingPassThrough(t *testing.T) {
 	}
 	if !strings.Contains(string(data), "[DONE]") {
 		t.Fatalf("stream terminator missing: %s", data)
+	}
+}
+
+// TestStreamingSuccessClassifiedOK: a successful stream must be counted
+// as class ok (not client_error — a regression where relayStream's
+// status-0 success return fell through to the error classification).
+func TestStreamingSuccessClassifiedOK(t *testing.T) {
+	a, _ := mock.New("a")
+	defer a.Close()
+	base, _ := testEnv(t, buildConfigWithMocks(t, map[string]*mock.Server{"a": a}))
+
+	post(t, base, "/v1/chat/completions", chatBody(true, ""))
+
+	resp, data := get(t, base, "/metrics")
+	if resp.StatusCode != 200 {
+		t.Fatalf("metrics: %d", resp.StatusCode)
+	}
+	s := string(data)
+	if !strings.Contains(s, `routre_requests_total{client="go-http-client/1.1",provider="a",model="m",class="ok"}`) {
+		t.Fatalf("streaming success must be classified ok; metrics:\n%s", s)
+	}
+	if strings.Contains(s, `class="client_error"`) {
+		t.Fatalf("streaming success must NOT be client_error; metrics:\n%s", s)
 	}
 }
 
@@ -470,6 +644,26 @@ func TestRTKAppliedOnRelay(t *testing.T) {
 	}
 	if !strings.Contains(string(upstream), "repeated") {
 		t.Fatal("compressed body must keep the dedup marker")
+	}
+}
+
+// TestNonStreamingSetsContentType: the non-streaming relay must send
+// Content-Type: application/json upstream. Some upstreams (opencode.ai)
+// return 500 without it, which previously made every non-streaming
+// request fail over and poison cooldowns, surfacing as misleading
+// model_not_found 503s.
+func TestNonStreamingSetsContentType(t *testing.T) {
+	a, _ := mock.New("a")
+	defer a.Close()
+	base, _ := testEnv(t, buildConfigWithMocks(t, map[string]*mock.Server{"a": a}))
+
+	resp, _ := post(t, base, "/v1/chat/completions", chatBody(false, ""))
+	if resp.StatusCode != 200 {
+		t.Fatalf("expected 200, got %d", resp.StatusCode)
+	}
+	ct := a.Header().Get("Content-Type")
+	if !strings.HasPrefix(ct, "application/json") {
+		t.Fatalf("upstream Content-Type = %q, want application/json", ct)
 	}
 }
 

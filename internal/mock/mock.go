@@ -19,18 +19,19 @@ import (
 
 // Server is a configurable mock upstream.
 type Server struct {
-	mu        sync.Mutex
-	ln        net.Listener
-	http      *http.Server
-	Name      string
-	FailWith  int           // if != 0, respond with this status
-	FailBody  string        // optional custom failure body (used when FailWith != 0)
-	ResetConn bool          // close connection without a response
-	AbortMid  bool          // start SSE then abort
-	Stream    bool          // force SSE responses
-	Count     atomic.Int64  // requests seen
-	LastBody  atomic.Value  // []byte of last request body
-	Delay     time.Duration // optional per-request delay
+	mu         sync.Mutex
+	ln         net.Listener
+	http       *http.Server
+	Name       string
+	FailWith   int           // if != 0, respond with this status
+	FailBody   string        // optional custom failure body (used when FailWith != 0)
+	ResetConn  bool          // close connection without a response
+	AbortMid   bool          // start SSE then abort
+	Stream     bool          // force SSE responses
+	Count      atomic.Int64  // requests seen
+	LastBody   atomic.Value  // []byte of last request body
+	LastHeader atomic.Value  // http.Header of last request
+	Delay      time.Duration // optional per-request delay
 }
 
 // New starts a mock upstream on 127.0.0.1:0. Call Close to stop it.
@@ -106,10 +107,22 @@ func (m *Server) Body() []byte {
 	return nil
 }
 
+// Header returns the headers of the last request (copied, safe to read).
+func (m *Server) Header() http.Header {
+	if v := m.LastHeader.Load(); v != nil {
+		return v.(http.Header).Clone()
+	}
+	return http.Header{}
+}
+
 func (m *Server) handle(w http.ResponseWriter, r *http.Request) {
 	m.Count.Add(1)
-	body, _ := io.ReadAll(io.LimitReader(r.Body, 1<<20))
+	body, err := io.ReadAll(io.LimitReader(r.Body, 1<<20))
+	if err != nil {
+		body = nil // tolerate cut connections; the mock only inspects complete bodies
+	}
 	m.LastBody.Store(append([]byte(nil), body...))
+	m.LastHeader.Store(r.Header.Clone())
 
 	m.mu.Lock()
 	fail := m.FailWith

@@ -8,6 +8,9 @@
 //
 //	routre-cli serve  [-config config.json] [-port :20128]
 //	routre-cli check  [-config config.json]        # validate config + keys
+//	routre-cli start  [--autostart] [-config config.json]   # start daemon (+ enable auto-start)
+//	routre-cli stop   [--autostart] [-config config.json]   # stop daemon (+ disable auto-start)
+//	routre-cli restart [-config config.json]       # restart the daemon
 //	routre-cli bench  [-config config.json] [-target 90]  # token-reduction benchmark
 //	routre-cli logs   [-n 50] [-f] [-config config.json]   # tail the request log
 //	routre-cli version
@@ -54,6 +57,7 @@ func run(args []string, logger *log.Logger) error {
 	port := fs.String("port", "", "override listen address (e.g. :20128)")
 	target := fs.Float64("target", 90, "bench: required token-reduction %% (0 disables the gate)")
 	url := fs.String("url", "http://127.0.0.1:20128", "list: gateway base URL to query")
+	autostart := fs.Bool("autostart", false, "start: enable auto-start (systemctl enable / launchctl load -w); stop: disable auto-start (systemctl disable / launchctl unload -w)")
 
 	// `logs` owns its own flag set (-n, -f, -config); the shared flags
 	// above would reject -n, so skip parsing here and hand the raw args
@@ -78,6 +82,15 @@ func run(args []string, logger *log.Logger) error {
 	case "check":
 		return cmdCheck(*cfgPath, logger)
 
+	case "start":
+		return cmdStart(*cfgPath, *autostart, logger)
+
+	case "stop":
+		return cmdStop(*cfgPath, *autostart, logger)
+
+	case "restart":
+		return cmdRestart(*cfgPath, logger)
+
 	case "list":
 		return cmdList(*cfgPath, *url, logger)
 
@@ -88,7 +101,7 @@ func run(args []string, logger *log.Logger) error {
 		return cmdBench(*cfgPath, *target, logger)
 
 	default:
-		return fmt.Errorf("unknown subcommand %q (want setup, serve, check, list, logs, bench, version)", sub)
+		return fmt.Errorf("unknown subcommand %q (want setup, serve, check, start, stop, restart, list, logs, bench, version)", sub)
 	}
 }
 

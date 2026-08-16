@@ -190,6 +190,47 @@ func TestCandidatesSkipsProvidersWithoutModel(t *testing.T) {
 	}
 }
 
+// TestServesModel: ServesModel ignores cooldowns and reports whether any
+// provider lists the model or a free variant of it.
+func TestServesModel(t *testing.T) {
+	r := New(mkTiers(), DefaultCooldownPolicy())
+	if !r.ServesModel("m1") {
+		t.Fatal("m1 is configured on provider a")
+	}
+	if r.ServesModel("m-nonexistent") {
+		t.Fatal("m-nonexistent is configured nowhere")
+	}
+	// Cooldown must not affect ServesModel.
+	a := r.Next(0)
+	r.ReportFailure(a, ErrServer)
+	if !r.ServesModel("m1") {
+		t.Fatal("ServesModel must ignore cooldown state")
+	}
+}
+
+// TestMinCooldownForModel: returns the shortest cooldown among providers
+// serving the model, and reports whether any provider serves it.
+func TestMinCooldownForModel(t *testing.T) {
+	r := New(mkTiers(), DefaultCooldownPolicy())
+
+	// No provider serves the model.
+	if _, found := r.MinCooldownForModel("m-nonexistent"); found {
+		t.Fatal("model configured nowhere must not be found")
+	}
+
+	// Only provider a serves m1; cooling it down yields its remaining
+	// cooldown and found=true.
+	a := r.Next(0)
+	r.ReportFailure(a, ErrServer)
+	rem, found := r.MinCooldownForModel("m1")
+	if !found {
+		t.Fatal("m1 is served by provider a even while cooling down")
+	}
+	if rem <= 0 {
+		t.Fatalf("expected a positive cooldown for m1, got %v", rem)
+	}
+}
+
 func TestCandidatesQualifiedModel(t *testing.T) {
 	r := New(mkModelTiers(), DefaultCooldownPolicy())
 	// Client may send "opencode-go/deepseek-v4-flash"; the tail must match.

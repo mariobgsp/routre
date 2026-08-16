@@ -102,6 +102,11 @@ make dist-npm       # cross-compiles all 6 platforms → npm/dist/*.tgz
 routre-cli setup        # interactive: listen addr, providers, URLs, keys, prices
 routre-cli check        # validate config + which API keys are set
 routre-cli serve        # gateway on 127.0.0.1:20128
+routre-cli start        # start the daemon (systemd/launchd, or detached process)
+routre-cli start --autostart  # start + enable auto-start at boot/login
+routre-cli stop         # stop the daemon
+routre-cli stop --autostart   # stop + disable auto-start
+routre-cli restart      # restart the daemon (keeps auto-start state)
 ```
 
 `setup` writes two files next to `config.json`:
@@ -290,6 +295,13 @@ command measures reduction on 5 realistic tool-heavy payloads and gates
   (launchd for macOS). `MemoryMax=200M` hard guard.
 - **SIGHUP reloads config + env** without dropping connections (SIGINT/
   SIGTERM = graceful shutdown, usage saved first).
+- `routre-cli start [--autostart]`, `routre-cli stop [--autostart]` and
+  `routre-cli restart` manage the daemon through systemd (system or
+  `--user` scope) or launchd; without an installed service they fall back
+  to a detached background process logging to `~/.routre-cli/daemon.log`
+  and wait for the configured port to come up.
+- `--autostart` on `start` runs `systemctl enable` / `launchctl load -w`;
+  on `stop` it runs `systemctl disable` / `launchctl unload -w`.
 
 ---
 
@@ -324,9 +336,11 @@ command measures reduction on 5 realistic tool-heavy payloads and gates
 ## Layout
 
 ```text
-main.go                  CLI (setup/serve/check/list/bench/version)
+main.go                  CLI (setup/serve/check/start/stop/restart/list/bench/version)
 bench.go                 RTK benchmark + 90% gate
 setup.go                 interactive setup wizard
+start.go                 daemon start/restart (systemd/launchd/detached spawn)
+stop.go                  daemon stop (systemd/launchd/port scan + SIGTERM)
 list.go                  providers + per-agent token/cost ledger
 internal/config/         JSON config + routre-cli.env + SIGHUP reload
 internal/router/         tiers, failover, cooldowns (exponential backoff)
