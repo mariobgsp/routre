@@ -16,8 +16,10 @@ function platformPkg() {
     "linux-arm64": "routre-cli-linux-arm64",
     "darwin-x64": "routre-cli-darwin-x64",
     "darwin-arm64": "routre-cli-darwin-arm64",
-    "win32-x64": "routre-cli-win32-x64",
-    "win32-arm64": "routre-cli-win32-arm64",
+    // Windows packages are scoped (npm spam detection blocks the
+    // unscoped names).
+    "win32-x64": "@mariobgsp/routre-cli-win32-x64",
+    "win32-arm64": "@mariobgsp/routre-cli-win32-arm64",
   };
   return map[`${process.platform}-${process.arch}`];
 }
@@ -27,9 +29,13 @@ function binaryPath() {
   if (pkg) {
     try {
       // Optional deps install into the package's own node_modules.
-      return require.resolve(
-        `${pkg}/binary/routre-cli${process.platform === "win32" ? ".exe" : ""}`,
-      );
+      // For scoped packages the subpath must be escaped:
+      //   @scope/name/binary/... → @scope%2fname/binary/...
+      const sub = pkg.startsWith("@")
+        ? `${pkg.split("/")[0]}%2f${pkg.split("/")[1]}/binary`
+        : `${pkg}/binary`;
+      const ext = process.platform === "win32" ? ".exe" : "";
+      return require.resolve(`${sub}/routre-cli${ext}`);
     } catch {
       /* fall through to dev binary */
     }
