@@ -13,8 +13,10 @@ name: publish
 #        - Repository: routre-cli
 #        - Workflow file name: publish.yml
 #      The 7 packages: routre-cli, routre-cli-linux-x64, routre-cli-linux-arm64,
-#      routre-cli-darwin-x64, routre-cli-darwin-arm64, routre-cli-win32-x64,
-#      routre-cli-win32-arm64
+#      routre-cli-darwin-x64, routre-cli-darwin-arm64, and the scoped
+#      @mariobgsp/routre-cli-win32-x64 + @mariobgsp/routre-cli-win32-arm64
+#      (npm spam detection rejects the unscoped win32 names, so the Windows
+#      packages ship under the @mariobgsp scope).
 #   3. Push a tag:  git tag v0.1.0 && git push origin v0.1.0
 #      → this workflow runs and publishes everything.
 
@@ -53,8 +55,11 @@ jobs:
         working-directory: npm/dist
         run: |
           for pkg in routre-cli-linux-x64 routre-cli-linux-arm64 \
-                     routre-cli-darwin-x64 routre-cli-darwin-arm64 \
-                     routre-cli-win32-x64 routre-cli-win32-arm64; do
+                     routre-cli-darwin-x64 routre-cli-darwin-arm64; do
+            npm publish "$pkg"-*.tgz --access public
+          done
+          for pkg in mariobgsp-routre-cli-win32-x64 \
+                     mariobgsp-routre-cli-win32-arm64; do
             npm publish "$pkg"-*.tgz --access public
           done
 

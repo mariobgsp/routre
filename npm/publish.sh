@@ -26,15 +26,22 @@ npm whoami >/dev/null || {
 }
 
 cd npm/dist
+# Unscoped platform packages (Unix), then the scoped Windows packages
+# (npm's spam detection rejects unscoped win32 names, so those ship under
+# the @mariobgsp scope), then the launcher last.
 for pkg in \
   routre-cli-linux-x64 routre-cli-linux-arm64 \
-  routre-cli-darwin-x64 routre-cli-darwin-arm64 \
-  routre-cli-win32-x64 routre-cli-win32-arm64; do
+  routre-cli-darwin-x64 routre-cli-darwin-arm64; do
   echo "==> publishing $pkg"
   npm publish "$pkg"-0.1.0.tgz --access public
 done
+for pkg in \
+  mariobgsp-routre-cli-win32-x64 mariobgsp-routre-cli-win32-arm64; do
+  echo "==> publishing @$pkg"
+  npm publish "$pkg"-0.1.0.tgz --access public
+done
 echo "==> publishing routre-cli"
-npm publish routre-cli-0.1.0.tgz --access public
+npm publish routre-cli-0.1.1.tgz --access public
 
 echo
 echo "published. verify with: npm view routre-cli"

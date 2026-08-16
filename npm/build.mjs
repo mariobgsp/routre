@@ -53,14 +53,16 @@ const targets = [
     ext: "",
   },
   {
-    pkg: "routre-cli-win32-x64",
+    // Scoped: npm's spam detection rejects unscoped `routre-cli-win32-*`
+    // names, so the Windows packages ship under the @mariobgsp scope.
+    pkg: "@mariobgsp/routre-cli-win32-x64",
     os: "win32",
     goos: "windows",
     arch: "amd64",
     ext: ".exe",
   },
   {
-    pkg: "routre-cli-win32-arm64",
+    pkg: "@mariobgsp/routre-cli-win32-arm64",
     os: "win32",
     goos: "windows",
     arch: "arm64",

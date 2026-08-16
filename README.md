@@ -60,26 +60,28 @@ make build test bench        # bench gates 90% (fails on regression)
 
 ## Install
 
-### npm (macOS / Windows / Linux) — planned
-
-> **⚠️ Not yet published to the npm registry.**
->
-> The npm distribution is built and verified (`npm/dist/*.tgz`, all 7
-> packages, bench gate PASS), and the GitHub Actions trusted-publishing
-> workflow (`.github/workflows/publish.yml`) is ready — but the packages
-> have not been released yet. `npm install -g routre-cli` will fail with
-> E404 until the maintainer completes the one-time npm account setup
-> (account + package creation + trusted publisher) and pushes a `v*` tag.
+### npm (macOS / Windows / Linux)
 
 ```bash
 npm install -g routre-cli
 routre-cli version
 ```
 
-The package ships one static Go binary per platform
-(`routre-cli-linux-x64`, `routre-cli-darwin-arm64`, `routre-cli-win32-x64`,
-…) via optional dependencies, plus a tiny Node launcher. No Go toolchain,
-no runtime dependencies.
+The package ships one static Go binary per platform via optional
+`routre-cli`-scoped dependencies, plus a tiny Node launcher. No Go
+toolchain, no runtime dependencies.
+
+Platform packages (all published to the public registry):
+
+| Platform | Package |
+| --- | --- |
+| linux x64 / arm64 | `routre-cli-linux-x64` / `routre-cli-linux-arm64` |
+| darwin x64 / arm64 | `routre-cli-darwin-x64` / `routre-cli-darwin-arm64` |
+| win32 x64 / arm64 | `@mariobgsp/routre-cli-win32-x64` / `@mariobgsp/routre-cli-win32-arm64` |
+
+> The Windows packages are scoped (`@mariobgsp/...`): npm's spam detection
+> rejects the unscoped `routre-cli-win32-*` names. On non-Windows hosts the
+> launcher resolves the matching Unix package instead.
 
 ### From source (developers)
 
@@ -93,6 +95,26 @@ make build          # needs Go ≥ 1.22
 ```bash
 make dist-npm       # cross-compiles all 6 platforms → npm/dist/*.tgz
 ```
+
+### Publish to npm
+
+Releases are published by CI on a `v*` tag push (see
+`.github/workflows/publish.yml`, npm Trusted Publishing / OIDC — no token,
+no 2FA on CI):
+
+```bash
+git tag v0.1.0 && git push origin v0.1.0
+```
+
+Manual publishing (maintainer with an npm token, 2FA enabled):
+
+```bash
+NPM_TOKEN=<token with bypass-2FA> bash ./npm/publish.sh
+```
+
+Publish order matters: platform packages first (Unix, then the scoped
+Windows packages), launcher last — the launcher's `optionalDependencies`
+reference the platform packages.
 
 ---
 
