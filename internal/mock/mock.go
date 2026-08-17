@@ -224,6 +224,7 @@ func (m *Server) handle(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
+	_ = write("data: " + fmt.Sprintf(`{"id":"mock-%s","object":"chat.completion.chunk","choices":[{"index":0,"delta":{},"finish_reason":"stop"}],"usage":{"prompt_tokens":12,"completion_tokens":8,"total_tokens":20}}`, m.Name) + "\n\n")
 	_ = write("data: [DONE]\n\n")
 }
 
