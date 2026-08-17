@@ -315,16 +315,13 @@ func (h *Handlers) tryCandidate(ctx context.Context, w http.ResponseWriter, r *h
 	}
 	defer cancel()
 
-	if (api == fmtOpenAI && kind == "anthropic") || (api == fmtAnthropic && kind == "openai") {
-		if streaming {
-			writeJSON(w, http.StatusNotImplemented, map[string]any{
-				"error": map[string]any{
-					"message": "cross-kind streaming translation is not implemented; request a non-streaming call or point the client at a same-kind provider",
-					"type":    "not_implemented",
-				},
-			})
-			return true
-		}
+	crossKind := (api == fmtOpenAI && kind == "anthropic") || (api == fmtAnthropic && kind == "openai")
+	if crossKind {
+		// Cross-kind requests are translated request-side (payload) and,
+		// when streaming, response-side by translateStream inside streamRelay
+		// (the old 501 is replaced by in-flight SSE translation). Both the
+		// request body and the response event stream are rewritten into the
+		// provider's / client's dialect respectively.
 		translated, terr := translateBody(api, kindOf(kind), processed)
 		if terr != nil {
 			h.Router.ReportFailure(p, router.ErrServer)
@@ -334,7 +331,7 @@ func (h *Handlers) tryCandidate(ctx context.Context, w http.ResponseWriter, r *h
 		payload = translated
 	}
 
-	status, respBody, ct, rerr := h.relay(attemptCtx, w, p.Provider.BaseURL, r, payload, streaming, kind, p.Provider.APIKeyEnv)
+	status, respBody, ct, rerr := h.relay(attemptCtx, w, p.Provider.BaseURL, r, payload, streaming, kind, p.Provider.APIKeyEnv, api)
 
 	if rerr != nil {
 		// Network/transport failure: retryable (unless mid-stream).
@@ -467,10 +464,11 @@ func writeStatus(w http.ResponseWriter, status int, body []byte, ct string) {
 // For non-streaming it returns (status, body, contentType, err).
 // For streaming it streams SSE to w and returns (0, nil, "", err) where err
 // is nil on success, retryable on pre-first-byte failure, or
-// router.StreamAborted() after the first byte.
-func (h *Handlers) relay(ctx context.Context, w http.ResponseWriter, baseURL string, r *http.Request, payload []byte, streaming bool, kind, apiKeyEnv string) (int, []byte, string, error) {
+// router.StreamAborted() after the first byte. from is the client's dialect,
+// used for cross-kind streaming translation.
+func (h *Handlers) relay(ctx context.Context, w http.ResponseWriter, baseURL string, r *http.Request, payload []byte, streaming bool, kind, apiKeyEnv string, from apiFormat) (int, []byte, string, error) {
 	if streaming {
-		return h.relayStream(ctx, w, baseURL, r, payload, kind, apiKeyEnv)
+		return h.relayStream(ctx, w, baseURL, r, payload, kind, apiKeyEnv, from)
 	}
 	path := "/v1/chat/completions"
 	if kind == "anthropic" {
@@ -536,7 +534,7 @@ func (h *Handlers) relay(ctx context.Context, w http.ResponseWriter, baseURL str
 // classify, report the failure, and fail over. Errors before the first
 // byte are retryable; errors after the first byte are
 // router.StreamAborted().
-func (h *Handlers) relayStream(ctx context.Context, w http.ResponseWriter, baseURL string, r *http.Request, payload []byte, kind, apiKeyEnv string) (int, []byte, string, error) {
+func (h *Handlers) relayStream(ctx context.Context, w http.ResponseWriter, baseURL string, r *http.Request, payload []byte, kind, apiKeyEnv string, from apiFormat) (int, []byte, string, error) {
 	path := "/v1/chat/completions"
 	if kind == "anthropic" {
 		path = "/v1/messages"
@@ -595,16 +593,17 @@ func (h *Handlers) relayStream(ctx context.Context, w http.ResponseWriter, baseU
 		return resp.StatusCode, body, resp.Header.Get("Content-Type"), nil
 	}
 
-	if err := h.streamRelay(w, resp); err != nil {
+	if err := h.streamRelay(w, resp, from, kindOf(kind)); err != nil {
 		return 0, nil, "", err
 	}
 	return http.StatusOK, nil, "", nil
 }
 
-// streamRelay copies an SSE stream to the client. flushAfter counts bytes
+// streamRelay copies an SSE stream to the client, translating it when the
+// client and upstream speak different dialects. flushAfter counts bytes
 // written so far; on first-byte success the error is wrapped as a stream
 // abort (failover must not retry).
-func (h *Handlers) streamRelay(w http.ResponseWriter, resp *http.Response) error {
+func (h *Handlers) streamRelay(w http.ResponseWriter, resp *http.Response, from, to apiFormat) error {
 	// Copy headers from upstream.
 	for k, vv := range resp.Header {
 		for _, v := range vv {
@@ -615,6 +614,23 @@ func (h *Handlers) streamRelay(w http.ResponseWriter, resp *http.Response) error
 	w.WriteHeader(resp.StatusCode)
 
 	flusher, _ := w.(http.Flusher)
+
+	// Cross-kind: run the SSE state-machine translator before writing to the
+	// client. It never buffers the whole response and never emits a byte until
+	// the first parseable frame, preserving the failover-before-first-byte rule.
+	if from != to {
+		err := translateStream(w, resp.Body, from, to, func() {
+			if flusher != nil {
+				flusher.Flush()
+			}
+		})
+		if err != nil {
+			// Failed before any byte reached the client: retryable.
+			return err
+		}
+		return nil
+	}
+
 	buf := make([]byte, 32*1024)
 	written := int64(0)
 	firstByte := true

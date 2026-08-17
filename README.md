@@ -387,8 +387,9 @@ npm/                     npm distribution (7 packages: 4 Unix + 2 scoped win32 +
 
 ## Known gaps (full detail in SPEC.md)
 
-- Cross-kind **streaming** translation returns 501; non-streaming cross-kind
-  translation is lossy (tools dropped, `tool_call_id` links lost).
+- Cross-kind **streaming** translation (OpenAI↔Anthropic) is implemented —
+  text and tool-call frames are translated in-flight with the tool-call id
+  preserved; non-streaming cross-kind stays lossy for cheap-tier fallback.
 - Token estimates are an approximation (≈4 bytes/token) — a benchmark
   instrument, not billing-grade (tiktoken integration is planned).
 - 90% is measured on tool-result tokens; output tokens are never
