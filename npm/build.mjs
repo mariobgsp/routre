@@ -21,7 +21,7 @@ import { fileURLToPath } from "node:url";
 const root = join(dirname(fileURLToPath(import.meta.url)), "..");
 const npmDir = join(root, "npm");
 const distDir = join(npmDir, "dist");
-const version = "0.1.4";
+const version = "0.1.5";
 
 const targets = [
   {
