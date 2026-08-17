@@ -71,11 +71,8 @@ func (st *streamTranslator) translate(evt sseEvent) (string, error) {
 // chunks to the client in real time (streaming must not buffer until EOF). It
 // returns nil on success or a retryable pre-first-byte failure.
 func translateStream(w io.Writer, upstream io.Reader, from, to apiFormat, flush func()) error {
-	// Same-kind should never reach here; guard anyway.
-	if from == to {
-		_, err := io.Copy(w, upstream)
-		return err
-	}
+	// Precondition: from != to. streamRelay routes same-kind to the byte-copy
+	// loop; cross-kind (only) reaches translateStream.
 	st := newStreamTranslator(from, to)
 	br := bufio.NewReader(upstream)
 	for {
@@ -120,8 +117,6 @@ type sseEvent struct {
 	event string
 	data  []string // raw data lines (without the "data:" prefix)
 }
-
-func (e *sseEvent) isEmpty() bool { return e.event == "" && len(e.data) == 0 }
 
 // read parses one SSE frame (terminated by a blank line or EOF) from br.
 // ok=false means the frame was empty (e.g. an initial blank line) and should
@@ -405,8 +400,6 @@ type o2aState struct {
 	done         bool
 	emittedStop  bool
 }
-
-func newO2AState() *o2aState { return &o2aState{openBlockIdx: -1, curToolIdx: -1} }
 
 func (s *o2aState) translate(evt sseEvent) (string, error) {
 	data := evt.dataJSON()
