@@ -27,6 +27,7 @@ on:
 
 permissions:
   id-token: write # required for npm trusted publishing (OIDC)
+  packages: write  # required to publish to GitHub Packages
 
 jobs:
   publish:
@@ -63,6 +64,24 @@ jobs:
             npm publish "$pkg"-*.tgz --access public
           done
 
-      - name: Publish launcher
+      - name: Publish to GitHub Packages (scoped packages only)
+        # GitHub Packages' npm registry only accepts SCOPED names owned by
+        # the token's account (see actions/setup-node#243). Only the two
+        # @mariobgsp/* win32 packages qualify; the 5 unscoped platform
+        # packages stay npmjs-only. Registry auth is the ambient
+        # GITHUB_TOKEN (secrets.GITHUB_TOKEN) with packages: write.
+        working-directory: npm/dist
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          mkdir -p "$HOME/.npmrc"
+          npm config set //npm.pkg.github.com/:_authToken "${NODE_AUTH_TOKEN}"
+          npm config set @mariobgsp:registry=https://npm.pkg.github.com
+          for pkg in mariobgsp-routre-cli-win32-x64 \
+                     mariobgsp-routre-cli-win32-arm64; do
+            npm publish "$pkg"-*.tgz
+          done
+
+      - name: Publish launcher (npmjs)
         working-directory: npm/dist
         run: npm publish routre-cli-*.tgz --access public
