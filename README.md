@@ -34,6 +34,7 @@ Point any agent at `http://127.0.0.1:20128` via `OPENAI_BASE_URL` /
 - [Configuration](#configuration)
 - [Commands](#commands)
 - [Benchmarks](#benchmarks)
+- [Changelog](#changelog) *(separate file: [`CHANGELOG.md`](CHANGELOG.md))*
 - [Project layout](#project-layout)
 - [Known gaps](#known-gaps)
 - [License](#license)
@@ -150,6 +151,16 @@ curl http://127.0.0.1:20128/v1/models          # 501 models
 # use any model as <provider>/<model>, e.g.:
 #   opencode-zen/claude-fable-5  opencode-go/hy3  openrouter/deepseek/deepseek-chat
 ```
+
+> **Provider-qualified model names.** The `<provider>/` prefix is a
+> client-side routing label only — it tells the gateway which configured
+> provider to route to — and is **stripped before the request is sent
+> upstream**. The upstream always receives the bare listed model name:
+> `opencode-go/gpt-5.6-luna` → `gpt-5.6-luna` upstream,
+> `openrouter/openai/gpt-5.6-luna` → `openai/gpt-5.6-luna` (multi-slash IDs
+> are kept intact — only the first segment is removed). This matches how
+> opencode itself resolves `provider/model` (it splits the reference at the
+> first `/`).
 
 Tier order: `opencode-go` → `opencode-zen` (subscription), `openrouter`
 (fallback). If a model is missing or a provider 5xx/401s, the gateway
@@ -424,6 +435,11 @@ npm/                     npm distribution (7 packages: 4 Unix + 2 scoped win32 +
   compressed, so real-session savings depend on the tool-traffic mix
   (this is exactly what `routre-cli list` shows you).
 - 401/403 token refresh is not implemented (cooldown + failover applies).
+
+## Changelog
+
+See [`CHANGELOG.md`](CHANGELOG.md) for the release history (all versions,
+including unreleased changes).
 
 ---
 
