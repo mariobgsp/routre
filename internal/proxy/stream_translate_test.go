@@ -289,3 +289,48 @@ func TestO2AFinishContentFilter(t *testing.T) {
 		t.Fatalf("content_filter not mapped to end_turn:\n%s", got)
 	}
 }
+
+// --- o2a edge cases ---
+
+// Text arriving AFTER a tool-call block: Anthropic content blocks never mix
+// kinds, so the translator must close the tool_use block (content_block_stop)
+// and open a fresh text block, then emit the text as text_delta.
+func TestO2ATextAfterToolBlock(t *testing.T) {
+	upstream := strings.Join([]string{
+		"data: " + `{"id":"c","object":"chat.completion.chunk","model":"m","choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"id":"call_1","type":"function","function":{"name":"bash","arguments":"{}"}}]},"finish_reason":null}]}` + "\n\n",
+		"data: " + `{"id":"c","object":"chat.completion.chunk","model":"m","choices":[{"index":0,"delta":{"content":"done"},"finish_reason":"tool_calls"}]}` + "\n\n",
+		"data: [DONE]\n\n",
+	}, "")
+	got := translateForTest(t, upstream, fmtAnthropic, fmtOpenAI)
+
+	// Tool block is opened...
+	if !strings.Contains(got, `"type":"tool_use"`) {
+		t.Fatalf("tool_use block not opened:\n%s", got)
+	}
+	// ...then closed before text starts.
+	if !strings.Contains(got, `"type":"content_block_stop"`) {
+		t.Fatalf("tool block not closed before text:\n%s", got)
+	}
+	// A fresh text block is opened and receives the text.
+	if !strings.Contains(got, `"type":"text"`) {
+		t.Fatalf("no text block opened after tool block:\n%s", got)
+	}
+	if !strings.Contains(got, `"text_delta"`) || !strings.Contains(got, `"text":"done"`) {
+		t.Fatalf("text after tool block not delivered as text_delta:\n%s", got)
+	}
+}
+
+// A tool-call fragment with an empty id must fall back to a stable
+// toolu_stream_<index> id rather than emitting an empty tool_use id.
+func TestO2AEmptyToolIDFallback(t *testing.T) {
+	upstream := strings.Join([]string{
+		"data: " + `{"id":"c","object":"chat.completion.chunk","model":"m","choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"type":"function","function":{"name":"bash","arguments":"{}"}}]},"finish_reason":null}]}` + "\n\n",
+		"data: " + `{"id":"c","object":"chat.completion.chunk","model":"m","choices":[{"index":0,"delta":{},"finish_reason":"tool_calls"}]}` + "\n\n",
+		"data: [DONE]\n\n",
+	}, "")
+	got := translateForTest(t, upstream, fmtAnthropic, fmtOpenAI)
+
+	if !strings.Contains(got, `"id":"toolu_stream_0"`) {
+		t.Fatalf("empty tool id not replaced with toolu_stream_0:\n%s", got)
+	}
+}
