@@ -35,7 +35,7 @@ import (
 	"routre-cli/internal/usage"
 )
 
-const version = "0.1.3"
+const version = "0.1.4"
 
 func main() {
 	logger := log.New(os.Stderr, "[routre-cli] ", log.LstdFlags)
