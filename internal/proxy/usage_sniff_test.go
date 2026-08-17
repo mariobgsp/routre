@@ -63,3 +63,17 @@ func TestUsageSnifferSplitReads(t *testing.T) {
 		t.Fatalf("expected prompt=123 completion=456, got %+v", u)
 	}
 }
+
+// A provider may close the connection right after the final usage line
+// WITHOUT a trailing blank line (no "\n\n"), leaving the partial data in the
+// sniffer's carry buffer at EOF. drainCarry must still scan it.
+func TestUsageSnifferDrainCarryNoNewline(t *testing.T) {
+	s := newUsageSniffer(strings.NewReader(
+		`data: {"choices":[{"delta":{"content":"hi"}}]}` + "\n\n" +
+			`data: {"choices":[{"delta":{}}],"usage":{"prompt_tokens":15,"completion_tokens":9}}`))
+	// No trailing \n\n after the final usage frame.
+	u := readAllSniff(t, s)
+	if u.prompt != 15 || u.completion != 9 {
+		t.Fatalf("expected last carry line scanned (prompt=15 completion=9), got %+v", u)
+	}
+}
