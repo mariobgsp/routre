@@ -329,6 +329,15 @@ func (h *Handlers) tryCandidate(ctx context.Context, w http.ResponseWriter, r *h
 			return false
 		}
 		payload = translated
+		// The translation re-emits the client's original model string; the
+		// candidate's upstream model must win there too (provider-prefixed
+		// or free-variant names are neither valid upstream IDs nor the
+		// listed name).
+		if cand.Upstream != requested {
+			if rewritten, rerr := rewriteModel(payload, cand.Upstream); rerr == nil {
+				payload = rewritten
+			}
+		}
 	}
 
 	status, respBody, ct, susage, rerr := h.relay(attemptCtx, w, p.Provider.BaseURL, r, payload, streaming, kind, p.Provider.APIKeyEnv, api)
