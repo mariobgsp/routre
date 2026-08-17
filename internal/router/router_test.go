@@ -238,6 +238,43 @@ func TestCandidatesQualifiedModel(t *testing.T) {
 	if len(cands) == 0 || cands[0].Provider.Provider.Name != "opencode-go" {
 		t.Fatalf("qualified model must match opencode-go: %+v", cands)
 	}
+	// The upstream must receive the bare listed name, not the prefixed
+	// client string (opencode.ai rejects "opencode-go/gpt-5.6-luna").
+	if got := cands[0].Upstream; got != "deepseek-v4-flash" {
+		t.Fatalf("qualified model must be unwrapped upstream, got %q", got)
+	}
+	// OpenRouter-style lists carry the org prefix as the actual listed
+	// name; a prefixed request must resolve to the listed entry verbatim,
+	// and multi-slash IDs must never be tail-split.
+	or := New([]TierInput{{Name: "t", Providers: []ProviderInput{
+		{Name: "openrouter", Kind: "openai", BaseURL: "https://or", APIKeyEnv: "K",
+			Models: []string{"openai/gpt-5.6-luna", "openai/gpt-oss-20b:free", "deepseek/deepseek-chat"}},
+	}}}, DefaultCooldownPolicy())
+	cands = or.Candidates("openai/gpt-5.6-luna")
+	if len(cands) == 0 || cands[0].Upstream != "openai/gpt-5.6-luna" {
+		t.Fatalf("OpenRouter listed name must pass through: %+v", cands)
+	}
+	// openrouter/openai/gpt-5.6-luna: strip only the routing label, keep
+	// the rest of the ID intact.
+	cands = or.Candidates("openrouter/openai/gpt-5.6-luna")
+	if len(cands) == 0 || cands[0].Upstream != "openai/gpt-5.6-luna" {
+		t.Fatalf("multi-slash ID must strip only first segment: %+v", cands)
+	}
+	// Multi-slash with free suffix must stay intact after the label; when
+	// the client already asked for the free variant, that name IS upstream.
+	cands = or.Candidates("openrouter/openai/gpt-oss-20b:free")
+	if len(cands) == 0 || cands[0].Upstream != "openai/gpt-oss-20b:free" {
+		t.Fatalf("free variant must be preferred and intact: %+v", cands)
+	}
+	// Unknown first segment that no provider lists: no candidate (upstream
+	// is authoritative only when the full string is itself a listed name).
+	if cands := or.Candidates("someother/openai/gpt-5.6-luna"); len(cands) != 0 {
+		t.Fatalf("untracked prefix must produce no candidates: %+v", cands)
+	}
+	cands = or.Candidates("gpt-oss-20b")
+	if len(cands) == 0 || cands[0].Upstream != "openai/gpt-oss-20b:free" {
+		t.Fatalf("free variant must be preferred: %+v", cands)
+	}
 }
 
 func TestCreditsFailureDoesNotCooldown(t *testing.T) {

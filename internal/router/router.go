@@ -215,6 +215,42 @@ type Candidate struct {
 	IsFree   bool
 }
 
+// stripProviderPrefix removes the leading "provider/" label from a client
+// model reference when (and only when) the first segment exactly equals the
+// provider's configured name. Otherwise it returns "" and the model is
+// passed through unchanged. The prefix is a client-side routing construct
+// (opencode splits at the FIRST "/" and rejoins the remainder), so the
+// upstream must always receive the bare listed name — including models whose
+// IDs legitimately contain further slashes (openrouter/openai/gpt-5.6-luna
+// -> openai/gpt-5.6-luna). Never tail-after-last-slash: that turns valid
+// multi-segment IDs like openai/gpt-5.6-luna into garbage.
+func stripProviderPrefix(provider, model string) string {
+	if provider == "" || model == provider+"/" {
+		return ""
+	}
+	prefix := provider + "/"
+	if strings.HasPrefix(model, prefix) {
+		return strings.TrimPrefix(model, prefix)
+	}
+	return ""
+}
+
+// listedName returns the model name from a provider's list that should be
+// sent upstream. A client may qualify the model with a provider prefix
+// ("opencode-go/gpt-5.6-luna"); the upstream must receive the bare listed
+// name ("gpt-5.6-luna"), not the prefixed client string. Exact match on the
+// full name wins; otherwise the provider-prefixed form is unwrapped; the
+// requested name is returned unchanged as the last resort.
+func listedName(models []string, provider, model string) string {
+	tail := stripProviderPrefix(provider, model)
+	for _, m := range models {
+		if m == model || (tail != "" && m == tail) {
+			return m
+		}
+	}
+	return model
+}
+
 // freeVariantOf returns the free variant name of a model for a provider's
 // model list, or "" when none exists. OpenCode-style: "m" -> "m-free";
 // OpenRouter-style: "org/m" -> "org/m:free". Matching is tolerant of
@@ -246,20 +282,21 @@ func freeVariantOf(models []string, model string) string {
 }
 
 // providerServes reports whether the provider's model list includes model
-// (exact match, or provider-qualified client model "provider/model").
-func providerServes(models []string, model string) bool {
+// (exact match, or provider-qualified client model "provider/model" where
+// the first segment matches this provider's name).
+func providerServes(models []string, provider, model string) bool {
 	for _, m := range models {
 		if m == model {
 			return true
 		}
 	}
-	// Client may send "provider/model"; match the tail against the list.
-	if i := strings.LastIndex(model, "/"); i >= 0 {
-		tail := model[i+1:]
-		for _, m := range models {
-			if m == tail {
-				return true
-			}
+	tail := stripProviderPrefix(provider, model)
+	if tail == "" {
+		return false
+	}
+	for _, m := range models {
+		if m == tail {
+			return true
 		}
 	}
 	return false
@@ -282,13 +319,13 @@ func (r *Router) Candidates(model string) []Candidate {
 		if now.Before(p.until) {
 			continue
 		}
-		if providerServes(p.Provider.Models, model) {
+		if providerServes(p.Provider.Models, p.Provider.Name, model) {
 			// Prefer the free variant when the provider has one.
 			if fv := freeVariantOf(p.Provider.Models, model); fv != "" {
 				out = append(out, Candidate{Provider: p, Upstream: fv, IsFree: true})
 				continue
 			}
-			out = append(out, Candidate{Provider: p, Upstream: model, IsFree: false})
+			out = append(out, Candidate{Provider: p, Upstream: listedName(p.Provider.Models, p.Provider.Name, model), IsFree: false})
 			continue
 		}
 		// Provider does not list the model but has a free variant of it.
@@ -442,7 +479,7 @@ func (r *Router) ServesModel(model string) bool {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 	for _, p := range r.provs {
-		if providerServes(p.Provider.Models, model) {
+		if providerServes(p.Provider.Models, p.Provider.Name, model) {
 			return true
 		}
 		if freeVariantOf(p.Provider.Models, model) != "" {
@@ -463,7 +500,7 @@ func (r *Router) MinCooldownForModel(model string) (time.Duration, bool) {
 	best := time.Duration(0)
 	found := false
 	for _, p := range r.provs {
-		if !providerServes(p.Provider.Models, model) && freeVariantOf(p.Provider.Models, model) == "" {
+		if !providerServes(p.Provider.Models, p.Provider.Name, model) && freeVariantOf(p.Provider.Models, model) == "" {
 			continue
 		}
 		found = true
