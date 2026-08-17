@@ -334,3 +334,65 @@ func TestO2AEmptyToolIDFallback(t *testing.T) {
 		t.Fatalf("empty tool id not replaced with toolu_stream_0:\n%s", got)
 	}
 }
+
+// e2e: cross-kind (anthropic upstream -> openai client) pre-first-byte
+// upstream failure must fail over to candidate B, which serves the translated
+// stream. A reset connection before any byte is a retryable failure -> B.
+func TestStreamCrossKindFailoverPreFirstByte(t *testing.T) {
+	a, _ := mock.New("a")
+	defer a.Close()
+	b, _ := mock.New("b")
+	defer b.Close()
+	a.SetStream(true)
+	a.SetAnthropic(true)
+	b.SetStream(true)
+	b.SetAnthropic(true)
+	base, _ := testEnv(t, buildAnthropicConfigWithMocks(t, map[string]*mock.Server{"a": a, "b": b}))
+
+	a.SetResetConn(true) // candidate A dies at socket level before any byte.
+
+	resp, data := post(t, base, "/v1/chat/completions", chatBody(true, ""))
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, want 200:\n%s", resp.StatusCode, data)
+	}
+	// B served: the stream must have the full translated content (not a
+	// truncated or empty response).
+	if !strings.Contains(string(data), `"object":"chat.completion.chunk"`) {
+		t.Fatalf("no translated stream from B after failover:\n%s", data)
+	}
+	if !strings.Contains(string(data), "data: [DONE]") {
+		t.Fatalf("no [DONE] from B:\n%s", data)
+	}
+}
+
+// e2e: cross-kind mid-stream abort (A streams a few frames then drops the
+// connection) must NOT fail over: the client has already received bytes, so
+// retrying on B would duplicate content. B must see zero requests.
+func TestStreamCrossKindNoFailoverMidStreamAbort(t *testing.T) {
+	a, _ := mock.New("a")
+	defer a.Close()
+	b, _ := mock.New("b")
+	defer b.Close()
+	a.SetStream(true)
+	a.SetAnthropic(true)
+	b.SetStream(true)
+	b.SetAnthropic(true)
+	base, _ := testEnv(t, buildAnthropicConfigWithMocks(t, map[string]*mock.Server{"a": a, "b": b}))
+
+	a.SetAbortMid(true) // emit a few frames then hijack+close the conn.
+
+	resp, data := post(t, base, "/v1/chat/completions", chatBody(true, ""))
+	// The client got whatever was emitted before the abort; a mid-stream
+	// truncation still returns 200 (headers already written).
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, want 200 (mid-stream abort after headers):\n%s", resp.StatusCode, data)
+	}
+	// The client must have received at least the first translated frame.
+	if !strings.Contains(string(data), `"object":"chat.completion.chunk"`) {
+		t.Fatalf("expected partial translated stream from A, got:\n%s", data)
+	}
+	// No failover: B must never have been contacted.
+	if b.Requests() != 0 {
+		t.Fatalf("failover occurred after mid-stream abort; B saw %d requests", b.Requests())
+	}
+}

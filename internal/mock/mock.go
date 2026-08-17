@@ -213,6 +213,13 @@ func (m *Server) handle(w http.ResponseWriter, r *http.Request) {
 			if !write(ev) {
 				return
 			}
+			if abort && ev == msgs[2] { // abort mid-stream after a few frames
+				if hj, ok := w.(http.Hijacker); ok {
+					conn, _, _ := hj.Hijack()
+					_ = conn.Close()
+					return
+				}
+			}
 		}
 		return
 	}
