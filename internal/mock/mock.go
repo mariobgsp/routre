@@ -28,6 +28,7 @@ type Server struct {
 	ResetConn  bool          // close connection without a response
 	AbortMid   bool          // start SSE then abort
 	Stream     bool          // force SSE responses
+	Anthropic  bool          // emit Anthropic-style (event: ...) SSE frames
 	Count      atomic.Int64  // requests seen
 	LastBody   atomic.Value  // []byte of last request body
 	LastHeader atomic.Value  // http.Header of last request
@@ -96,6 +97,14 @@ func (m *Server) SetAbortMid(on bool) {
 	m.AbortMid = on
 }
 
+// SetAnthropic makes the mock emit Anthropic /v1/messages style SSE frames
+// (event: <type> + data: {...}) instead of OpenAI chat.completion.chunk.
+func (m *Server) SetAnthropic(on bool) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.Anthropic = on
+}
+
 // Requests returns the request count.
 func (m *Server) Requests() int64 { return m.Count.Load() }
 
@@ -130,6 +139,7 @@ func (m *Server) handle(w http.ResponseWriter, r *http.Request) {
 	reset := m.ResetConn
 	abort := m.AbortMid
 	stream := m.Stream
+	anthropic := m.Anthropic
 	delay := m.Delay
 	m.mu.Unlock()
 
@@ -185,6 +195,34 @@ func (m *Server) handle(w http.ResponseWriter, r *http.Request) {
 		}
 		return true
 	}
+	if anthropic {
+		// Emit an Anthropic /v1/messages SSE stream with a tool_use block
+		// and a text block, exercising the full state machine.
+		msgs := []string{
+			"event: message_start\ndata: " + fmt.Sprintf(`{"type":"message_start","message":{"id":"msg_mock_%s","type":"message","role":"assistant","model":"mock-model","content":[],"usage":{"input_tokens":10,"output_tokens":0}}}`, m.Name) + "\n\n",
+			"event: content_block_start\ndata: " + fmt.Sprintf(`{"type":"content_block_start","index":0,"content_block":{"type":"text","text":"from-%s"}}`, m.Name) + "\n\n",
+			"event: content_block_delta\ndata: " + fmt.Sprintf(`{"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"hello-%s"}}`, m.Name) + "\n\n",
+			"event: content_block_delta\ndata: " + `{"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"world"}}` + "\n\n",
+			"event: content_block_start\ndata: " + `{"type":"content_block_start","index":1,"content_block":{"type":"tool_use","id":"toolu_mock_1","name":"bash","input":{}}}` + "\n\n",
+			"event: content_block_delta\ndata: " + `{"type":"content_block_delta","index":1,"delta":{"type":"input_json_delta","partial_json":"{\"command\":\"ls\"}"}}` + "\n\n",
+			"event: content_block_stop\ndata: " + `{"type":"content_block_stop","index":1}` + "\n\n",
+			"event: message_delta\ndata: " + `{"type":"message_delta","delta":{"stop_reason":"tool_use","stop_sequence":null},"usage":{"output_tokens":7}}` + "\n\n",
+			"event: message_stop\ndata: " + `{"type":"message_stop"}` + "\n\n",
+		}
+		for _, ev := range msgs {
+			if !write(ev) {
+				return
+			}
+			if abort && ev == msgs[2] { // abort mid-stream after a few frames
+				if hj, ok := w.(http.Hijacker); ok {
+					conn, _, _ := hj.Hijack()
+					_ = conn.Close()
+					return
+				}
+			}
+		}
+		return
+	}
 	_ = write("data: " + fmt.Sprintf(`{"id":"mock-%s","object":"chat.completion.chunk","choices":[{"index":0,"delta":{"role":"assistant","content":"from-%s"},"finish_reason":null}]}`, m.Name, m.Name) + "\n\n")
 	if abort {
 		if hj, ok := w.(http.Hijacker); ok {
@@ -193,6 +231,7 @@ func (m *Server) handle(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
+	_ = write("data: " + fmt.Sprintf(`{"id":"mock-%s","object":"chat.completion.chunk","choices":[{"index":0,"delta":{},"finish_reason":"stop"}],"usage":{"prompt_tokens":12,"completion_tokens":8,"total_tokens":20}}`, m.Name) + "\n\n")
 	_ = write("data: [DONE]\n\n")
 }
 

@@ -157,13 +157,21 @@ responses are never cached.
    path (opencode → routre-cli → mock) validates the full pipeline:
    streaming, auth passthrough, RTK, cache, failover.
 
-1. **Cross-kind streaming translation is not implemented** — returns 501.
-   Same-kind streaming works; cross-kind requires the 9router-class
-   translator matrix (OpenAI↔Anthropic↔Gemini) as a follow-up.
+1. **Cross-kind streaming translation is implemented for OpenAI↔Anthropic**
+   (replaces the old 501): in-flight SSE state machine translates both text
+   frames and tool-call frames, preserving the tool-call id so `tool_use_id`
+   ↔ `tool_call_id` round-trips. Frames are never buffered whole (small per-
+   stream state); partial JSON args (`input_json_delta` /
+   `tool_calls[].arguments`) are passed through verbatim. Failover-before-
+   first-byte is preserved: a translate/read failure before any byte reaches
+   the client is retryable; after it, the stream can't fail over (matches
+   same-kind StreamingAborted). Covered by golden SSE-fixture tests in
+   `stream_translate_test.go`. Gemini remains a follow-up (5 more pairs).
 2. **Non-streaming cross-kind translation is lossy**: tool definitions are
    dropped; `tool_use` blocks flatten to text; `tool_result` loses the
    `tool_call_id` link; images become placeholders. Documented in
-   `translate.go`. Fine for cheap-tier fallback, not for tool loops.
+   `translate.go`. Fine for cheap-tier fallback, not for tool loops —
+   streaming is preferred for cross-kind tool loops.
 3. **Token estimates, not billing tokens** (see §2.1). 90.7% is on the
    defined metric; a real-session measurement (P1: Claude Code/Codex
    through the gateway, before/after) is the next evidence step.

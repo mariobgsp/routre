@@ -315,16 +315,13 @@ func (h *Handlers) tryCandidate(ctx context.Context, w http.ResponseWriter, r *h
 	}
 	defer cancel()
 
-	if (api == fmtOpenAI && kind == "anthropic") || (api == fmtAnthropic && kind == "openai") {
-		if streaming {
-			writeJSON(w, http.StatusNotImplemented, map[string]any{
-				"error": map[string]any{
-					"message": "cross-kind streaming translation is not implemented; request a non-streaming call or point the client at a same-kind provider",
-					"type":    "not_implemented",
-				},
-			})
-			return true
-		}
+	crossKind := (api == fmtOpenAI && kind == "anthropic") || (api == fmtAnthropic && kind == "openai")
+	if crossKind {
+		// Cross-kind requests are translated request-side (payload) and,
+		// when streaming, response-side by translateStream inside streamRelay
+		// (the old 501 is replaced by in-flight SSE translation). Both the
+		// request body and the response event stream are rewritten into the
+		// provider's / client's dialect respectively.
 		translated, terr := translateBody(api, kindOf(kind), processed)
 		if terr != nil {
 			h.Router.ReportFailure(p, router.ErrServer)
@@ -334,7 +331,7 @@ func (h *Handlers) tryCandidate(ctx context.Context, w http.ResponseWriter, r *h
 		payload = translated
 	}
 
-	status, respBody, ct, rerr := h.relay(attemptCtx, w, p.Provider.BaseURL, r, payload, streaming, kind, p.Provider.APIKeyEnv)
+	status, respBody, ct, susage, rerr := h.relay(attemptCtx, w, p.Provider.BaseURL, r, payload, streaming, kind, p.Provider.APIKeyEnv, api)
 
 	if rerr != nil {
 		// Network/transport failure: retryable (unless mid-stream).
@@ -359,15 +356,19 @@ func (h *Handlers) tryCandidate(ctx context.Context, w http.ResponseWriter, r *h
 	}
 
 	if streaming && status >= 200 && status < 300 {
-		// relay already streamed the response to the client. Report the
-		// prompt side (streamed completion tokens are collected from the
-		// SSE stream by streamRelay, which fills h.lastStreamUsage).
+		// relay already streamed the response to the client. Token usage is
+		// captured from the SSE stream by the usage sniffer in streamRelay
+		// (same-kind and cross-kind), never buffering the response.
 		// A non-2xx was returned by relayStream as (status, body, ...)
 		// with nothing streamed yet, so it falls through to the shared
 		// error handling below (classify, report failure, fail over).
 		h.Router.ReportSuccess(p)
-		prompt := tokenize.Estimate(string(processed))
-		h.Usage.Record(client, modelFromBody(body), int64(prompt), 0, int64(rtkSaved), 0, pricesOf(h.Cfg.Get(), p.Provider.Name), 0)
+		prompt := susage.prompt
+		completion := susage.completion
+		if prompt == 0 {
+			prompt = int64(tokenize.Estimate(string(processed)))
+		}
+		h.Usage.Record(client, modelFromBody(body), prompt, completion, int64(rtkSaved), 0, pricesOf(h.Cfg.Get(), p.Provider.Name), 0)
 		h.Metrics.Request(client, p.Provider.Name, requested, "ok")
 		logReq(reqlog.Entry{Client: client, Model: requested, UpstreamModel: cand.Upstream, Provider: p.Provider.Name, Stream: true, Status: http.StatusOK, Class: "ok", PromptTokens: int64(prompt), RTKSavedTokens: int64(rtkSaved)})
 		return true
@@ -467,10 +468,11 @@ func writeStatus(w http.ResponseWriter, status int, body []byte, ct string) {
 // For non-streaming it returns (status, body, contentType, err).
 // For streaming it streams SSE to w and returns (0, nil, "", err) where err
 // is nil on success, retryable on pre-first-byte failure, or
-// router.StreamAborted() after the first byte.
-func (h *Handlers) relay(ctx context.Context, w http.ResponseWriter, baseURL string, r *http.Request, payload []byte, streaming bool, kind, apiKeyEnv string) (int, []byte, string, error) {
+// router.StreamAborted() after the first byte. from is the client's dialect,
+// used for cross-kind streaming translation.
+func (h *Handlers) relay(ctx context.Context, w http.ResponseWriter, baseURL string, r *http.Request, payload []byte, streaming bool, kind, apiKeyEnv string, from apiFormat) (int, []byte, string, streamUsage, error) {
 	if streaming {
-		return h.relayStream(ctx, w, baseURL, r, payload, kind, apiKeyEnv)
+		return h.relayStream(ctx, w, baseURL, r, payload, kind, apiKeyEnv, from)
 	}
 	path := "/v1/chat/completions"
 	if kind == "anthropic" {
@@ -483,14 +485,14 @@ func (h *Handlers) relay(ctx context.Context, w http.ResponseWriter, baseURL str
 	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, base+path, bytes.NewReader(payload))
 	if err != nil {
-		return 0, nil, "", err
+		return 0, nil, "", streamUsage{}, err
 	}
 	// Provider API key: the gateway holds the key (from api_key_env), NOT
 	// the client. A client-sent Authorization header is only a placeholder
 	// (many CLIs require one); it must never reach the upstream.
 	providerKey, missing := upstreamKey(apiKeyEnv)
 	if missing {
-		return 0, nil, "", fmt.Errorf("provider key %s is not set (use `routre-cli setup` or export it)", apiKeyEnv)
+		return 0, nil, "", streamUsage{}, fmt.Errorf("provider key %s is not set (use `routre-cli setup` or export it)", apiKeyEnv)
 	}
 	if kind == "anthropic" {
 		req.Header.Set("X-Api-Key", providerKey)
@@ -510,7 +512,7 @@ func (h *Handlers) relay(ctx context.Context, w http.ResponseWriter, baseURL str
 
 	resp, err := h.HTTPClient.Do(req)
 	if err != nil {
-		return 0, nil, "", err
+		return 0, nil, "", streamUsage{}, err
 	}
 	defer resp.Body.Close()
 
@@ -523,9 +525,9 @@ func (h *Handlers) relay(ctx context.Context, w http.ResponseWriter, baseURL str
 	}
 	body, err := readBody(resp.Body, limit)
 	if err != nil {
-		return 0, nil, "", fmt.Errorf("read upstream response: %w", err)
+		return 0, nil, "", streamUsage{}, fmt.Errorf("read upstream response: %w", err)
 	}
-	return resp.StatusCode, body, resp.Header.Get("Content-Type"), nil
+	return resp.StatusCode, body, resp.Header.Get("Content-Type"), streamUsage{}, nil
 }
 
 // relayStream streams an SSE response to the client, copying upstream
@@ -536,7 +538,7 @@ func (h *Handlers) relay(ctx context.Context, w http.ResponseWriter, baseURL str
 // classify, report the failure, and fail over. Errors before the first
 // byte are retryable; errors after the first byte are
 // router.StreamAborted().
-func (h *Handlers) relayStream(ctx context.Context, w http.ResponseWriter, baseURL string, r *http.Request, payload []byte, kind, apiKeyEnv string) (int, []byte, string, error) {
+func (h *Handlers) relayStream(ctx context.Context, w http.ResponseWriter, baseURL string, r *http.Request, payload []byte, kind, apiKeyEnv string, from apiFormat) (int, []byte, string, streamUsage, error) {
 	path := "/v1/chat/completions"
 	if kind == "anthropic" {
 		path = "/v1/messages"
@@ -547,7 +549,7 @@ func (h *Handlers) relayStream(ctx context.Context, w http.ResponseWriter, baseU
 	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, base+path, bytes.NewReader(payload))
 	if err != nil {
-		return 0, nil, "", err
+		return 0, nil, "", streamUsage{}, err
 	}
 	req.Header.Set("Content-Type", "application/json")
 	// Upstreams that sniff Accept for SSE negotiation should see an
@@ -560,7 +562,7 @@ func (h *Handlers) relayStream(ctx context.Context, w http.ResponseWriter, baseU
 	// Same key policy as relay: the gateway's key wins, never the client's.
 	providerKey, missing := upstreamKey(apiKeyEnv)
 	if missing {
-		return 0, nil, "", fmt.Errorf("provider key %s is not set (use `routre-cli setup` or export it)", apiKeyEnv)
+		return 0, nil, "", streamUsage{}, fmt.Errorf("provider key %s is not set (use `routre-cli setup` or export it)", apiKeyEnv)
 	}
 	if kind == "anthropic" {
 		req.Header.Set("X-Api-Key", providerKey)
@@ -578,7 +580,7 @@ func (h *Handlers) relayStream(ctx context.Context, w http.ResponseWriter, baseU
 
 	resp, err := h.HTTPClient.Do(req)
 	if err != nil {
-		return 0, nil, "", err
+		return 0, nil, "", streamUsage{}, err
 	}
 	defer resp.Body.Close()
 
@@ -590,21 +592,24 @@ func (h *Handlers) relayStream(ctx context.Context, w http.ResponseWriter, baseU
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		body, rerr := readBody(resp.Body, maxUpstreamError)
 		if rerr != nil {
-			return 0, nil, "", rerr
+			return 0, nil, "", streamUsage{}, rerr
 		}
-		return resp.StatusCode, body, resp.Header.Get("Content-Type"), nil
+		return resp.StatusCode, body, resp.Header.Get("Content-Type"), streamUsage{}, nil
 	}
 
-	if err := h.streamRelay(w, resp); err != nil {
-		return 0, nil, "", err
+	susage, serr := h.streamRelay(w, resp, from, kindOf(kind))
+	if serr != nil {
+		return 0, nil, "", streamUsage{}, serr
 	}
-	return http.StatusOK, nil, "", nil
+	return http.StatusOK, nil, "", susage, nil
 }
 
-// streamRelay copies an SSE stream to the client. flushAfter counts bytes
-// written so far; on first-byte success the error is wrapped as a stream
-// abort (failover must not retry).
-func (h *Handlers) streamRelay(w http.ResponseWriter, resp *http.Response) error {
+// streamRelay copies an SSE stream to the client, translating it when the
+// client and upstream speak different dialects, and returns the token usage
+// captured from the stream. flushAfter counts bytes written so far; on
+// first-byte success the error is wrapped as a stream abort (failover must
+// not retry).
+func (h *Handlers) streamRelay(w http.ResponseWriter, resp *http.Response, from, to apiFormat) (streamUsage, error) {
 	// Copy headers from upstream.
 	for k, vv := range resp.Header {
 		for _, v := range vv {
@@ -615,15 +620,34 @@ func (h *Handlers) streamRelay(w http.ResponseWriter, resp *http.Response) error
 	w.WriteHeader(resp.StatusCode)
 
 	flusher, _ := w.(http.Flusher)
+
+	// Cross-kind: run the SSE state-machine translator before writing to the
+	// client. It never buffers the whole response and never emits a byte until
+	// the first parseable frame, preserving the failover-before-first-byte rule.
+	sniffer := newUsageSniffer(resp.Body)
+	if from != to {
+		err := translateStream(w, sniffer, from, to, func() {
+			if flusher != nil {
+				flusher.Flush()
+			}
+		})
+		sniffer.drainCarry()
+		if err != nil {
+			// Failed before any byte reached the client: retryable.
+			return streamUsage{}, err
+		}
+		return sniffer.usage(), nil
+	}
+
 	buf := make([]byte, 32*1024)
 	written := int64(0)
 	firstByte := true
 	for {
-		n, rerr := resp.Body.Read(buf)
+		n, rerr := sniffer.Read(buf)
 		if n > 0 {
 			if _, werr := w.Write(buf[:n]); werr != nil {
 				// Client went away mid-stream: not an upstream failure.
-				return nil
+				return streamUsage{}, nil
 			}
 			written += int64(n)
 			if firstByte {
@@ -636,13 +660,14 @@ func (h *Handlers) streamRelay(w http.ResponseWriter, resp *http.Response) error
 		}
 		if rerr != nil {
 			if rerr == io.EOF {
-				return nil
+				sniffer.drainCarry()
+				return sniffer.usage(), nil
 			}
 			if firstByte {
 				// Failed before any byte reached the client: retryable.
-				return fmt.Errorf("upstream stream failed before first byte: %w", rerr)
+				return streamUsage{}, fmt.Errorf("upstream stream failed before first byte: %w", rerr)
 			}
-			return router.StreamAborted()
+			return streamUsage{}, router.StreamAborted()
 		}
 	}
 }
