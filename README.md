@@ -28,6 +28,7 @@ Point any agent at `http://127.0.0.1:20128` via `OPENAI_BASE_URL` /
   - [Automatic failover](#automatic-failover)
   - [RTK token compression](#rtk-token-compression--90-on-tool-heavy-traffic)
   - [Response cache](#response-cache)
+  - [Cross-kind streaming translation (OpenAI ↔ Anthropic)](#cross-kind-streaming-translation-openai--anthropic)
   - [Token & cost ledger](#token--cost-ledger)
   - [Always-on daemon](#always-on-daemon)
 - [Configuration](#configuration)
@@ -41,8 +42,8 @@ Point any agent at `http://127.0.0.1:20128` via `OPENAI_BASE_URL` /
 
 ## Why this exists
 
-Built as a decision-driven spike from two research passes
-([`research.md`](../research.md) and [`context.md`](../context.md)):
+Built as a decision-driven spike (see [`SPEC.md`](SPEC.md) for the full
+decision record and roadmap):
 
 - **Not 9router** — right feature set, but Node/Next.js with ~80 MB idle RAM
   and a documented unbounded leak (~4.8 GB in 3 days), plus unbenchmarked
@@ -225,6 +226,34 @@ command measures reduction on 5 realistic tool-heavy payloads and gates
   so the ledger matches the provider's billing numbers instead of
   length-based estimates.
 
+### Cross-kind streaming translation (OpenAI ↔ Anthropic)
+
+An agent pinned to the **OpenAI dialect** can stream from an Anthropic
+provider and vice versa: when the client and upstream speak different
+API dialects, the gateway rewrites the event stream in flight.
+
+- **In-flight SSE state machine** — never buffers the whole response.
+  Frames are translated as they arrive and flushed immediately (no
+  tail-latency cost), keeping memory flat for long streams.
+- **Tool-call fidelity**: `tool_use_id` ↔ `tool_call_id` round-trips
+  **unchanged** (no gateway-generated ids), so agent tool loops work
+  across dialects. Partial JSON tool arguments
+  (`input_json_delta` / `tool_calls[].arguments`) pass through verbatim;
+  the client accumulates them.
+- **Honest termination**: Anthropic `message_delta`/`error` → OpenAI
+  `finish_reason` (`max_tokens→length`, `end_turn→stop`, `error→content_filter`)
+  and the reverse; every stream ends with `[DONE]`.
+- **Failover contract preserved**: strictly retryable before the first
+  byte reaches the client; after the first byte the stream can't fail over
+  (no duplicated output) — same rule as same-kind streaming.
+- Usage tokens are captured from the stream for both dialects, so the
+  ledger records real completion counts instead of zeros.
+
+Non-streaming cross-kind requests fall back to lossy translation
+(flat tool output, no `tool_call_id` link) for cheap-tier fallback —
+fine for one-shot prompts, but streaming is the preferred path for
+cross-kind tool loops.
+
 ### Token & cost ledger
 
 Per coding agent (by User-Agent): requests, tokens in/out, RTK savings,
@@ -387,9 +416,8 @@ npm/                     npm distribution (7 packages: 4 Unix + 2 scoped win32 +
 
 ## Known gaps (full detail in SPEC.md)
 
-- Cross-kind **streaming** translation (OpenAI↔Anthropic) is implemented —
-  text and tool-call frames are translated in-flight with the tool-call id
-  preserved; non-streaming cross-kind stays lossy for cheap-tier fallback.
+- Gemini is not yet a streaming dialect (cross-kind works OpenAI↔Anthropic;
+  a third dialect would add 5 more pairs).
 - Token estimates are an approximation (≈4 bytes/token) — a benchmark
   instrument, not billing-grade (tiktoken integration is planned).
 - 90% is measured on tool-result tokens; output tokens are never
