@@ -222,3 +222,70 @@ func TestStreamCrossKindE2EAnthropicClient(t *testing.T) {
 		t.Fatalf("no message_stop:\n%s", s)
 	}
 }
+
+// --- finish_reason / stop_reason mapping (beyond the tool_use case above) ---
+
+func a2oStream(stopReason string) string {
+	return strings.Join([]string{
+		"event: message_start\ndata: " + `{"type":"message_start","message":{"id":"msg_f","type":"message","role":"assistant","model":"m","content":[],"usage":{"input_tokens":1,"output_tokens":0}}}` + "\n\n",
+		"event: message_delta\ndata: " + `{"type":"message_delta","delta":{"stop_reason":"` + stopReason + `","stop_sequence":null},"usage":{"output_tokens":3}}` + "\n\n",
+		"event: message_stop\ndata: " + `{"type":"message_stop"}` + "\n\n",
+	}, "")
+}
+
+// Anthropic max_tokens stop_reason must map to OpenAI finish_reason "length".
+func TestA2OFinishMaxTokens(t *testing.T) {
+	got := translateForTest(t, a2oStream("max_tokens"), fmtOpenAI, fmtAnthropic)
+	if !strings.Contains(got, `"finish_reason":"length"`) {
+		t.Fatalf("max_tokens not mapped to length:\n%s", got)
+	}
+}
+
+// Anthropic end_turn stop_reason must map to OpenAI finish_reason "stop".
+func TestA2OFinishEndTurn(t *testing.T) {
+	got := translateForTest(t, a2oStream("end_turn"), fmtOpenAI, fmtAnthropic)
+	if !strings.Contains(got, `"finish_reason":"stop"`) {
+		t.Fatalf("end_turn not mapped to stop:\n%s", got)
+	}
+}
+
+// Anthropic error event must surface as OpenAI finish_reason "content_filter"
+// and terminate with [DONE], never fail over (single frame -> translated).
+func TestA2OErrorEvent(t *testing.T) {
+	upstream := strings.Join([]string{
+		"event: message_start\ndata: " + `{"type":"message_start","message":{"id":"msg_e","type":"message","role":"assistant","model":"m","content":[],"usage":{"input_tokens":1,"output_tokens":0}}}` + "\n\n",
+		"event: error\ndata: " + `{"type":"error","error":{"type":"overloaded_error","message":"boom"}}` + "\n\n",
+	}, "")
+	got := translateForTest(t, upstream, fmtOpenAI, fmtAnthropic)
+	if !strings.Contains(got, `"finish_reason":"content_filter"`) {
+		t.Fatalf("error event not mapped to content_filter:\n%s", got)
+	}
+	if !strings.HasSuffix(got, "data: [DONE]\n\n") {
+		t.Fatalf("error event did not terminate with [DONE]:\n%s", got)
+	}
+}
+
+func o2aStream(finishReason string) string {
+	return strings.Join([]string{
+		"data: " + `{"id":"chatcmpl-f","object":"chat.completion.chunk","model":"m","choices":[{"index":0,"delta":{"role":"assistant","content":"hi"},"finish_reason":null}]}` + "\n\n",
+		"data: " + `{"id":"chatcmpl-f","object":"chat.completion.chunk","model":"m","choices":[{"index":0,"delta":{},"finish_reason":"` + finishReason + `"}]}` + "\n\n",
+		"data: [DONE]\n\n",
+	}, "")
+}
+
+// OpenAI finish_reason "length" must map to Anthropic stop_reason "max_tokens".
+func TestO2AFinishLength(t *testing.T) {
+	got := translateForTest(t, o2aStream("length"), fmtAnthropic, fmtOpenAI)
+	if !strings.Contains(got, `"stop_reason":"max_tokens"`) {
+		t.Fatalf("length not mapped to max_tokens:\n%s", got)
+	}
+}
+
+// OpenAI finish_reason "content_filter" must map to Anthropic stop_reason
+// "end_turn" (Anthropic has no content_filter equivalent).
+func TestO2AFinishContentFilter(t *testing.T) {
+	got := translateForTest(t, o2aStream("content_filter"), fmtAnthropic, fmtOpenAI)
+	if !strings.Contains(got, `"stop_reason":"end_turn"`) {
+		t.Fatalf("content_filter not mapped to end_turn:\n%s", got)
+	}
+}
