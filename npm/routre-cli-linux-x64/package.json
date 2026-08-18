@@ -1,6 +1,6 @@
 {
   "name": "routre-cli-linux-x64",
-  "version": "0.1.6",
+  "version": "0.1.7",
   "description": "routre-cli binary for linux-amd64",
   "license": "MIT",
   "os": [

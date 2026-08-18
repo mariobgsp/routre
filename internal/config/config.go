@@ -122,9 +122,9 @@ func (c *Config) Validate() error {
 			if p.APIKeyEnv == "" {
 				return fmt.Errorf("config: provider %q has no api_key_env", p.Name)
 			}
-			if len(p.Models) == 0 {
-				return fmt.Errorf("config: provider %q has no models", p.Name)
-			}
+			// Models may be empty: the gateway auto-discovers the provider's
+			// own /v1/models list at runtime (see router.DiscoverModels).
+			// Empty is valid but useless until discovery succeeds.
 			if p.PriceIn < 0 || p.PriceOut < 0 {
 				return fmt.Errorf("config: provider %q prices must be >= 0", p.Name)
 			}

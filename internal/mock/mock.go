@@ -33,6 +33,9 @@ type Server struct {
 	LastBody   atomic.Value  // []byte of last request body
 	LastHeader atomic.Value  // http.Header of last request
 	Delay      time.Duration // optional per-request delay
+	// models are the fielded /v1/models list served by this mock (default
+	// empty = the endpoint returns an empty list). Set via SetModels.
+	models []string
 }
 
 // New starts a mock upstream on 127.0.0.1:0. Call Close to stop it.
@@ -105,6 +108,13 @@ func (m *Server) SetAnthropic(on bool) {
 	m.Anthropic = on
 }
 
+// SetModels configures the model list served by the /v1/models endpoint.
+func (m *Server) SetModels(models []string) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.models = append([]string(nil), models...)
+}
+
 // Requests returns the request count.
 func (m *Server) Requests() int64 { return m.Count.Load() }
 
@@ -141,7 +151,19 @@ func (m *Server) handle(w http.ResponseWriter, r *http.Request) {
 	stream := m.Stream
 	anthropic := m.Anthropic
 	delay := m.Delay
+	models := append([]string(nil), m.models...)
 	m.mu.Unlock()
+
+	if r.URL.Path == "/v1/models" {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		data := make([]map[string]any, 0, len(models))
+		for _, id := range models {
+			data = append(data, map[string]any{"id": id, "object": "model"})
+		}
+		_ = json.NewEncoder(w).Encode(map[string]any{"object": "list", "data": data})
+		return
+	}
 
 	if delay > 0 {
 		time.Sleep(delay)

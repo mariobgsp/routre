@@ -21,7 +21,7 @@ import { fileURLToPath } from "node:url";
 const root = join(dirname(fileURLToPath(import.meta.url)), "..");
 const npmDir = join(root, "npm");
 const distDir = join(npmDir, "dist");
-const version = "0.1.6";
+const version = "0.1.7";
 
 const targets = [
   {
@@ -169,6 +169,9 @@ run("npm pack --pack-destination " + JSON.stringify(distDir), {
 
 console.log("\nDone. Tarballs in npm/dist/:");
 for (const f of ["routre-cli", ...targets.map((t) => t.pkg)].sort()) {
-  const p = join(distDir, `${f}-${version}.tgz`);
+  // Scoped packages (@mariobgsp/...) pack to a filename with the @ and /
+  // stripped (mariobgsp-routre-cli-win32-x64-...), so normalize before the check.
+  const file = f.replace(/^@/, "").replace(/\//, "-");
+  const p = join(distDir, `${file}-${version}.tgz`);
   console.log(`  ${existsSync(p) ? "✓" : "✗"} ${p}`);
 }
