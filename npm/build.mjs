@@ -124,6 +124,10 @@ for (const t of targets) {
         version,
         description: `routre-cli binary for ${t.os}-${t.arch}`,
         license: "MIT",
+        repository: {
+          type: "git",
+          url: "https://github.com/mariobgsp/routre-cli",
+        },
         os: [t.os],
         cpu: [t.arch === "amd64" ? "x64" : t.arch],
         files: ["binary"],
