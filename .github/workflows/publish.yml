@@ -40,6 +40,12 @@ jobs:
           node-version: 22 # >= 22.14 required for trusted publishing
           registry-url: https://registry.npmjs.org
 
+      # Node 22 bundles npm 10.x, which has NO automatic OIDC token exchange.
+      # npm CLI 11.5.1+ exchanges the GitHub OIDC token automatically (no
+      # NODE_AUTH_TOKEN), so upgrade npm before any publish step.
+      - name: Upgrade npm (OIDC token exchange)
+        run: npm install -g npm@11
+
       - uses: actions/setup-go@v5
         with:
           go-version: "1.26"
