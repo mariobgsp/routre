@@ -9,6 +9,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.1.6] — 2026-08-18
+
+### Fixed
+
+- **Streams could end without a `finish_reason` for some providers.**
+  Upstreams like opencode.ai's `gpt-5.6-luna` sometimes closed a streaming
+  response after content without ever sending a chunk carrying a real
+  `finish_reason`; strict OpenAI clients then aborted with
+  `Stream ended without finish_reason`. The same-kind OpenAI relay now
+  guarantees a terminal `finish_reason` chunk is emitted before
+  `[DONE]`/EOF, synthesizing one when the upstream omits it. Byte-for-byte
+  passthrough when the upstream behaves correctly; the Anthropic path is
+  unchanged.
+
 ## [0.1.5] — 2026-08-18
 
 ### Fixed
