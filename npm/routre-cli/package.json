@@ -1,6 +1,6 @@
 {
   "name": "routre-cli",
-  "version": "0.1.5",
+  "version": "0.1.6",
   "description": "Low-RAM LLM gateway for coding agents: auto provider failover, RTK token compression (-90%), cache, usage ledger. OpenAI/Anthropic-compatible localhost endpoint.",
   "license": "MIT",
   "engines": {
