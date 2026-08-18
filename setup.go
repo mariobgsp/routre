@@ -84,11 +84,7 @@ func cmdSetup(cfgPath string, logger *log.Logger) error {
 		}
 		p.BaseURL = ask("base URL (OpenAI-compatible endpoint)", defURL)
 		key := ask("API key (leave empty to use an existing env var)", "")
-		models := ask("models (comma-separated)", "")
-		if models == "" {
-			logger.Printf("skipped: at least one model required")
-			continue
-		}
+		models := ask("models (comma-separated; leave empty to auto-discover)", "")
 		priceIn := ask("input price $/1M tokens (0 = unknown)", "0")
 		priceOut := ask("output price $/1M tokens (0 = unknown)", "0")
 

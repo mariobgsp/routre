@@ -27,7 +27,7 @@ on:
 
 permissions:
   id-token: write # required for npm trusted publishing (OIDC)
-  packages: write  # required to publish to GitHub Packages
+  packages: write # required to publish to GitHub Packages
 
 jobs:
   publish:

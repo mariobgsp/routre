@@ -145,6 +145,31 @@ func cmdServe(cfgPath, port string, logger *log.Logger) error {
 	})
 	tk := rtk.New(rtk.Config{Enabled: cfg.RTK.Enabled, MinBytes: cfg.RTK.MinBytes, MaxBytes: cfg.RTK.MaxBytes})
 
+	// Model auto-discovery: fetch each provider's own /v1/models list at
+	// startup, then refresh periodically and on SIGHUP reload. Additive
+	// and best-effort — an unreachable provider is skipped with a
+	// warning, never a crash.
+	discover := func() {
+		rtr.DiscoverModels(nil, func(name string, err error) {
+			logger.Printf("model discovery failed for %q: %v", name, err)
+		})
+	}
+	discover()
+	discoverStop := make(chan struct{})
+	defer close(discoverStop)
+	go func() {
+		tk := time.NewTicker(router.DiscoveryRefreshInterval)
+		defer tk.Stop()
+		for {
+			select {
+			case <-tk.C:
+				discover()
+			case <-discoverStop:
+				return
+			}
+		}
+	}()
+
 	h := proxy.NewHandlers(st, rtr, cch, tk, logger, use)
 	// Request log path: the OnLoad callback only fires on reload, so set it
 	// explicitly for the initial config too.
@@ -176,6 +201,7 @@ func cmdServe(cfgPath, port string, logger *log.Logger) error {
 				if err := st.Reload(); err != nil {
 					logger.Printf("reload failed (keeping previous config): %v", err)
 				}
+				discover() // refresh model lists against the (possibly new) config
 				// Persist the ledger on reload too; config reloads often
 				// accompany daemon maintenance where a later crash would
 				// otherwise cost the unsaved window.

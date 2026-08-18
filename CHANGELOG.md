@@ -9,6 +9,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.1.7] — 2026-08-18
+
+### Added
+
+- **Model auto-discovery.** Each provider's own `GET {base_url}/models` list
+  is fetched at startup (and refreshed every 6h / on SIGHUP) and merged
+  additively into its candidate set, so the hand-maintained `models` list in
+  config is no longer required — leave it empty and the gateway discovers
+  the provider's models itself. Explicit `models` are kept as the seed and
+  never shadowed; unreachable providers fall back to their config (possibly
+  empty) with a warning, and startup never fails over discovery.
+- **`setup` wizard no longer forces a models list** — it now reads
+  "leave empty to auto-discover".
+
+### Changed
+
+- **Faster relay: merged the JSON pipeline.** On the same-kind relay path,
+  the model rewrite and `max_tokens` clamp now mutate a single already-
+  decoded document and marshal once, instead of two separate
+  decode→re-encode passes. When no rewrite/clamp applies, the body is
+  passed through with zero re-encoding (previous fast path preserved).
+  Byte-for-byte behavior, cache keys, and fail-open semantics unchanged.
+
 ## [0.1.6] — 2026-08-18
 
 ### Fixed

@@ -49,24 +49,26 @@ func rewriteModel(body []byte, model string) ([]byte, error) {
 	return out, nil
 }
 
-// clampMaxTokens caps the max_tokens field of a JSON request body so that
-// the total context (prompt + max_tokens) fits the provider's ceiling. The
-// ceiling is the provider's TOTAL context window; upstreams reject
-// requests where prompt tokens + max_tokens exceed it, so the clamp
+// clampMaxTokens caps the max_tokens field of an already-decoded doc in
+// place so that the total context (prompt + max_tokens) fits the provider's
+// ceiling. The ceiling is the provider's TOTAL context window; upstreams
+// reject requests where prompt tokens + max_tokens exceed it, so the clamp
 // subtracts an estimate of the prompt size plus a small safety margin.
-// Returns the original body when the ceiling is 0 (unset), the body has
-// no max_tokens, or it is already within bounds.
-func clampMaxTokens(body []byte, ceiling int64) ([]byte, error) {
+// No-op when the ceiling is 0 (unset), the doc has no max_tokens, or it is
+// already within bounds.
+//
+// ponytail: operates on the shared decoded doc (set by buildPayload) instead
+// of re-decoding+marshaling the body, which cut two full JSON passes off the
+// same-kind relay hot path. No numeric-fidelity or boundary change: the
+// prompt estimate falls back to a length-based token  estimate exactly as
+// the old byte-level clamp did.
+func clampMaxTokens(doc map[string]any, ceiling int64) {
 	if ceiling <= 0 {
-		return body, nil
-	}
-	var doc map[string]any
-	if err := json.Unmarshal(body, &doc); err != nil {
-		return body, nil
+		return
 	}
 	mt, ok := doc["max_tokens"]
 	if !ok {
-		return body, nil
+		return
 	}
 	var n int64
 	switch v := mt.(type) {
@@ -75,9 +77,9 @@ func clampMaxTokens(body []byte, ceiling int64) ([]byte, error) {
 	case json.Number:
 		n, _ = v.Int64()
 	default:
-		return body, nil
+		return
 	}
-	// Estimate the prompt side (messages/system/tools) from the body with
+	// Estimate the prompt side (messages/system/tools) from the doc with
 	// the max_tokens field excluded so the estimate is not inflated by it.
 	promptEst := int64(0)
 	if msgs, ok := doc["messages"]; ok {
@@ -93,14 +95,31 @@ func clampMaxTokens(body []byte, ceiling int64) ([]byte, error) {
 		maxAllowed = 1024
 	}
 	if n <= maxAllowed {
-		return body, nil
+		return
 	}
 	doc["max_tokens"] = maxAllowed
+}
+
+// buildPayload materializes the upstream request bytes for a same-kind
+// candidate from a single decoded doc, applying the model rewrite and the
+// max_tokens clamp as field mutations before ONE marshal. This collapses
+// the two per-mutation decode+marshal passes the relay used to run.
+// Fail-open: malformed input (or marshal failure) passes the processed body
+// through unchanged, matching the old per-step behavior.
+func buildPayload(processed []byte, requested, upstream string, ceiling int64) []byte {
+	var doc map[string]any
+	if err := json.Unmarshal(processed, &doc); err != nil {
+		return processed // malformed: pass through (fail-open)
+	}
+	if upstream != requested {
+		doc["model"] = upstream
+	}
+	clampMaxTokens(doc, ceiling)
 	out, err := json.Marshal(doc)
 	if err != nil {
-		return body, nil
+		return processed
 	}
-	return out, nil
+	return out
 }
 
 // apiFormat is the API dialect a request arrives in.
@@ -278,29 +297,15 @@ func (h *Handlers) route(w http.ResponseWriter, r *http.Request, api apiFormat) 
 func (h *Handlers) tryCandidate(ctx context.Context, w http.ResponseWriter, r *http.Request, api apiFormat, cand router.Candidate, requested string, body []byte, processed []byte, streaming bool, client string, rtkSaved int, lastErr *error, logReq func(reqlog.Entry)) bool {
 	p := cand.Provider
 
-	payload := processed
 	kind := p.Provider.Kind
-	// Model rewrite: send the candidate's upstream model when it differs
-	// from what the client asked for. This covers free-variant routing
-	// (deepseek-v4-flash -> deepseek-v4-flash-free) AND fallback-model
-	// routing (deepseek-v4-flash -> openai/gpt-oss-20b:free when the
-	// requested model's providers all failed).
-	if cand.Upstream != requested {
-		rewritten, rerr := rewriteModel(processed, cand.Upstream)
-		if rerr == nil {
-			payload = rewritten
-		}
-	}
-	// Max-tokens clamp: cap the request's max_tokens to this provider's
-	// ceiling when set. Without it a request sized for the preferred
-	// model (subagents routinely ask for deepseek-v4-flash's full 384k
-	// ceiling) is rejected by a fallback with a smaller context window
-	// (e.g. OpenRouter free models, 131072) instead of failing over.
-	if p.Provider.MaxTokens > 0 {
-		clamped, cerr := clampMaxTokens(payload, p.Provider.MaxTokens)
-		if cerr == nil {
-			payload = clamped
-		}
+	// Same-kind payload: when a mutation is needed (free-variant / fallback
+	// model rewrite, or a max_tokens ceiling) do one decode -> field
+	// mutations -> one marshal (the old path did a decode+marshal per
+	// mutation). When neither applies, pass the processed body through with
+	// zero re-encoding.
+	payload := processed
+	if cand.Upstream != requested || p.Provider.MaxTokens > 0 {
+		payload = buildPayload(processed, requested, cand.Upstream, p.Provider.MaxTokens)
 	}
 
 	// Per-attempt timeout: a stuck provider must not hang the request
