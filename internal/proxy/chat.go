@@ -1,6 +1,7 @@
 package proxy
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"encoding/json"
@@ -648,6 +649,25 @@ func (h *Handlers) streamRelay(w http.ResponseWriter, resp *http.Response, from,
 		return sniffer.usage(), nil
 	}
 
+	// Same-kind OpenAI: guarantee the client always receives a terminal
+	// chunk carrying finish_reason. Some providers (opencode.ai's
+	// gpt-5.6-luna) close the stream after content without ever sending
+	// finish_reason; strict clients then error with "Stream ended without
+	// finish_reason". We parse frames and synthesize the chunk when the
+	// upstream omits it. Anthropic clients have no finish_reason contract,
+	// so they keep the raw byte-copy path below.
+	if to == fmtOpenAI {
+		err := relayOpenAIGuaranteeFinish(w, sniffer, func() {
+			if flusher != nil {
+				flusher.Flush()
+			}
+		})
+		if err != nil {
+			return streamUsage{}, err
+		}
+		return sniffer.usage(), nil
+	}
+
 	buf := make([]byte, 32*1024)
 	written := int64(0)
 	firstByte := true
@@ -677,6 +697,76 @@ func (h *Handlers) streamRelay(w http.ResponseWriter, resp *http.Response, from,
 				return streamUsage{}, fmt.Errorf("upstream stream failed before first byte: %w", rerr)
 			}
 			return streamUsage{}, router.StreamAborted()
+		}
+	}
+}
+
+// syntheticFinishChunk is a minimal OpenAI streaming terminal chunk that
+// carries finish_reason ("stop"); injected when the upstream ended the stream
+// without sending one.
+var syntheticFinishChunk = []byte(`data: {"object":"chat.completion.chunk","choices":[{"index":0,"delta":{},"finish_reason":"stop"}]}` + "\n\n")
+
+// relayOpenAIGuaranteeFinish reads the upstream SSE stream and writes it to
+// the client frame-by-frame, guaranteeing that a chunk carrying finish_reason
+// is emitted before [DONE]/EOF. If the upstream already sent one, bytes pass
+// through unchanged. Otherwise a synthetic terminal chunk is injected.
+func relayOpenAIGuaranteeFinish(w io.Writer, upstream io.Reader, flush func()) error {
+	br := bufio.NewReader(upstream)
+	sawFinish := false
+	for {
+		raw, ok, err := readRawFrame(br)
+		if ok {
+			sawFinish = sawFinish || bytes.Contains(raw, []byte("\"finish_reason\":\""))
+			// Inject before the upstream's [DONE] if finish_reason was never sent.
+			if bytes.Contains(raw, []byte("[DONE]")) && !sawFinish {
+				if _, werr := io.WriteString(w, string(syntheticFinishChunk)); werr != nil {
+					return nil // client went away
+				}
+				sawFinish = true
+			}
+			if _, werr := w.Write(raw); werr != nil {
+				return nil // client went away
+			}
+			if flush != nil {
+				flush()
+			}
+		}
+		if err != nil {
+			if err == io.EOF {
+				// Upstream closed without [DONE]: still guarantee finish_reason.
+				if !sawFinish {
+					if _, werr := io.WriteString(w, string(syntheticFinishChunk)); werr == nil && flush != nil {
+						flush()
+					}
+				}
+				return nil
+			}
+			return nil // upstream read error after bytes were already relayed
+		}
+	}
+}
+
+// readRawFrame reads one raw SSE frame from br (all lines up to and including
+// the terminating blank line, or EOF). ok=false at a clean EOF with nothing
+// read.
+func readRawFrame(br *bufio.Reader) ([]byte, bool, error) {
+	var buf []byte
+	for {
+		line, err := br.ReadString('\n')
+		if line != "" {
+			buf = append(buf, line...)
+			if strings.TrimRight(line, "\r\n") == "" {
+				return buf, true, nil // blank line ends the frame
+			}
+		}
+		if err != nil {
+			if err == io.EOF {
+				if len(buf) > 0 {
+					return buf, true, nil
+				}
+				return nil, false, io.EOF
+			}
+			return buf, false, err
 		}
 	}
 }
