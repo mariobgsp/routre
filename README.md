@@ -190,6 +190,12 @@ opencode run --model <provider>/<model> "hello"
 - **Transient blips are retried first**: a network error or 5xx is retried
   once on the same provider (500 ms delay) before failover — an hour-long
   upstream 503 no longer burns every fallback in the same window.
+- **Auth rotation is recovered**: on a 401/403 the gateway re-reads the
+  `routre-cli.env` key file and, if the API key changed, retries the same
+  provider once with the fresh key before failing over.
+- **Upstream `Retry-After` is honored**: a 429/5xx carrying a `Retry-After`
+  header sets that provider's cooldown to at least the mandated delay
+  (it acts as a floor, never shortening the default backoff).
 - **Streaming requests fail over too**: an upstream 5xx/429 answered before
   the first stream byte is treated like a non-streaming failure; after the
   first byte, a stream abort stops the request (no duplicated output).
@@ -232,6 +238,11 @@ command measures reduction on 5 realistic tool-heavy payloads and gates
 - Non-streaming responses only; streamed responses are never cached.
 - Optional `prefix_order` moves system messages first for stable keys and
   stable upstream prompt-cache prefixes.
+- Optional `prompt_cache` (Anthropic outbound only) injects
+  `cache_control {type:"ephemeral"}` breakpoints on the system prefix and
+  last message, so repeat agentic prefixes are billed at the cache-read
+  rate. Off by default; strictly additive (an existing `cache_control` is
+  never overwritten).
 - Cache hits record their token savings in the ledger — credited with the
   **upstream-reported** prompt token count stored on the cached response,
   so the ledger matches the provider's billing numbers instead of
@@ -434,7 +445,9 @@ npm/                     npm distribution (7 packages: 4 Unix + 2 scoped win32 +
 - 90% is measured on tool-result tokens; output tokens are never
   compressed, so real-session savings depend on the tool-traffic mix
   (this is exactly what `routre-cli list` shows you).
-- 401/403 token refresh is not implemented (cooldown + failover applies).
+- 401/403 **token refresh** is implemented (re-reads the env key file and
+  retries once on rotation); cooldown + failover still apply when the key is
+  unchanged or still rejected.
 
 ## Changelog
 

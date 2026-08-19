@@ -7,7 +7,35 @@ Releases are published to npm via a `v*` tag push (see
 The format loosely follows [Keep a Changelog](https://keepachangelog.com/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
-## [Unreleased]
+## [0.1.8] — 2026-08-19
+
+### Added
+
+- **Anthropic prompt caching (`cache.prompt_cache`).** Opt-in injection of
+  `cache_control {type:"ephemeral"}` breakpoints (system prefix + last
+  message) into outbound `/v1/messages` bodies, so repeat agentic prefixes
+  are billed at the cache-read rate (0.1x on Anthropic hits). Threaded
+  through the whole relay (same-kind and cross-kind). Off by default
+  because it rewrites the request body; strictly additive — an existing
+  `cache_control` is never overwritten or stripped.
+- **401/403 refresh-with-retry.** On an upstream auth failure the gateway
+  re-reads the `routre-cli.env` key file; if the API key rotated, it retries
+  the same provider once with the fresh key before failing over. Serialized
+  so concurrent 401s from one rotation don't race the reload.
+- **`Retry-After` honoring.** The gateway now parses an upstream
+  `Retry-After` header (seconds or HTTP-date) from 429/5xx responses and
+  uses it as a *floor* on the provider's cooldown — it never shortens the
+  default exponential backoff. Previously only emitted to the client, never
+  acted on upstream.
+
+### Fixed
+
+- **Published binary version string lacked the final version segment.**
+  `npm/build.mjs` builds the binary with no version ldflag, so the embedded
+  version came from `main.go` (0.1.6) even when the npm package was 0.1.7 —
+  `routre-cli version` reported a stale version after install. All version
+  strings now live in one place each and are aligned on the tag. (This also
+  re-fixes the 0.1.4 regression.)
 
 ## [0.1.7] — 2026-08-18
 

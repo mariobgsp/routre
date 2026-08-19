@@ -1,8 +1,12 @@
 {
   "name": "@mariobgsp/routre-cli-win32-arm64",
-  "version": "0.1.7",
+  "version": "0.1.8",
   "description": "routre-cli binary for win32-arm64",
   "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/mariobgsp/routre-cli"
+  },
   "os": [
     "win32"
   ],

@@ -11,7 +11,8 @@
     "max_entries": 4096,
     "ttl_seconds": 86400,
     "prefix_order": true,
-    "max_bytes": 67108864
+    "max_bytes": 67108864,
+    "prompt_cache": false
   },
   "tiers": [
     {

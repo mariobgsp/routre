@@ -56,6 +56,13 @@ type CacheConfig struct {
 	TTLSeconds  int64 `json:"ttl_seconds"`
 	PrefixOrder bool  `json:"prefix_order"`
 	MaxBytes    int64 `json:"max_bytes"`
+	// PromptCache: when true, the gateway injects Anthropic cache_control
+	// breakpoints (system prefix + last message) into Anthropic-bound
+	// outbound requests so repeat agentic prefixes are billed at the cache
+	// read rate. Passthrough is byte-preserving: an already-present
+	// cache_control is never rewritten or stripped. Off by default because
+	// injection changes the request body.
+	PromptCache bool `json:"prompt_cache,omitempty"`
 }
 
 // Config is the root document.
