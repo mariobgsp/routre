@@ -111,7 +111,7 @@ installed service they fall back to a detached `serve` process
 | Upstream outcome | Class | Action |
 | --- | --- | --- |
 | network error / timeout | network/timeout | cooldown++, fail over |
-| 401 / 403 | auth | cooldown++, fail over (token refresh is P2) |
+| 401 / 403 | auth | refresh env key & retry same provider once, then fail over |
 | 429 | rate-limit | cooldown++, fail over |
 | 5xx | server | cooldown++, fail over |
 | 400 / 404 / 422 | client | surface to client, no failover |
@@ -204,9 +204,14 @@ responses are never cached.
   with RTK on/off); (c) tiktoken/claude-tokenizer integration for
   billing-grade numbers; (d) systemd socket-activation end-to-end check
   (~0 MB idle claim).
-- **P2**: 401/403 refresh-with-retry; per-request RTK bypass header;
-  periodic provider health pings (proactive failover); `Retry-After`
-  honoring; prompt-cache header passthrough verification (cache_control).
+- **P2**: per-request RTK bypass header;
+  periodic provider health pings (proactive failover);
+  prompt-cache header passthrough verification (cache_control).
+
+  *Done in the current working tree:* 401/403 refresh-with-retry;
+  `Retry-After` honoring (as a floor on cooldown); `cache.prompt_cache`
+  injection of Anthropic `cache_control {type:ephemeral}` breakpoints
+  (system + last message) with existing-breakpoint passthrough.
 - **P3 (optional)**: full dialect translator matrix (streaming-capable);
   TUI status (or keep `/v1/status` JSON); Rust port only if P99 targets
   force it.

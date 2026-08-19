@@ -9,10 +9,12 @@ import (
 	"io"
 	"net/http"
 	"os"
+	"strconv"
 	"strings"
 	"time"
 
 	"routre-cli/internal/cache"
+	"routre-cli/internal/config"
 	"routre-cli/internal/reqlog"
 	"routre-cli/internal/router"
 	"routre-cli/internal/tokenize"
@@ -346,7 +348,17 @@ func (h *Handlers) tryCandidate(ctx context.Context, w http.ResponseWriter, r *h
 		}
 	}
 
-	status, respBody, ct, susage, rerr := h.relay(attemptCtx, w, p.Provider.BaseURL, r, payload, streaming, kind, p.Provider.APIKeyEnv, api)
+	// Anthropic-bound prompt caching (opt-in): inject cache_control
+	// breakpoints into the final outbound /v1/messages body (works for
+	// both same-kind and cross-kind anthropic candidates) so repeat
+	// agentic prefixes are billed at the cache-read rate. Strictly
+	// additive; never rewrites an existing breakpoint. Applied after model
+	// rewrite so it sees the final outbound bytes.
+	if kind == "anthropic" && h.Cfg.Get().Cache.PromptCache {
+		payload = injectPromptCache(payload)
+	}
+
+	status, respBody, ct, retryAfter, susage, rerr := h.relay(attemptCtx, w, p.Provider.BaseURL, r, payload, streaming, kind, p.Provider.APIKeyEnv, api)
 
 	if rerr != nil {
 		// Network/transport failure: retryable (unless mid-stream).
@@ -364,7 +376,7 @@ func (h *Handlers) tryCandidate(ctx context.Context, w http.ResponseWriter, r *h
 			return true
 		}
 		h.Metrics.Failure(p.Provider.Name, class.String())
-		h.Router.ReportFailure(p, class)
+		h.Router.ReportFailureWithBackoff(p, class, retryAfter)
 		*lastErr = rerr
 		h.Logger.Printf("provider %s failed (%v): %v; failing over", p.Provider.Name, class, rerr)
 		return false
@@ -417,6 +429,24 @@ func (h *Handlers) tryCandidate(ctx context.Context, w http.ResponseWriter, r *h
 	// credits body) fail over WITHOUT cooldown escalation — the provider
 	// may still serve free variants.
 	class := router.ClassifyStatusBody(status, respBody)
+
+	// 401/403 auth failure: before failing over, attempt a credential
+	// refresh (the API key may have rotated in routre-cli.env). If the key
+	// is stale and a fresh one changes the picture, retry this candidate
+	// once with the refreshed key. Only when refresh is a no-op or still
+	// rejects does it fail over like any other retryable failure.
+	if class == router.ErrAuth {
+		if refreshed := h.refreshCredentials(p.Provider.APIKeyEnv); refreshed {
+			// The key changed underneath us: retry this candidate once with
+			// the new key. Reports both success and failure to the router on
+			// the retry path — a successful auth retry must clear any
+			// cooldown this provider accrued from past failures.
+			if h.tryCandidate(ctx, w, r, api, cand, requested, body, processed, streaming, client, rtkSaved, lastErr, logReq) {
+				return true
+			}
+		}
+	}
+
 	if !router.IsRetryableClass(class) {
 		// Client-caused (400/404/422...): surface it, no failover.
 		h.Metrics.Request(client, p.Provider.Name, requested, "client_error")
@@ -425,7 +455,7 @@ func (h *Handlers) tryCandidate(ctx context.Context, w http.ResponseWriter, r *h
 		return true
 	}
 	h.Metrics.Failure(p.Provider.Name, class.String())
-	h.Router.ReportFailure(p, class)
+	h.Router.ReportFailureWithBackoff(p, class, retryAfter)
 	*lastErr = fmt.Errorf("provider %s: status %d (%v)", p.Provider.Name, status, class)
 	h.Logger.Printf("provider %s status %d (%v); failing over", p.Provider.Name, status, class)
 	return false
@@ -480,12 +510,13 @@ func writeStatus(w http.ResponseWriter, status int, body []byte, ct string) {
 }
 
 // relay performs the actual upstream call.
-// For non-streaming it returns (status, body, contentType, err).
-// For streaming it streams SSE to w and returns (0, nil, "", err) where err
-// is nil on success, retryable on pre-first-byte failure, or
+// For non-streaming it returns (status, body, contentType, retryAfter, err).
+// For streaming it streams SSE to w and returns (0, nil, "", retryAfter, err)
+// where err is nil on success, retryable on pre-first-byte failure, or
 // router.StreamAborted() after the first byte. from is the client's dialect,
-// used for cross-kind streaming translation.
-func (h *Handlers) relay(ctx context.Context, w http.ResponseWriter, baseURL string, r *http.Request, payload []byte, streaming bool, kind, apiKeyEnv string, from apiFormat) (int, []byte, string, streamUsage, error) {
+// used for cross-kind streaming translation. retryAfter is the parsed
+// upstream Retry-After delay (0 when absent) on a non-2xx response.
+func (h *Handlers) relay(ctx context.Context, w http.ResponseWriter, baseURL string, r *http.Request, payload []byte, streaming bool, kind, apiKeyEnv string, from apiFormat) (int, []byte, string, time.Duration, streamUsage, error) {
 	if streaming {
 		return h.relayStream(ctx, w, baseURL, r, payload, kind, apiKeyEnv, from)
 	}
@@ -500,14 +531,14 @@ func (h *Handlers) relay(ctx context.Context, w http.ResponseWriter, baseURL str
 	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, base+path, bytes.NewReader(payload))
 	if err != nil {
-		return 0, nil, "", streamUsage{}, err
+		return 0, nil, "", 0, streamUsage{}, err
 	}
 	// Provider API key: the gateway holds the key (from api_key_env), NOT
 	// the client. A client-sent Authorization header is only a placeholder
 	// (many CLIs require one); it must never reach the upstream.
 	providerKey, missing := upstreamKey(apiKeyEnv)
 	if missing {
-		return 0, nil, "", streamUsage{}, fmt.Errorf("provider key %s is not set (use `routre-cli setup` or export it)", apiKeyEnv)
+		return 0, nil, "", 0, streamUsage{}, fmt.Errorf("provider key %s is not set (use `routre-cli setup` or export it)", apiKeyEnv)
 	}
 	if kind == "anthropic" {
 		req.Header.Set("X-Api-Key", providerKey)
@@ -527,7 +558,7 @@ func (h *Handlers) relay(ctx context.Context, w http.ResponseWriter, baseURL str
 
 	resp, err := h.HTTPClient.Do(req)
 	if err != nil {
-		return 0, nil, "", streamUsage{}, err
+		return 0, nil, "", 0, streamUsage{}, err
 	}
 	defer resp.Body.Close()
 
@@ -540,9 +571,9 @@ func (h *Handlers) relay(ctx context.Context, w http.ResponseWriter, baseURL str
 	}
 	body, err := readBody(resp.Body, limit)
 	if err != nil {
-		return 0, nil, "", streamUsage{}, fmt.Errorf("read upstream response: %w", err)
+		return 0, nil, "", 0, streamUsage{}, fmt.Errorf("read upstream response: %w", err)
 	}
-	return resp.StatusCode, body, resp.Header.Get("Content-Type"), streamUsage{}, nil
+	return resp.StatusCode, body, resp.Header.Get("Content-Type"), parseRetryAfter(resp.Header.Get("Retry-After")), streamUsage{}, nil
 }
 
 // relayStream streams an SSE response to the client, copying upstream
@@ -553,7 +584,7 @@ func (h *Handlers) relay(ctx context.Context, w http.ResponseWriter, baseURL str
 // classify, report the failure, and fail over. Errors before the first
 // byte are retryable; errors after the first byte are
 // router.StreamAborted().
-func (h *Handlers) relayStream(ctx context.Context, w http.ResponseWriter, baseURL string, r *http.Request, payload []byte, kind, apiKeyEnv string, from apiFormat) (int, []byte, string, streamUsage, error) {
+func (h *Handlers) relayStream(ctx context.Context, w http.ResponseWriter, baseURL string, r *http.Request, payload []byte, kind, apiKeyEnv string, from apiFormat) (int, []byte, string, time.Duration, streamUsage, error) {
 	path := "/v1/chat/completions"
 	if kind == "anthropic" {
 		path = "/v1/messages"
@@ -564,7 +595,7 @@ func (h *Handlers) relayStream(ctx context.Context, w http.ResponseWriter, baseU
 	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, base+path, bytes.NewReader(payload))
 	if err != nil {
-		return 0, nil, "", streamUsage{}, err
+		return 0, nil, "", 0, streamUsage{}, err
 	}
 	req.Header.Set("Content-Type", "application/json")
 	// Upstreams that sniff Accept for SSE negotiation should see an
@@ -577,7 +608,7 @@ func (h *Handlers) relayStream(ctx context.Context, w http.ResponseWriter, baseU
 	// Same key policy as relay: the gateway's key wins, never the client's.
 	providerKey, missing := upstreamKey(apiKeyEnv)
 	if missing {
-		return 0, nil, "", streamUsage{}, fmt.Errorf("provider key %s is not set (use `routre-cli setup` or export it)", apiKeyEnv)
+		return 0, nil, "", 0, streamUsage{}, fmt.Errorf("provider key %s is not set (use `routre-cli setup` or export it)", apiKeyEnv)
 	}
 	if kind == "anthropic" {
 		req.Header.Set("X-Api-Key", providerKey)
@@ -595,7 +626,7 @@ func (h *Handlers) relayStream(ctx context.Context, w http.ResponseWriter, baseU
 
 	resp, err := h.HTTPClient.Do(req)
 	if err != nil {
-		return 0, nil, "", streamUsage{}, err
+		return 0, nil, "", 0, streamUsage{}, err
 	}
 	defer resp.Body.Close()
 
@@ -607,16 +638,16 @@ func (h *Handlers) relayStream(ctx context.Context, w http.ResponseWriter, baseU
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		body, rerr := readBody(resp.Body, maxUpstreamError)
 		if rerr != nil {
-			return 0, nil, "", streamUsage{}, rerr
+			return 0, nil, "", 0, streamUsage{}, rerr
 		}
-		return resp.StatusCode, body, resp.Header.Get("Content-Type"), streamUsage{}, nil
+		return resp.StatusCode, body, resp.Header.Get("Content-Type"), parseRetryAfter(resp.Header.Get("Retry-After")), streamUsage{}, nil
 	}
 
 	susage, serr := h.streamRelay(w, resp, from, kindOf(kind))
 	if serr != nil {
-		return 0, nil, "", streamUsage{}, serr
+		return 0, nil, "", 0, streamUsage{}, serr
 	}
-	return http.StatusOK, nil, "", susage, nil
+	return http.StatusOK, nil, "", 0, susage, nil
 }
 
 // streamRelay copies an SSE stream to the client, translating it when the
@@ -803,4 +834,151 @@ func firstNonEmpty(vals ...string) string {
 		}
 	}
 	return ""
+}
+
+// parseRetryAfter parses an upstream Retry-After header delay. It accepts
+// both forms HTTP allows: an integer number of seconds, or an HTTP-date.
+// Unparseable or negative values yield 0 (no delay).
+func parseRetryAfter(s string) time.Duration {
+	s = strings.TrimSpace(s)
+	if s == "" {
+		return 0
+	}
+	if secs, err := strconv.ParseInt(s, 10, 64); err == nil {
+		if secs < 0 {
+			return 0
+		}
+		return time.Duration(secs) * time.Second
+	}
+	// HTTP-date form: delay = date - now. Clamp negative to 0.
+	if t, err := http.ParseTime(s); err == nil {
+		if d := time.Until(t); d > 0 {
+			return d
+		}
+	}
+	return 0
+}
+
+// refreshCredentials re-reads the routre-cli.env key file and reports
+// whether the provider's API key actually changed as a result. Serialized
+// with a mutex so concurrent 401s from one rotation don't race the reload.
+// The mutex makes an in-flight guard unnecessary: when the key file is
+// absent or the value is unchanged it returns false, and the caller treats
+// it as a permanent auth failure (fails over).
+func (h *Handlers) refreshCredentials(apiKeyEnv string) bool {
+	h.refreshMu.Lock()
+	defer h.refreshMu.Unlock()
+	old := os.Getenv(apiKeyEnv)
+	// Force a real re-read: LoadEnvFile only sets vars that are absent, so
+	// the rotated value is ignored unless we clear the key first.
+	_ = os.Unsetenv(apiKeyEnv)
+	if err := config.LoadEnvFile(config.EnvFilePath(h.Cfg.Path())); err != nil {
+		// Restore the old value so the provider isn't left keyless.
+		_ = os.Setenv(apiKeyEnv, old)
+		return false
+	}
+	newV := os.Getenv(apiKeyEnv)
+	return newV != "" && newV != old
+}
+
+// injectPromptCache marks Anthropic cache breakpoints on an outbound
+// /v1/messages body: the system prefix and the last message's final text
+// block get cache_control {type:"ephemeral"}. It is strictly additive and
+// fail-open — an already-present cache_control is never overwritten, and
+// malformed input is returned unchanged. When the last message's content is
+// a plain string (no block array), cache_control cannot be attached there,
+// so only the system block is marked.
+func injectPromptCache(body []byte) []byte {
+	if !json.Valid(body) {
+		return body
+	}
+	dec := json.NewDecoder(bytes.NewReader(body))
+	dec.UseNumber()
+	var doc map[string]any
+	if err := dec.Decode(&doc); err != nil {
+		return body
+	}
+	changed := false
+
+	// Mark the system prefix: if an array, attach to the first text block;
+	// if a plain string, wrap it into an array so the breakpoint is
+	// expressible.
+	if sys, ok := doc["system"]; ok {
+		switch s := sys.(type) {
+		case []any:
+			changed = markFirstTextBlock(s) || changed
+		case string:
+			if s != "" {
+				doc["system"] = []any{map[string]any{
+					"type":          "text",
+					"text":          s,
+					"cache_control": map[string]any{"type": "ephemeral"},
+				}}
+				changed = true
+			}
+		}
+	}
+
+	// Mark the last message's content if it is a block array with a
+	// markable text block.
+	if msgs, ok := doc["messages"].([]any); ok && len(msgs) > 0 {
+		if last, ok := msgs[len(msgs)-1].(map[string]any); ok {
+			if content, ok := last["content"].([]any); ok {
+				changed = markLastTextBlock(content) || changed
+			}
+		}
+	}
+
+	if !changed {
+		return body
+	}
+	out, err := json.Marshal(doc)
+	if err != nil {
+		return body
+	}
+	return out
+}
+
+// markFirstTextBlock attaches ephemeral cache_control to the first text
+// block of a content array (the system prefix is always a stable cache
+// prefix). Reports whether a block was marked; never overwrites an existing
+// breakpoint.
+func markFirstTextBlock(blocks []any) bool {
+	for _, b := range blocks {
+		bm, ok := b.(map[string]any)
+		if !ok {
+			continue
+		}
+		if t, _ := bm["type"].(string); t != "text" {
+			continue
+		}
+		if _, already := bm["cache_control"]; already {
+			return false
+		}
+		bm["cache_control"] = map[string]any{"type": "ephemeral"}
+		return true
+	}
+	return false
+}
+
+// markLastTextBlock attaches ephemeral cache_control to the final text
+// block of a content array (marking the most recent turn is what makes an
+// agentic session's rolling context cacheable). Success-path semantics
+// mirror markFirstTextBlock.
+func markLastTextBlock(blocks []any) bool {
+	for i := len(blocks) - 1; i >= 0; i-- {
+		bm, ok := blocks[i].(map[string]any)
+		if !ok {
+			continue
+		}
+		if t, _ := bm["type"].(string); t != "text" {
+			continue
+		}
+		if _, already := bm["cache_control"]; already {
+			return false
+		}
+		bm["cache_control"] = map[string]any{"type": "ephemeral"}
+		return true
+	}
+	return false
 }

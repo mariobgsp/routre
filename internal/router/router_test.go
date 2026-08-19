@@ -308,3 +308,33 @@ func TestClassifyStatusBodyCredits(t *testing.T) {
 		t.Fatalf("plain 401 must stay ErrAuth, got %v", got)
 	}
 }
+
+// TestReportFailureWithBackoffHonorsRetryAfter: an upstream Retry-After
+// acts as a FLOOR on the cooldown, never a ceiling — a long RA dominates
+// the default backoff, a short RA never shortens it. Uses the injected
+// clock so no real sleeps are needed.
+func TestReportFailureWithBackoffHonorsRetryAfter(t *testing.T) {
+	cur := time.Unix(1700000000, 0)
+	r := New(mkModelTiers(), DefaultCooldownPolicy())
+	r.now = func() time.Time { return cur }
+	target := r.provs[0]
+
+	// Fresh provider: default single-failure backoff is the 2s base. A 30s
+	// Retry-After must extend it to ~30s.
+	r.ReportFailureWithBackoff(target, ErrRateLimit, 30*time.Second)
+	if rem := r.CooldownRemaining(target); rem <= 0 || rem > 30*time.Second {
+		t.Fatalf("expected cooldown ~30s (RA floor), got %v", rem)
+	}
+
+	// Fresh provider again: a 1s Retry-After must NOT shorten the 2s base
+	// backoff — the floor rule holds for short RAs too.
+	cur = cur.Add(31 * time.Second)
+	r.ReportSuccess(target) // reset so the next failure is a single (2s base)
+	if rem := r.CooldownRemaining(target); rem != 0 {
+		t.Fatalf("expected no cooldown after ReportSuccess, got %v", rem)
+	}
+	r.ReportFailureWithBackoff(target, ErrRateLimit, 1*time.Second)
+	if rem := r.CooldownRemaining(target); rem <= 0 || rem > 2*time.Second+time.Second {
+		t.Fatalf("expected cooldown ~2s (2s base > 1s RA), got %v", rem)
+	}
+}

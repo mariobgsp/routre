@@ -402,6 +402,19 @@ func (r *Router) ReportSuccess(p *ProviderState) {
 // also never escalate: the provider is out of money, not out of service —
 // it may still serve free variants, so it must not be cooldowned.
 func (r *Router) ReportFailure(p *ProviderState, class ErrClass) {
+	r.reportFailure(p, class, 0)
+}
+
+// ReportFailureWithBackoff records a failure and computes the next cooldown
+// window, but never lets it end before the server-mandated retryAfter delay
+// (an upstream Retry-After header). Unlike the exponential backoff, this is
+// data from the provider telling us when it will accept traffic again, so a
+// Retry-After of e.g. 30s on a low base takes priority over a 2s default.
+func (r *Router) ReportFailureWithBackoff(p *ProviderState, class ErrClass, retryAfter time.Duration) {
+	r.reportFailure(p, class, retryAfter)
+}
+
+func (r *Router) reportFailure(p *ProviderState, class ErrClass, retryAfter time.Duration) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	if class == ErrStream || class == ErrCredits {
@@ -419,6 +432,12 @@ func (r *Router) ReportFailure(p *ProviderState, class ErrClass) {
 			break
 		}
 		d *= 2
+	}
+	if d > r.policy.Max {
+		d = r.policy.Max
+	}
+	if retryAfter > d {
+		d = retryAfter
 	}
 	if d > r.policy.Max {
 		d = r.policy.Max

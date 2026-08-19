@@ -19,20 +19,22 @@ import (
 
 // Server is a configurable mock upstream.
 type Server struct {
-	mu         sync.Mutex
-	ln         net.Listener
-	http       *http.Server
-	Name       string
-	FailWith   int           // if != 0, respond with this status
-	FailBody   string        // optional custom failure body (used when FailWith != 0)
-	ResetConn  bool          // close connection without a response
-	AbortMid   bool          // start SSE then abort
-	Stream     bool          // force SSE responses
-	Anthropic  bool          // emit Anthropic-style (event: ...) SSE frames
-	Count      atomic.Int64  // requests seen
-	LastBody   atomic.Value  // []byte of last request body
-	LastHeader atomic.Value  // http.Header of last request
-	Delay      time.Duration // optional per-request delay
+	mu             sync.Mutex
+	ln             net.Listener
+	http           *http.Server
+	Name           string
+	FailWith       int           // if != 0, respond with this status
+	FailBody       string        // optional custom failure body (used when FailWith != 0)
+	FailRetryAfter string        // optional Retry-After header on failure responses
+	FailOnce       bool          // clear FailWith after one failure response
+	ResetConn      bool          // close connection without a response
+	AbortMid       bool          // start SSE then abort
+	Stream         bool          // force SSE responses
+	Anthropic      bool          // emit Anthropic-style (event: ...) SSE frames
+	Count          atomic.Int64  // requests seen
+	LastBody       atomic.Value  // []byte of last request body
+	LastHeader     atomic.Value  // http.Header of last request
+	Delay          time.Duration // optional per-request delay
 	// models are the fielded /v1/models list served by this mock (default
 	// empty = the endpoint returns an empty list). Set via SetModels.
 	models []string
@@ -70,6 +72,16 @@ func (m *Server) SetFail(status int) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.FailWith = status
+}
+
+// SetFailOnce makes the very next request fail with status, then succeed
+// (clears FailWith and FailOnce after one failure). For testing refresh
+// and recover-then-retry paths.
+func (m *Server) SetFailOnce(status int) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.FailWith = status
+	m.FailOnce = true
 }
 
 // SetFailBody configures a custom failure response body (with SetFail).
@@ -177,11 +189,20 @@ func (m *Server) handle(w http.ResponseWriter, r *http.Request) {
 	}
 	if fail != 0 {
 		w.Header().Set("Content-Type", "application/json")
+		if m.FailRetryAfter != "" {
+			w.Header().Set("Retry-After", m.FailRetryAfter)
+		}
 		w.WriteHeader(fail)
 		if failBody != "" {
 			_, _ = w.Write([]byte(failBody))
 		} else {
 			_, _ = w.Write([]byte(fmt.Sprintf(`{"error":{"message":"mock %s failure %d","type":"mock"}}`, m.Name, fail)))
+		}
+		if m.FailOnce {
+			m.SetFail(0)
+			m.mu.Lock()
+			m.FailOnce = false
+			m.mu.Unlock()
 		}
 		return
 	}

@@ -5,6 +5,7 @@ import (
 	"log"
 	"net"
 	"net/http"
+	"sync"
 	"time"
 
 	"routre-cli/internal/cache"
@@ -28,6 +29,11 @@ type Handlers struct {
 	HTTPClient *http.Client
 	Usage      *usage.Store
 	Metrics    *metrics.Metrics
+
+	// refreshMu serializes credential refreshes (401/403 recovery) so a
+	// burst of concurrent auth failures from one key rotation doesn't race
+	// the env-file reload.
+	refreshMu sync.Mutex
 }
 
 // newHTTPClient builds the upstream transport. Note: no overall timeout —
