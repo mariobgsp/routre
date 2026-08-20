@@ -7,6 +7,20 @@ Releases are published to npm via a `v*` tag push (see
 The format loosely follows [Keep a Changelog](https://keepachangelog.com/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.1.9] — 2026-08-20
+
+### Added
+
+- **OpenAI Responses API bridge (`/v1/responses`).** opencode's built-in
+  `openai` provider speaks the Responses API, not `chat.completions`, so it
+  could not use the gateway with plain `OPENAI_BASE_URL`. Inbound Responses
+  requests are translated to `chat.completions` for relay, then wrapped back
+  into the Responses envelope for non-streaming clients or re-emitted as the
+  named Responses SSE events (`response.created`, `output_text.delta`,
+  `response.completed`, …) for streaming. Only openai-kind upstreams can serve
+  a Responses request; an anthropic upstream is rejected rather than silently
+  mis-answered. Covered by `responses_test.go` / `responses_stream_test.go`.
+
 ## [0.1.8] — 2026-08-19
 
 ### Added
