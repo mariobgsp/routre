@@ -3,6 +3,7 @@ package main
 import (
 	"encoding/json"
 	"fmt"
+	"io"
 	"log"
 	"net/http"
 	"os"
@@ -91,14 +92,19 @@ func cmdList(cfgPath, url string, logger *log.Logger) error {
 
 // printUsage renders the token/cost ledger grouped by client, with totals.
 // A coding agent is identified by User-Agent; unknown traffic is grouped
-// under "unknown".
+// under "unknown". Output goes to stdout.
 func printUsage(rows []usage.Row, live bool) {
-	fmt.Println("\n== token & cost ledger ==")
+	printUsageTo(os.Stdout, rows, live)
+}
+
+// printUsageTo is printUsage with an explicit output writer (testable).
+func printUsageTo(w io.Writer, rows []usage.Row, live bool) {
+	fmt.Fprintln(w, "\n== token & cost ledger ==")
 	source := "persisted"
 	if live {
 		source = "live"
 	}
-	fmt.Printf("  source: %s\n", source)
+	fmt.Fprintf(w, "  source: %s\n", source)
 
 	// Client rows: each client's totals across all providers/models.
 	byClient := map[string]*usage.Row{}
@@ -115,7 +121,7 @@ func printUsage(rows []usage.Row, live bool) {
 		byClient[c].Add(r)
 	}
 	if len(clients) == 0 {
-		fmt.Println("  no traffic yet — make a request through the gateway")
+		fmt.Fprintln(w, "  no traffic yet — make a request through the gateway")
 		return
 	}
 	sort.Strings(clients)
@@ -139,14 +145,14 @@ func printUsage(rows []usage.Row, live bool) {
 		totCost += cr.CostUSD
 		totSavedUSD += cr.SavedUSD
 
-		fmt.Printf("\n  %s\n", c)
-		fmt.Printf("    requests: %d\n", cr.Requests)
-		fmt.Printf("    consumed: %d tokens (%d in + %d out)\n",
+		fmt.Fprintf(w, "\n  %s\n", c)
+		fmt.Fprintf(w, "    requests: %d\n", cr.Requests)
+		fmt.Fprintf(w, "    consumed: %d tokens (%d in + %d out)\n",
 			cr.TotalTokens(), cr.PromptTokens, cr.CompletionTokens)
-		fmt.Printf("    saved:    %d tokens (rtk %d + cache %d)\n",
+		fmt.Fprintf(w, "    saved:    %d tokens (rtk %d + cache %d)\n",
 			cr.TotalSavedTokens(), cr.RTKSavedTokens, cr.CacheSavedTokens)
 		if cr.CacheReadTokens > 0 {
-			fmt.Printf("    cache read: %d tokens (provider-reported)\n", cr.CacheReadTokens)
+			fmt.Fprintf(w, "    cache read: %d tokens (provider-reported)\n", cr.CacheReadTokens)
 		}
 		costStr := "n/a (no prices configured)"
 		savedStr := "n/a"
@@ -154,11 +160,11 @@ func printUsage(rows []usage.Row, live bool) {
 			costStr = fmtMoney(cr.CostUSD)
 			savedStr = fmtMoney(cr.SavedUSD)
 		}
-		fmt.Printf("    cost:     %s   saved: %s\n", costStr, savedStr)
+		fmt.Fprintf(w, "    cost:     %s   saved: %s\n", costStr, savedStr)
 
 		rows := byClientModel[c]
 		if len(rows) > 1 || rows[0].Model != "" {
-			fmt.Printf("    by provider/model:\n")
+			fmt.Fprintf(w, "    by provider/model:\n")
 			sort.Slice(rows, func(i, j int) bool {
 				if rows[i].Provider != rows[j].Provider {
 					return rows[i].Provider < rows[j].Provider
@@ -171,15 +177,15 @@ func printUsage(rows []usage.Row, live bool) {
 				if r.CacheReadTokens > 0 {
 					line += fmt.Sprintf("  cache-read %d", r.CacheReadTokens)
 				}
-				fmt.Println(line)
+				fmt.Fprintln(w, line)
 			}
 		}
 	}
 
-	fmt.Println("\n  TOTAL")
-	fmt.Printf("    requests: %d\n", totRequests)
-	fmt.Printf("    consumed: %d tokens (%d in + %d out)\n", totPrompt+totCompletion, totPrompt, totCompletion)
-	fmt.Printf("    saved:    %d tokens (%.1f%% of consumed)\n",
+	fmt.Fprintln(w, "\n  TOTAL")
+	fmt.Fprintf(w, "    requests: %d\n", totRequests)
+	fmt.Fprintf(w, "    consumed: %d tokens (%d in + %d out)\n", totPrompt+totCompletion, totPrompt, totCompletion)
+	fmt.Fprintf(w, "    saved:    %d tokens (%.1f%% of consumed)\n",
 		totSaved, pct(totSaved, totPrompt+totCompletion+totSaved))
 	totalCostStr := "n/a"
 	totalSavedStr := "n/a"
@@ -187,7 +193,7 @@ func printUsage(rows []usage.Row, live bool) {
 		totalCostStr = fmtMoney(totCost)
 		totalSavedStr = fmtMoney(totSavedUSD)
 	}
-	fmt.Printf("    cost:     %s   saved: %s\n", totalCostStr, totalSavedStr)
+	fmt.Fprintf(w, "    cost:     %s   saved: %s\n", totalCostStr, totalSavedStr)
 }
 
 // fmtMoney renders USD with enough precision for tiny per-request costs.
