@@ -131,12 +131,16 @@ const (
 	fmtUnknown apiFormat = iota
 	fmtOpenAI
 	fmtAnthropic
+	fmtResponses
 )
 
 // detectFormat guesses the dialect from the request path and body shape.
 func detectFormat(path string, body []byte) apiFormat {
 	if strings.HasSuffix(path, "/messages") {
 		return fmtAnthropic
+	}
+	if strings.HasSuffix(path, "/responses") {
+		return fmtResponses
 	}
 	if strings.HasSuffix(path, "/chat/completions") {
 		return fmtOpenAI
@@ -155,6 +159,12 @@ func (h *Handlers) route(w http.ResponseWriter, r *http.Request, api apiFormat) 
 	start := time.Now()
 	ctx := r.Context()
 	client := clientName(r)
+
+	// The dialect the CLIENT speaks (response boundary), which may differ
+	// from the internal `api` used for upstream relay. For Responses API
+	// requests we translate the inbound body to chat up front and keep the
+	// upstream `api` as fmtOpenAI; the response is re-wrapped on exit.
+	clientFmt := api
 
 	// Request-log + metrics emission on every exit path.
 	logReq := func(e reqlog.Entry) {
@@ -178,6 +188,23 @@ func (h *Handlers) route(w http.ResponseWriter, r *http.Request, api apiFormat) 
 			"error": map[string]any{"message": "empty request body", "type": "invalid_request_error"},
 		})
 		return
+	}
+
+	// Responses API: translate the inbound request to chat.completions so
+	// the rest of the pipeline (RTK, ordering, cache, candidate relay) is
+	// unchanged. Response re-wrapping happens on exit per clientFmt.
+	if api == fmtResponses {
+		translated, terr := responsesToOpenAI(body)
+		if terr != nil {
+			logReq(reqlog.Entry{Client: client, Status: http.StatusBadRequest, Class: "error"})
+			h.Metrics.Request(client, "", "", "error")
+			writeJSON(w, http.StatusBadRequest, map[string]any{
+				"error": map[string]any{"message": "could not parse Responses request: " + terr.Error(), "type": "invalid_request_error"},
+			})
+			return
+		}
+		body = translated
+		api = fmtOpenAI
 	}
 
 	streaming := isStreaming(body)
@@ -214,10 +241,20 @@ func (h *Handlers) route(w http.ResponseWriter, r *http.Request, api apiFormat) 
 			}
 			h.Metrics.CacheHit()
 			logReq(reqlog.Entry{Client: client, Model: requested, Status: http.StatusOK, Class: "cache", PromptTokens: cacheSaved, CompletionTokens: e.CompletionTokens, RTKSavedTokens: int64(rtkSaved)})
-			w.Header().Set("Content-Type", e.ContentType)
+			// Responses API client: the cache stores the chat envelope, so
+			// re-wrap before serving.
+			cacheBody := e.Body
+			cacheCT := e.ContentType
+			if clientFmt == fmtResponses {
+				if wrapped, werr := openAIToResponses(e.Body, requested); werr == nil {
+					cacheBody = wrapped
+					cacheCT = "application/json"
+				}
+			}
+			w.Header().Set("Content-Type", cacheCT)
 			w.Header().Set("X-Llrouter-Cache", "hit")
 			w.WriteHeader(http.StatusOK)
-			_, _ = w.Write(e.Body)
+			_, _ = w.Write(cacheBody)
 			return
 		}
 		h.Metrics.CacheMiss()
@@ -267,7 +304,7 @@ func (h *Handlers) route(w http.ResponseWriter, r *http.Request, api apiFormat) 
 			if attempt > 0 {
 				time.Sleep(transientRetryDelay)
 			}
-			ok := h.tryCandidate(ctx, w, r, api, cand, requested, body, processed, streaming, client, rtkSaved, &lastErr, logReq)
+			ok := h.tryCandidate(ctx, w, r, api, cand, requested, body, processed, streaming, client, rtkSaved, clientFmt, &lastErr, logReq)
 			if ok {
 				return
 			}
@@ -296,7 +333,7 @@ func (h *Handlers) route(w http.ResponseWriter, r *http.Request, api apiFormat) 
 // The caller owns the transient-retry loop around this: a provider that
 // fails once is retried (transientRetryAttempts) before its failure is
 // reported to the router's cooldown state.
-func (h *Handlers) tryCandidate(ctx context.Context, w http.ResponseWriter, r *http.Request, api apiFormat, cand router.Candidate, requested string, body []byte, processed []byte, streaming bool, client string, rtkSaved int, lastErr *error, logReq func(reqlog.Entry)) bool {
+func (h *Handlers) tryCandidate(ctx context.Context, w http.ResponseWriter, r *http.Request, api apiFormat, cand router.Candidate, requested string, body []byte, processed []byte, streaming bool, client string, rtkSaved int, clientFmt apiFormat, lastErr *error, logReq func(reqlog.Entry)) bool {
 	p := cand.Provider
 
 	kind := p.Provider.Kind
@@ -324,6 +361,14 @@ func (h *Handlers) tryCandidate(ctx context.Context, w http.ResponseWriter, r *h
 	defer cancel()
 
 	crossKind := (api == fmtOpenAI && kind == "anthropic") || (api == fmtAnthropic && kind == "openai")
+	// Responses API only maps onto openai-kind upstreams (chat.completions).
+	// An anthropic upstream cannot be answered in the Responses envelope, so
+	// reject rather than emit an unparseable response.
+	if clientFmt == fmtResponses && kind == "anthropic" {
+		h.Router.ReportFailure(p, router.ErrClient)
+		*lastErr = fmt.Errorf("provider %s (kind=anthropic) cannot serve a Responses API request", p.Provider.Name)
+		return false
+	}
 	if crossKind {
 		// Cross-kind requests are translated request-side (payload) and,
 		// when streaming, response-side by translateStream inside streamRelay
@@ -358,7 +403,7 @@ func (h *Handlers) tryCandidate(ctx context.Context, w http.ResponseWriter, r *h
 		payload = injectPromptCache(payload)
 	}
 
-	status, respBody, ct, retryAfter, susage, rerr := h.relay(attemptCtx, w, p.Provider.BaseURL, r, payload, streaming, kind, p.Provider.APIKeyEnv, api)
+	status, respBody, ct, retryAfter, susage, rerr := h.relay(attemptCtx, w, p.Provider.BaseURL, r, payload, streaming, kind, p.Provider.APIKeyEnv, api, clientFmt)
 
 	if rerr != nil {
 		// Network/transport failure: retryable (unless mid-stream).
@@ -406,6 +451,14 @@ func (h *Handlers) tryCandidate(ctx context.Context, w http.ResponseWriter, r *h
 		if ct == "" {
 			ct = "application/json"
 		}
+		// Responses API client: wrap the chat envelope in the Responses
+		// response shape before caching/writing.
+		sendBody := respBody
+		if clientFmt == fmtResponses {
+			if wrapped, werr := openAIToResponses(respBody, requested); werr == nil {
+				sendBody = wrapped
+			}
+		}
 		// Usage: parse provider-reported tokens when present; fall back
 		// to estimates. RTK savings land on the provider's row.
 		prompt, completion, reportedCost, cacheRead := usageFromBody(respBody, body)
@@ -421,7 +474,7 @@ func (h *Handlers) tryCandidate(ctx context.Context, w http.ResponseWriter, r *h
 			w.Header().Set("X-Llrouter-Free", cand.Upstream)
 		}
 		w.WriteHeader(status)
-		_, _ = w.Write(respBody)
+		_, _ = w.Write(sendBody)
 		return true
 	}
 
@@ -441,7 +494,7 @@ func (h *Handlers) tryCandidate(ctx context.Context, w http.ResponseWriter, r *h
 			// the new key. Reports both success and failure to the router on
 			// the retry path — a successful auth retry must clear any
 			// cooldown this provider accrued from past failures.
-			if h.tryCandidate(ctx, w, r, api, cand, requested, body, processed, streaming, client, rtkSaved, lastErr, logReq) {
+			if h.tryCandidate(ctx, w, r, api, cand, requested, body, processed, streaming, client, rtkSaved, clientFmt, lastErr, logReq) {
 				return true
 			}
 		}
@@ -516,9 +569,9 @@ func writeStatus(w http.ResponseWriter, status int, body []byte, ct string) {
 // router.StreamAborted() after the first byte. from is the client's dialect,
 // used for cross-kind streaming translation. retryAfter is the parsed
 // upstream Retry-After delay (0 when absent) on a non-2xx response.
-func (h *Handlers) relay(ctx context.Context, w http.ResponseWriter, baseURL string, r *http.Request, payload []byte, streaming bool, kind, apiKeyEnv string, from apiFormat) (int, []byte, string, time.Duration, streamUsage, error) {
+func (h *Handlers) relay(ctx context.Context, w http.ResponseWriter, baseURL string, r *http.Request, payload []byte, streaming bool, kind, apiKeyEnv string, from apiFormat, clientFmt apiFormat) (int, []byte, string, time.Duration, streamUsage, error) {
 	if streaming {
-		return h.relayStream(ctx, w, baseURL, r, payload, kind, apiKeyEnv, from)
+		return h.relayStream(ctx, w, baseURL, r, payload, kind, apiKeyEnv, clientFmt)
 	}
 	path := "/v1/chat/completions"
 	if kind == "anthropic" {

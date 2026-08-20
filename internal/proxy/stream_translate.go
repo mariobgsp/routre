@@ -40,6 +40,8 @@ type streamTranslator struct {
 	a2o a2oState
 	// o2a holds OpenAI->Anthropic state when to==openai.
 	o2a o2aState
+	// r2o holds Responses->OpenAI state when to==openai.
+	r2o r2oState
 }
 
 func newStreamTranslator(from, to apiFormat) *streamTranslator {
@@ -61,6 +63,8 @@ func (st *streamTranslator) translate(evt sseEvent) (string, error) {
 		return st.a2o.translate(evt)
 	case st.from == fmtAnthropic && st.to == fmtOpenAI:
 		return st.o2a.translate(evt)
+	case st.from == fmtResponses && st.to == fmtOpenAI:
+		return st.r2o.translate(evt)
 	default:
 		return "", fmt.Errorf("unsupported stream translation %v -> %v", st.from, st.to)
 	}
@@ -571,3 +575,9 @@ func (s *o2aState) finish() string {
 }
 
 func renderAnthropic(e anthropicEvent) string { return sseFrame(e.Type, mustMarshal(e)) }
+
+// jsonUnmarshal decodes a JSON string/bytes payload into v.
+func jsonUnmarshal(data string, v any) error {
+	err := json.Unmarshal([]byte(data), v)
+	return err
+}

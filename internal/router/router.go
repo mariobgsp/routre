@@ -304,12 +304,21 @@ func providerServes(models []string, provider, model string) bool {
 
 // Candidates returns every provider (in tier order, cooldown respected)
 // that can serve the requested model, with the upstream model name to use.
-// Free variants are preferred over the paid model: a provider listing
-// "m-free" serves "m" requests via the free variant first. Providers that
-// list neither the model nor a free variant are skipped entirely, so a
-// request for a model a provider cannot serve never lands there (this is
-// what eliminated the OpenRouter 402 cascade: OpenRouter was being asked
-// for models it could not serve for free).
+//
+// Routing contract (README: "Provider-qualified model names"):
+//   - "<provider>/<model>" is a client-side routing label only. When the
+//     first path segment exactly matches a configured provider name, that
+//     provider is selected directly and the remainder is forwarded verbatim
+//     as the upstream model — no whitelist check. This makes the gateway a
+//     dumb forwarder for qualified names so new upstream models (e.g.
+//     opencode-go/muse-spark-1.2-contributor) work without a config edit.
+//   - Bare model names ("muse-spark-1.2") still use the whitelist: the
+//     provider must list the model or a free variant of it. This preserves
+//     the OpenRouter 402-cascade guard (don't ask a provider for a model it
+//     has never advertised).
+// Free variants are preferred over the paid model when the request is
+// unqualified: a provider listing "m-free" serves "m" requests via the
+// free variant first.
 func (r *Router) Candidates(model string) []Candidate {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
@@ -317,6 +326,15 @@ func (r *Router) Candidates(model string) []Candidate {
 	var out []Candidate
 	for _, p := range r.provs {
 		if now.Before(p.until) {
+			continue
+		}
+		// Explicit provider-qualified routing: "opencode-go/muse-spark-1.2-contributor"
+		// -> provider opencode-go, upstream muse-spark-1.2-contributor. Forward
+		// verbatim regardless of the configured Models list (gateway is a
+		// forwarder; upstream is authoritative). Honors cooldown already checked.
+		if tail := stripProviderPrefix(p.Provider.Name, model); tail != "" {
+			isFree := strings.HasSuffix(tail, ":free") || strings.HasSuffix(tail, "-free")
+			out = append(out, Candidate{Provider: p, Upstream: tail, IsFree: isFree})
 			continue
 		}
 		if providerServes(p.Provider.Models, p.Provider.Name, model) {
@@ -492,12 +510,16 @@ func (r *Router) Status() []Status {
 }
 
 // ServesModel reports whether any provider (regardless of cooldown)
-// lists model or a free variant of it. Used to tell "model not
-// configured" apart from "all matching providers are in cooldown".
+// could serve model. Qualified "<provider>/<model>" is always considered
+// served when the provider exists (gateway is a forwarder; upstream is
+// authoritative). Bare names still require a whitelist hit or free variant.
 func (r *Router) ServesModel(model string) bool {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 	for _, p := range r.provs {
+		if stripProviderPrefix(p.Provider.Name, model) != "" {
+			return true
+		}
 		if providerServes(p.Provider.Models, p.Provider.Name, model) {
 			return true
 		}
@@ -510,8 +532,9 @@ func (r *Router) ServesModel(model string) bool {
 
 // MinCooldownForModel returns the shortest cooldown remaining among
 // providers that could serve model (or a free variant of it), and whether
-// at least one such provider exists. Callers use it to set Retry-After
-// when every candidate is cooling down.
+// at least one such provider exists. Qualified "<provider>/<model>" counts
+// as served by that provider (forwarder contract). Callers use it to set
+// Retry-After when every candidate is cooling down.
 func (r *Router) MinCooldownForModel(model string) (time.Duration, bool) {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
@@ -519,7 +542,8 @@ func (r *Router) MinCooldownForModel(model string) (time.Duration, bool) {
 	best := time.Duration(0)
 	found := false
 	for _, p := range r.provs {
-		if !providerServes(p.Provider.Models, p.Provider.Name, model) && freeVariantOf(p.Provider.Models, model) == "" {
+		qualified := stripProviderPrefix(p.Provider.Name, model) != ""
+		if !qualified && !providerServes(p.Provider.Models, p.Provider.Name, model) && freeVariantOf(p.Provider.Models, model) == "" {
 			continue
 		}
 		found = true

@@ -127,12 +127,17 @@ export ANTHROPIC_BASE_URL=http://127.0.0.1:20128   # Claude Code
 export OPENAI_BASE_URL=http://127.0.0.1:20128      # Codex / opencode / etc.
 ```
 
-Endpoints: `POST /v1/chat/completions`, `POST /v1/messages`,
+Endpoints: `POST /v1/chat/completions`, `POST /v1/responses`, `POST /v1/messages`,
 `GET /v1/models`, `GET /v1/status`, `GET /v1/usage`, `GET /healthz`.
+
+`/v1/responses` speaks the OpenAI Responses API (what opencode's built-in
+`openai` provider uses) and is translated to `/v1/chat/completions` for the
+upstream providers, then wrapped back into the Responses envelope for the
+client. It works with `OPENAI_BASE_URL` out of the box.
 
 ### Connect everything (opencode-go, opencode zen, OpenRouter)
 
-The repo ships `config.all.json` — a ready config exposing **501 models**
+The repo ships `config.all.json` — a ready config exposing **502 models**
 through one endpoint, verified live:
 
 | Provider | Base URL | Models | Key env |
@@ -147,7 +152,7 @@ cp config.all.json config.json
 #   OPENCODE_GO_API_KEY=<from ~/.local/share/opencode/auth.json>
 #   OPENROUTER_API_KEY=<your key>
 routre-cli serve
-curl http://127.0.0.1:20128/v1/models          # 501 models
+curl http://127.0.0.1:20128/v1/models          # 502 models
 # use any model as <provider>/<model>, e.g.:
 #   opencode-zen/claude-fable-5  opencode-go/hy3  openrouter/deepseek/deepseek-chat
 ```
@@ -330,7 +335,7 @@ cache savings, and estimated cost.
 | `price_in` / `price_out` | USD per 1M tokens for cost reporting (optional) |
 | `tiers` order | fallback order; keep subscription/cheap/free |
 
-A full reference config with 501 models lives in `config.all.json`; a
+A full reference config with 502 models lives in `config.all.json`; a
 minimal template is `config.example.json`.
 
 ---

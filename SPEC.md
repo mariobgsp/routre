@@ -167,6 +167,20 @@ responses are never cached.
    the client is retryable; after it, the stream can't fail over (matches
    same-kind StreamingAborted). Covered by golden SSE-fixture tests in
    `stream_translate_test.go`. Gemini remains a follow-up (5 more pairs).
+1a. **The Responses API dialect (`/v1/responses`) is bridged** so opencode's
+   built-in `openai` provider — which speaks the OpenAI Responses API, not
+   chat.completions — works through the gateway with plain `OPENAI_BASE_URL`.
+   Inbound Responses requests are translated to chat.completions for relay
+   (`responsesToOpenAI`), then the response is wrapped back into the
+   Responses envelope (`openAIToResponses`) for non-streaming, or re-emitted
+   as the named Responses SSE events (`response.created`, `output_text.delta`,
+   `response.completed`, …) via the chat→responses stream translator. Only
+   openai-kind upstreams can serve a Responses request; an anthropic upstream
+   is rejected (not silently mis-answered). Known losses (mirror cross-kind):
+   Responses-only controls (`store`, `metadata`, `previous_response_id`, …)
+   are dropped; tool calls ride the OpenAI function-call dialect that
+   opencode's responses provider re-admits identically. Covered in
+   `responses_test.go` / `responses_stream_test.go`.
 2. **Non-streaming cross-kind translation is lossy**: tool definitions are
    dropped; `tool_use` blocks flatten to text; `tool_result` loses the
    `tool_call_id` link; images become placeholders. Documented in

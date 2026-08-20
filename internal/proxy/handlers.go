@@ -102,7 +102,7 @@ func (h *Handlers) Health(w http.ResponseWriter, _ *http.Request) {
 // NotFound answers every unmatched path.
 func (h *Handlers) NotFound(w http.ResponseWriter, _ *http.Request) {
 	writeJSON(w, http.StatusNotFound, map[string]any{
-		"error": map[string]any{"message": "not found: only /v1/chat/completions, /v1/messages, /v1/models, /v1/status, /healthz", "type": "not_found"},
+		"error": map[string]any{"message": "not found: only /v1/chat/completions, /v1/responses, /v1/messages, /v1/models, /v1/status, /healthz", "type": "not_found"},
 	})
 }
 
