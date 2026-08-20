@@ -166,7 +166,11 @@ responses are never cached.
    first-byte is preserved: a translate/read failure before any byte reaches
    the client is retryable; after it, the stream can't fail over (matches
    same-kind StreamingAborted). Covered by golden SSE-fixture tests in
-   `stream_translate_test.go`. Gemini remains a follow-up (5 more pairs).
+   `stream_translate_test.go`. **Gemini is now a third dialect for the
+   OpenAI↔Gemini pair** (request translation `openAIToGemini`, non-streaming
+   response `geminiToOpenAI`, and in-flight `g2o` SSE translation with
+   `[DONE]`); the Anthropic↔Gemini pair is not yet implemented — a gemini
+   upstream served to an Anthropic client is rejected, not mis-answered.
 1a. **The Responses API dialect (`/v1/responses`) is bridged** so opencode's
    built-in `openai` provider — which speaks the OpenAI Responses API, not
    chat.completions — works through the gateway with plain `OPENAI_BASE_URL`.

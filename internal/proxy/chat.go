@@ -132,6 +132,7 @@ const (
 	fmtOpenAI
 	fmtAnthropic
 	fmtResponses
+	fmtGemini
 )
 
 // detectFormat guesses the dialect from the request path and body shape.
@@ -360,11 +361,11 @@ func (h *Handlers) tryCandidate(ctx context.Context, w http.ResponseWriter, r *h
 	}
 	defer cancel()
 
-	crossKind := (api == fmtOpenAI && kind == "anthropic") || (api == fmtAnthropic && kind == "openai")
+	crossKind := (api == fmtOpenAI && kind == "anthropic") || (api == fmtAnthropic && kind == "openai") || (api == fmtOpenAI && kind == "gemini")
 	// Responses API only maps onto openai-kind upstreams (chat.completions).
-	// An anthropic upstream cannot be answered in the Responses envelope, so
-	// reject rather than emit an unparseable response.
-	if clientFmt == fmtResponses && kind == "anthropic" {
+	// An anthropic or gemini upstream cannot be answered in the Responses
+	// envelope, so reject rather than emit an unparseable response.
+	if clientFmt == fmtResponses && (kind == "anthropic" || kind == "gemini") {
 		h.Router.ReportFailure(p, router.ErrClient)
 		*lastErr = fmt.Errorf("provider %s (kind=anthropic) cannot serve a Responses API request", p.Provider.Name)
 		return false
@@ -452,8 +453,16 @@ func (h *Handlers) tryCandidate(ctx context.Context, w http.ResponseWriter, r *h
 			ct = "application/json"
 		}
 		// Responses API client: wrap the chat envelope in the Responses
-		// response shape before caching/writing.
+		// response shape before caching/writing. Gemini upstream: translate
+		// the generateContent response back to OpenAI first (this also lets
+		// usageFromBody read Gemini's usageMetadata via the OpenAI shape).
 		sendBody := respBody
+		if kind == "gemini" {
+			if gb, gerr := geminiToOpenAI(respBody, modelFromBody(body)); gerr == nil {
+				respBody = gb
+				sendBody = gb
+			}
+		}
 		if clientFmt == fmtResponses {
 			if wrapped, werr := openAIToResponses(respBody, requested); werr == nil {
 				sendBody = wrapped
@@ -549,6 +558,9 @@ func kindOf(kind string) apiFormat {
 	if kind == "anthropic" {
 		return fmtAnthropic
 	}
+	if kind == "gemini" {
+		return fmtGemini
+	}
 	return fmtOpenAI
 }
 
@@ -626,6 +638,9 @@ func (h *Handlers) relay(ctx context.Context, w http.ResponseWriter, baseURL str
 	if kind == "anthropic" {
 		path = "/v1/messages"
 	}
+	if kind == "gemini" {
+		path = "/v1beta/models/" + modelFromBody(payload) + ":generateContent"
+	}
 	req, err := h.buildUpstreamRequest(ctx, baseURL, kind, path, payload, r, apiKeyEnv, false)
 	if err != nil {
 		return 0, nil, "", 0, streamUsage{}, err
@@ -663,6 +678,9 @@ func (h *Handlers) relayStream(ctx context.Context, w http.ResponseWriter, baseU
 	path := "/v1/chat/completions"
 	if kind == "anthropic" {
 		path = "/v1/messages"
+	}
+	if kind == "gemini" {
+		path = "/v1beta/models/" + modelFromBody(payload) + ":generateContent?alt=sse"
 	}
 	req, err := h.buildUpstreamRequest(ctx, baseURL, kind, path, payload, r, apiKeyEnv, true)
 	if err != nil {

@@ -138,13 +138,14 @@ client. It works with `OPENAI_BASE_URL` out of the box.
 
 ### Connect everything (opencode-go, opencode zen, OpenRouter)
 
-The repo ships `config.all.json` — a ready config exposing **502 models**
+The repo ships `config.all.json` — a ready config exposing **506 models**
 through one endpoint, verified live:
 
 | Provider | Base URL | Models | Key env |
 | --- | --- | --- | --- |
 | `opencode-go` | `https://opencode.ai/zen/go/v1` | 26 (minimax, kimi, glm, deepseek, qwen, hy3, …) | `OPENCODE_GO_API_KEY` |
 | `opencode-zen` | `https://opencode.ai/zen/v1` | 62 (claude-fable-5, gemini, gpt-5.x, grok, free tier, …) | `OPENCODE_GO_API_KEY` |
+| `gemini` | `https://generativelanguage.googleapis.com` | 4 (gemini-2.0-flash, …) | `GEMINI_API_KEY` |
 | `openrouter` | `https://openrouter.ai/api/v1` | 413 (all OpenRouter models) | `OPENROUTER_API_KEY` |
 
 ```bash
@@ -153,7 +154,7 @@ cp config.all.json config.json
 #   OPENCODE_GO_API_KEY=<from ~/.local/share/opencode/auth.json>
 #   OPENROUTER_API_KEY=<your key>
 routre-cli serve
-curl http://127.0.0.1:20128/v1/models          # 502 models
+curl http://127.0.0.1:20128/v1/models          # 506 models
 # use any model as <provider>/<model>, e.g.:
 #   opencode-zen/claude-fable-5  opencode-go/hy3  openrouter/deepseek/deepseek-chat
 ```
@@ -347,7 +348,7 @@ the structured detail.
 | `price_in` / `price_out` | USD per 1M tokens for cost reporting (optional) |
 | `tiers` order | fallback order; keep subscription/cheap/free |
 
-A full reference config with 502 models lives in `config.all.json`; a
+A full reference config with 506 models lives in `config.all.json`; a
 minimal template is `config.example.json`.
 
 ---
@@ -455,8 +456,10 @@ npm/                     npm distribution (7 packages: 4 Unix + 2 scoped win32 +
 
 ## Known gaps (full detail in SPEC.md)
 
-- Gemini is not yet a streaming dialect (cross-kind works OpenAI↔Anthropic;
-  a third dialect would add 5 more pairs).
+- Gemini is a streaming dialect for **OpenAI↔Gemini** (request + non-streaming
+  response + in-flight SSE translation with `[DONE]` termination); the
+  **Anthropic↔Gemini** pair is not yet implemented (a gemini-kind provider
+  served to an Anthropic-dialect client is rejected, not mis-answered).
 - Token estimates are an approximation (≈4 bytes/token) — a benchmark
   instrument, not billing-grade (tiktoken integration is planned).
 - 90% is measured on tool-result tokens; output tokens are never

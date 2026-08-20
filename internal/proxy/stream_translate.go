@@ -42,6 +42,9 @@ type streamTranslator struct {
 	o2a o2aState
 	// r2o holds Responses->OpenAI state when to==openai.
 	r2o r2oState
+	// g2o holds Gemini->OpenAI state when to==gemini (OpenAI client, Gemini
+	// upstream).
+	g2o g2oState
 }
 
 func newStreamTranslator(from, to apiFormat) *streamTranslator {
@@ -65,6 +68,8 @@ func (st *streamTranslator) translate(evt sseEvent) (string, error) {
 		return st.o2a.translate(evt)
 	case st.from == fmtResponses && st.to == fmtOpenAI:
 		return st.r2o.translate(evt)
+	case st.from == fmtOpenAI && st.to == fmtGemini:
+		return st.g2o.translate(evt)
 	default:
 		return "", fmt.Errorf("unsupported stream translation %v -> %v", st.from, st.to)
 	}

@@ -17,6 +17,7 @@ type Kind string
 const (
 	KindOpenAI    Kind = "openai"
 	KindAnthropic Kind = "anthropic"
+	KindGemini    Kind = "gemini"
 )
 
 // Provider is one upstream endpoint within a tier.
@@ -119,9 +120,9 @@ func (c *Config) Validate() error {
 				return fmt.Errorf("config: duplicate provider name %q", p.Name)
 			}
 			seen[p.Name] = true
-			if p.Kind != KindOpenAI && p.Kind != KindAnthropic {
-				return fmt.Errorf("config: provider %q kind %q must be %q or %q",
-					p.Name, p.Kind, KindOpenAI, KindAnthropic)
+			if p.Kind != KindOpenAI && p.Kind != KindAnthropic && p.Kind != KindGemini {
+				return fmt.Errorf("config: provider %q kind %q must be %q, %q, or %q",
+					p.Name, p.Kind, KindOpenAI, KindAnthropic, KindGemini)
 			}
 			if p.BaseURL == "" {
 				return fmt.Errorf("config: provider %q has no base_url", p.Name)

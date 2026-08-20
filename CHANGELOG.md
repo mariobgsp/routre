@@ -7,6 +7,25 @@ Releases are published to npm via a `v*` tag push (see
 The format loosely follows [Keep a Changelog](https://keepachangelog.com/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.3.0] — 2026-08-20
+
+### Added
+
+- **Pure-Go BPE tokenizer.** `internal/tokenize` now counts tokens with the
+  real byte-pair-encoding algorithm using an embedded (gzip-compressed,
+  `go:embed`) `cl100k_base` vocab — replacing the old ≈4-bytes/token
+  heuristic. The ledger fallback, the `max_tokens` clamp, and the bench gate
+  now measure real BPE token counts. Still stdlib-only and offline. Falls
+  back to the heuristic on a missing/corrupt vocab (fail-open). The heap-
+  based merge runs in O(n log n), fast enough for the live clamp and the
+  multi-hundred-KB bench payloads.
+- **`scripts/gen-vocab.sh`** — fetches the vocab tables from the pinned
+  source URLs, gzip-compresses them into `internal/tokenize/data/`, and
+  records SHA-256 checksums for auditability.
+- **Bench gate re-baselined to the real tokenizer.** Re-measured:
+  aggregate tool reduction **91.2%**, per-payload worst **90.3%** (git-diff)
+  — still ≥ the 90% gate, so the target is unchanged.
+
 ## [0.2.0] — 2026-08-20
 
 ### Added
