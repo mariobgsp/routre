@@ -205,7 +205,11 @@ responses are never cached.
 8. **API keys** come from the environment (`api_key_env`), never from the
    config file; `check` verifies presence. 401/403 token refresh is P2.
 9. 9router's 20–40% claims are marketing-grade (its own diagnostics
-   walked them back); our numbers are reproducible via `make bench`.
+    walked them back); our numbers are reproducible via `make bench`.
+10. **Observability**: `GET /metrics` exposes Prometheus text (requests,
+    upstream failures, cache hit ratio, RTK applied/saved, cache-read
+    tokens, uptime), documented in the README. Per-request JSONL via the
+    `request_log` config field is tailed by `routre-cli logs`.
 
 ## 7. Validation plan (roadmap)
 

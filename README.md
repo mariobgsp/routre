@@ -128,7 +128,8 @@ export OPENAI_BASE_URL=http://127.0.0.1:20128      # Codex / opencode / etc.
 ```
 
 Endpoints: `POST /v1/chat/completions`, `POST /v1/responses`, `POST /v1/messages`,
-`GET /v1/models`, `GET /v1/status`, `GET /v1/usage`, `GET /healthz`.
+`GET /v1/models`, `GET /v1/status`, `GET /v1/usage`, `GET /healthz`,
+`GET /metrics` (Prometheus).
 
 `/v1/responses` speaks the OpenAI Responses API (what opencode's built-in
 `openai` provider uses) and is translated to `/v1/chat/completions` for the
@@ -294,6 +295,17 @@ cache savings, and estimated cost.
   tokens).
 - Tail per-request detail with `routre-cli logs`, see the ledger with
   `routre-cli list`.
+
+### Observability
+
+`GET /metrics` serves Prometheus exposition text — useful for dashboards and
+uptime checks. It reports: uptime seconds, request totals by
+client/provider/model/outcome class, upstream failover totals by
+provider/class, cache hits/misses and the hit ratio, RTK compression applied
+count and saved tokens, and provider-reported prompt-cache read tokens. The
+per-request JSONL log (`request_log` in config, tailed with
+`routre-cli logs`) and the `/v1/status` + `/v1/usage` JSON endpoints cover
+the structured detail.
 
 ### Always-on daemon
 
