@@ -1,0 +1,3 @@
+# BPE vocab sources (fetched 2026-08-20)
+cl100k_base.bpe.txt.gz https://openaipublic.blob.core.windows.net/encodings/cl100k_base.tiktoken 4bca5d8694836f08b2df559476c5ec1dd8d43725eb8a2970fd6ab6357411e79e
+o200k_base.bpe.txt.gz https://openaipublic.blob.core.windows.net/encodings/o200k_base.tiktoken e3b7c36ede9cb9926a6243df26a92d6d98d27977a5071992926ed40e3e39ea29

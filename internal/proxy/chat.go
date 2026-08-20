@@ -86,7 +86,7 @@ func clampMaxTokens(doc map[string]any, ceiling int64) {
 	promptEst := int64(0)
 	if msgs, ok := doc["messages"]; ok {
 		if mb, err := json.Marshal(msgs); err == nil {
-			promptEst = int64(tokenize.Estimate(string(mb)))
+			promptEst = int64(tokenize.Count(string(mb), tokenize.KindOpenAI))
 		}
 	}
 	// Reserve margin for tokenizer drift between our estimate and the
@@ -234,7 +234,7 @@ func (h *Handlers) route(w http.ResponseWriter, r *http.Request, api apiFormat) 
 			// payloads: e.g. 160k vs the provider's 191k).
 			cacheSaved := e.PromptTokens
 			if cacheSaved == 0 {
-				cacheSaved = int64(tokenize.Estimate(string(processed)))
+				cacheSaved = int64(tokenize.Count(string(processed), tokenize.KindOpenAI))
 			}
 			if cacheSaved > 0 {
 				h.Usage.Record(client, modelFromBody(processed), 0, 0, 0, cacheSaved, usage.Prices{}, 0)
@@ -438,7 +438,7 @@ func (h *Handlers) tryCandidate(ctx context.Context, w http.ResponseWriter, r *h
 		prompt := susage.prompt
 		completion := susage.completion
 		if prompt == 0 {
-			prompt = int64(tokenize.Estimate(string(processed)))
+			prompt = int64(tokenize.Count(string(processed), tokenize.KindOpenAI))
 		}
 		h.Usage.Record(client, modelFromBody(body), prompt, completion, int64(rtkSaved), 0, pricesOf(h.Cfg.Get(), p.Provider.Name), 0)
 		h.Metrics.Request(client, p.Provider.Name, requested, "ok")

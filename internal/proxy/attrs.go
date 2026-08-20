@@ -73,7 +73,7 @@ func usageFromBody(respBody, reqBody []byte) (prompt, completion int64, cost flo
 		}
 		return doc.Usage.PromptTokens, doc.Usage.CompletionTokens, doc.Usage.Cost, cr
 	}
-	return int64(tokenize.Estimate(string(reqBody))), 0, 0, 0
+	return int64(tokenize.Count(string(reqBody), tokenize.KindOpenAI)), 0, 0, 0
 }
 
 // pricesOf returns the configured prices for a provider by name.
