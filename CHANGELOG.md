@@ -25,6 +25,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 - **Bench gate re-baselined to the real tokenizer.** Re-measured:
   aggregate tool reduction **91.2%**, per-payload worst **90.3%** (git-diff)
   — still ≥ the 90% gate, so the target is unchanged.
+- **Gemini as a streaming dialect (OpenAI↔Gemini).** A `gemini`-kind
+  provider is now served to OpenAI-dialect clients: `openAIToGemini`
+  request translation, `geminiToOpenAI` non-streaming response translation
+  (carrying Gemini's `usageMetadata`), and an in-flight `g2o` SSE state
+  machine that turns `streamGenerateContent` into OpenAI
+  `chat.completion.chunk` with `[DONE]` termination. The relay builds the
+  per-model `/v1beta/models/:generateContent` path (`?alt=sse` for
+  streaming). The Anthropic↔Gemini pair is not yet implemented and is
+  rejected rather than mis-answered. `config.all.json` gains a `gemini`
+  provider (506 models). Covered by unit tests + a Gemini mock upstream and
+  non-streaming/streaming e2e relay tests.
+- **Optional gateway auth (`auth.secret_env`).** Off by default (zero-config
+  unchanged). When enabled, every `/v1/*` request must carry the shared
+  secret in the configured header (default `X-Routre-Key`) or
+  `Authorization: Bearer`; mismatches get a `401 invalid_api_key` with no
+  upstream call, and `/healthz` + `/metrics` stay open. `serve` mints a
+  per-process token (`~/.routre-cli/auth.tok`, 0600, regenerated each start)
+  so `list`/`check`/`logs` authenticate without pasting the secret. The
+  `setup` wizard offers to enable it and generates the secret into
+  `routre-cli.env`.
 
 ## [0.2.0] — 2026-08-20
 

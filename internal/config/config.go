@@ -169,9 +169,6 @@ func (c *Config) Validate() error {
 	if c.Cache.MaxBytes < 0 {
 		return errors.New("config: cache.max_bytes must be >= 0")
 	}
-	if c.Auth.SecretEnv != "" && c.Auth.Header == "" {
-		return errors.New("config: auth.header must be set when auth.secret_env is set")
-	}
 	return nil
 }
 
