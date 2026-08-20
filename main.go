@@ -35,7 +35,9 @@ import (
 	"routre-cli/internal/usage"
 )
 
-const version = "0.1.9"
+// version is the release version, injected at build time via
+// -ldflags "-X main.version=...". Defaults to "dev" for local builds.
+var version = "dev"
 
 func main() {
 	logger := log.New(os.Stderr, "[routre-cli] ", log.LstdFlags)
