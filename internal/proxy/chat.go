@@ -562,6 +562,55 @@ func writeStatus(w http.ResponseWriter, status int, body []byte, ct string) {
 	_, _ = w.Write(body)
 }
 
+// buildUpstreamRequest prepares an upstream *http.Request shared by the
+// streaming and non-streaming relay paths, applying the provider key and
+// passthrough headers. It does NOT send the request or read the response.
+// streaming selects whether the Accept header defaults to text/event-stream
+// (the non-streaming path sends no Accept when the client sent none).
+func (h *Handlers) buildUpstreamRequest(ctx context.Context, baseURL, kind, path string, payload []byte, r *http.Request, apiKeyEnv string, streaming bool) (*http.Request, error) {
+	base := strings.TrimRight(baseURL, "/")
+	if strings.HasSuffix(base, "/v1") {
+		// Base already includes the /v1 prefix (OpenAI-style base URLs).
+		path = strings.TrimPrefix(path, "/v1")
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, base+path, bytes.NewReader(payload))
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	// Upstreams that sniff Accept for SSE negotiation should see an explicit
+	// event-stream intent; default it when the client sent none on the
+	// streaming path.
+	if streaming {
+		if accept := r.Header.Get("Accept"); accept == "" {
+			req.Header.Set("Accept", "text/event-stream")
+		} else {
+			req.Header.Set("Accept", accept)
+		}
+	}
+	// Provider API key: the gateway holds the key (from api_key_env), NOT
+	// the client. A client-sent Authorization header is only a placeholder
+	// (many CLIs require one); it must never reach the upstream.
+	providerKey, missing := upstreamKey(apiKeyEnv)
+	if missing {
+		return nil, fmt.Errorf("provider key %s is not set (use `routre-cli setup` or export it)", apiKeyEnv)
+	}
+	if kind == "anthropic" {
+		req.Header.Set("X-Api-Key", providerKey)
+		req.Header.Set("Anthropic-Version", firstNonEmpty(r.Header.Get("Anthropic-Version"), "2023-06-01"))
+	} else {
+		req.Header.Set("Authorization", "Bearer "+providerKey)
+	}
+	// Provider-specific passthroughs (identical on both paths so beta-gated
+	// features behave the same streaming and non-streaming).
+	for _, hdr := range []string{"Anthropic-Version", "Anthropic-Beta", "OpenAI-Beta"} {
+		if v := r.Header.Get(hdr); v != "" {
+			req.Header.Set(hdr, v)
+		}
+	}
+	return req, nil
+}
+
 // relay performs the actual upstream call.
 // For non-streaming it returns (status, body, contentType, retryAfter, err).
 // For streaming it streams SSE to w and returns (0, nil, "", retryAfter, err)
@@ -577,36 +626,9 @@ func (h *Handlers) relay(ctx context.Context, w http.ResponseWriter, baseURL str
 	if kind == "anthropic" {
 		path = "/v1/messages"
 	}
-	base := strings.TrimRight(baseURL, "/")
-	if strings.HasSuffix(base, "/v1") {
-		// Base already includes the /v1 prefix (OpenAI-style base URLs).
-		path = strings.TrimPrefix(path, "/v1")
-	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, base+path, bytes.NewReader(payload))
+	req, err := h.buildUpstreamRequest(ctx, baseURL, kind, path, payload, r, apiKeyEnv, false)
 	if err != nil {
 		return 0, nil, "", 0, streamUsage{}, err
-	}
-	// Provider API key: the gateway holds the key (from api_key_env), NOT
-	// the client. A client-sent Authorization header is only a placeholder
-	// (many CLIs require one); it must never reach the upstream.
-	providerKey, missing := upstreamKey(apiKeyEnv)
-	if missing {
-		return 0, nil, "", 0, streamUsage{}, fmt.Errorf("provider key %s is not set (use `routre-cli setup` or export it)", apiKeyEnv)
-	}
-	if kind == "anthropic" {
-		req.Header.Set("X-Api-Key", providerKey)
-		req.Header.Set("Anthropic-Version", firstNonEmpty(r.Header.Get("Anthropic-Version"), "2023-06-01"))
-	} else {
-		req.Header.Set("Authorization", "Bearer "+providerKey)
-	}
-	// Content-Type is required by some upstreams (opencode.ai returns 500
-	// without it); the streaming path sets it too.
-	req.Header.Set("Content-Type", "application/json")
-	// Provider-specific passthroughs.
-	for _, hdr := range []string{"Anthropic-Version", "Anthropic-Beta", "OpenAI-Beta"} {
-		if v := r.Header.Get(hdr); v != "" {
-			req.Header.Set(hdr, v)
-		}
 	}
 
 	resp, err := h.HTTPClient.Do(req)
@@ -642,39 +664,9 @@ func (h *Handlers) relayStream(ctx context.Context, w http.ResponseWriter, baseU
 	if kind == "anthropic" {
 		path = "/v1/messages"
 	}
-	base := strings.TrimRight(baseURL, "/")
-	if strings.HasSuffix(base, "/v1") {
-		path = strings.TrimPrefix(path, "/v1")
-	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, base+path, bytes.NewReader(payload))
+	req, err := h.buildUpstreamRequest(ctx, baseURL, kind, path, payload, r, apiKeyEnv, true)
 	if err != nil {
 		return 0, nil, "", 0, streamUsage{}, err
-	}
-	req.Header.Set("Content-Type", "application/json")
-	// Upstreams that sniff Accept for SSE negotiation should see an
-	// explicit event-stream intent; default it when the client sent none.
-	accept := r.Header.Get("Accept")
-	if accept == "" {
-		accept = "text/event-stream"
-	}
-	req.Header.Set("Accept", accept)
-	// Same key policy as relay: the gateway's key wins, never the client's.
-	providerKey, missing := upstreamKey(apiKeyEnv)
-	if missing {
-		return 0, nil, "", 0, streamUsage{}, fmt.Errorf("provider key %s is not set (use `routre-cli setup` or export it)", apiKeyEnv)
-	}
-	if kind == "anthropic" {
-		req.Header.Set("X-Api-Key", providerKey)
-		req.Header.Set("Anthropic-Version", firstNonEmpty(r.Header.Get("Anthropic-Version"), "2023-06-01"))
-	} else {
-		req.Header.Set("Authorization", "Bearer "+providerKey)
-	}
-	// Beta-feature passthroughs (mirror the non-streaming relay; beta-gated
-	// features must work identically on both paths).
-	for _, hdr := range []string{"Anthropic-Version", "Anthropic-Beta", "OpenAI-Beta"} {
-		if v := r.Header.Get(hdr); v != "" {
-			req.Header.Set(hdr, v)
-		}
 	}
 
 	resp, err := h.HTTPClient.Do(req)
