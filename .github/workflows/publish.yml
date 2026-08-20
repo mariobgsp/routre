@@ -32,6 +32,9 @@ permissions:
 jobs:
   publish:
     runs-on: ubuntu-latest
+    env:
+      # e.g. "v0.3.0"; used to make publishing idempotent (skip already-live versions)
+      VERSION: ${{ github.ref_name }}
     steps:
       - uses: actions/checkout@v4
 
@@ -57,17 +60,28 @@ jobs:
 
       # Platform packages first (the launcher depends on them), then the
       # launcher. No NODE_AUTH_TOKEN: npm CLI 11.5.1+ exchanges the OIDC
-      # token automatically when no registry auth is configured.
+      # token automatically when no registry auth is configured. Publishing
+      # is idempotent: an already-live version is skipped, not failed (a
+      # local publish followed by a tag push no longer errors).
       - name: Publish platform packages
         working-directory: npm/dist
         run: |
+          VER="${VERSION#v}"
           for pkg in routre-cli-linux-x64 routre-cli-linux-arm64 \
                      routre-cli-darwin-x64 routre-cli-darwin-arm64; do
-            npm publish "$pkg"-*.tgz --access public
+            if npm view "$pkg@$VER" version >/dev/null 2>&1; then
+              echo "==> $pkg@$VER already published; skipping"
+            else
+              npm publish "$pkg"-*.tgz --access public
+            fi
           done
           for pkg in mariobgsp-routre-cli-win32-x64 \
                      mariobgsp-routre-cli-win32-arm64; do
-            npm publish "$pkg"-*.tgz --access public
+            if npm view "$pkg@$VER" version >/dev/null 2>&1; then
+              echo "==> $pkg@$VER already published; skipping"
+            else
+              npm publish "$pkg"-*.tgz --access public
+            fi
           done
 
       - name: Publish to GitHub Packages (scoped packages only)
@@ -80,14 +94,25 @@ jobs:
         env:
           NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
+          VER="${VERSION#v}"
           mkdir -p "$HOME/.npmrc"
           npm config set //npm.pkg.github.com/:_authToken "${NODE_AUTH_TOKEN}"
           npm config set @mariobgsp:registry=https://npm.pkg.github.com
           for pkg in mariobgsp-routre-cli-win32-x64 \
                      mariobgsp-routre-cli-win32-arm64; do
-            npm publish "$pkg"-*.tgz
+            if npm view "$pkg@$VER" version >/dev/null 2>&1; then
+              echo "==> $pkg@$VER already on GitHub Packages; skipping"
+            else
+              npm publish "$pkg"-*.tgz
+            fi
           done
 
       - name: Publish launcher (npmjs)
         working-directory: npm/dist
-        run: npm publish routre-cli-*.tgz --access public
+        run: |
+          VER="${VERSION#v}"
+          if npm view "routre-cli@$VER" version >/dev/null 2>&1; then
+            echo "==> routre-cli@$VER already published; skipping"
+          else
+            npm publish routre-cli-*.tgz --access public
+          fi
