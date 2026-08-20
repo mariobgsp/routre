@@ -316,6 +316,7 @@ func providerServes(models []string, provider, model string) bool {
 //     provider must list the model or a free variant of it. This preserves
 //     the OpenRouter 402-cascade guard (don't ask a provider for a model it
 //     has never advertised).
+//
 // Free variants are preferred over the paid model when the request is
 // unqualified: a provider listing "m-free" serves "m" requests via the
 // free variant first.

@@ -59,10 +59,10 @@ func TestResponsesNonStreamingRequestTranslation(t *testing.T) {
 
 	// The client must receive a Responses envelope.
 	var env struct {
-		Object      string `json:"object"`
-		Status      string `json:"status"`
-		Model       string `json:"model"`
-		Output      []struct {
+		Object string `json:"object"`
+		Status string `json:"status"`
+		Model  string `json:"model"`
+		Output []struct {
 			Type    string `json:"type"`
 			Content []struct {
 				Type string `json:"type"`

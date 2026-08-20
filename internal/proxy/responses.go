@@ -57,28 +57,28 @@ type responsesContentBlock struct {
 // selection. Returns the chat body (with "messages" and "max_tokens").
 func responsesToOpenAI(body []byte) ([]byte, error) {
 	var in struct {
-		Model               string          `json:"model"`
-		Instructions        string          `json:"instructions"`
-		Input               json.RawMessage `json:"input"`
-		MaxOutputTokens     int             `json:"max_output_tokens"`
-		Temperature         *float64        `json:"temperature"`
-		Stream              bool            `json:"stream"`
-		Tools               []json.RawMessage `json:"tools"`
-		ToolChoice          json.RawMessage `json:"tool_choice"`
-		ParallelToolCalls   *bool           `json:"parallel_tool_calls"`
+		Model             string            `json:"model"`
+		Instructions      string            `json:"instructions"`
+		Input             json.RawMessage   `json:"input"`
+		MaxOutputTokens   int               `json:"max_output_tokens"`
+		Temperature       *float64          `json:"temperature"`
+		Stream            bool              `json:"stream"`
+		Tools             []json.RawMessage `json:"tools"`
+		ToolChoice        json.RawMessage   `json:"tool_choice"`
+		ParallelToolCalls *bool             `json:"parallel_tool_calls"`
 	}
 	if err := json.Unmarshal(body, &in); err != nil {
 		return nil, err
 	}
 
-type chatToolCall struct {
-	ID       string `json:"id"`
-	Type     string `json:"type"`
-	Function struct {
-		Name      string `json:"name"`
-		Arguments string `json:"arguments"`
-	} `json:"function"`
-}
+	type chatToolCall struct {
+		ID       string `json:"id"`
+		Type     string `json:"type"`
+		Function struct {
+			Name      string `json:"name"`
+			Arguments string `json:"arguments"`
+		} `json:"function"`
+	}
 
 	type chatMsg struct {
 		Role       string         `json:"role"`
@@ -86,7 +86,6 @@ type chatToolCall struct {
 		ToolCallID string         `json:"tool_call_id,omitempty"`
 		ToolCalls  []chatToolCall `json:"tool_calls,omitempty"`
 	}
-
 
 	var msgs []chatMsg
 	if in.Instructions != "" {
@@ -253,8 +252,8 @@ func openAIToResponses(chatBody []byte, model string) ([]byte, error) {
 		Created int64  `json:"created"`
 		Model   string `json:"model"`
 		Choices []struct {
-			Index        int `json:"index"`
-			Message      struct {
+			Index   int `json:"index"`
+			Message struct {
 				Role      string `json:"role"`
 				Content   string `json:"content"`
 				ToolCalls []struct {

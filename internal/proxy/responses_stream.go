@@ -225,11 +225,11 @@ func (s *r2oState) renderContentPartAdded(it *r2oItem) string {
 
 func (s *r2oState) renderTextDelta(it *r2oItem, fragment string) string {
 	return renderResponsesEvent("response.output_text.delta", map[string]any{
-		"type":           "response.output_text.delta",
-		"item_id":        it.id,
-		"output_index":   it.index,
-		"content_index":  0,
-		"delta":          fragment,
+		"type":          "response.output_text.delta",
+		"item_id":       it.id,
+		"output_index":  it.index,
+		"content_index": 0,
+		"delta":         fragment,
 	})
 }
 
