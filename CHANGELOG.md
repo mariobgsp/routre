@@ -7,6 +7,33 @@ Releases are published to npm via a `v*` tag push (see
 The format loosely follows [Keep a Changelog](https://keepachangelog.com/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.2.0] — 2026-08-20
+
+### Added
+
+- **CI test + bench gate (`.github/workflows/ci.yml`).** fmt, vet, `go test`,
+  `go test -race`, the 90% RTK bench gate, and fuzz smoke now run on every
+  push and PR — the bench gate previously ran only locally.
+- **`routre-cli list --json`.** Emits the providers/ledger/totals data as one
+  JSON document for scripting; the table output is unchanged.
+- **Fuzz targets** for the SSE frame parser and the RTK pipeline (no-panic /
+  never-grow invariants).
+- **Tests** for `internal/metrics`, `internal/reqlog`, `internal/mock`, and
+  the `list`/`setup` commands.
+- **Version single-sourcing.** `main.version` is injected via `-ldflags`
+  (Makefile + npm build), read from the launcher `package.json` by the npm
+  build — prevents the stale-version bug from recurring.
+- **Documented `/metrics`** Prometheus endpoint in the README/SPEC.
+
+### Changed
+
+- Provider API keys now live in an in-memory keystore
+  (`internal/keystore`) instead of being mutated into the process
+  environment on 401/403 refresh — no torn-key state under concurrent
+  auth failures.
+- `config.Load`/`Reload` and the `relay`/`relayStream` upstream request
+  construction were deduplicated behind shared helpers (no behavior change).
+
 ## [0.1.9] — 2026-08-20
 
 ### Added
