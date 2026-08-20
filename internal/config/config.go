@@ -183,51 +183,36 @@ func (s *Store) SetOnLoad(fn func(Config)) {
 // file (if present) is loaded into the process environment first, so users
 // never need shell exports.
 func (s *Store) Load() error {
-	if err := LoadEnvFile(EnvFilePath(s.path)); err != nil {
-		return err
-	}
-	data, err := os.ReadFile(s.path)
-	if err != nil {
-		if os.IsNotExist(err) {
-			// Defaults are already in place.
-			return nil
-		}
-		return fmt.Errorf("config: read %s: %w", s.path, err)
-	}
-	cfg := Default()
-	if err := json.Unmarshal(data, &cfg); err != nil {
-		return fmt.Errorf("config: parse %s: %w", s.path, err)
-	}
-	if err := cfg.Validate(); err != nil {
-		return fmt.Errorf("config: %w", err)
-	}
-	s.mu.Lock()
-	s.cfg = cfg
-	fn := s.onLoad
-	s.mu.Unlock()
-	if fn != nil {
-		fn(cfg)
-	}
-	return nil
+	return s.loadLocked("load")
 }
 
 // Reload re-reads the config file, applying the OnLoad callback on success.
 // The env file is reloaded first so newly added keys take effect without a
 // restart.
 func (s *Store) Reload() error {
+	return s.loadLocked("reload")
+}
+
+// loadLocked is the shared read+validate+swap used by Load and Reload.
+// what is the verb used in error messages ("load" or "reload").
+func (s *Store) loadLocked(what string) error {
 	if err := LoadEnvFile(EnvFilePath(s.path)); err != nil {
 		return err
 	}
 	data, err := os.ReadFile(s.path)
 	if err != nil {
-		return fmt.Errorf("config: reload read %s: %w", s.path, err)
+		if what == "load" && os.IsNotExist(err) {
+			// Defaults are already in place.
+			return nil
+		}
+		return fmt.Errorf("config: %s read %s: %w", what, s.path, err)
 	}
 	cfg := Default()
 	if err := json.Unmarshal(data, &cfg); err != nil {
-		return fmt.Errorf("config: reload parse %s: %w", s.path, err)
+		return fmt.Errorf("config: %s parse %s: %w", what, s.path, err)
 	}
 	if err := cfg.Validate(); err != nil {
-		return fmt.Errorf("config: reload: %w", err)
+		return fmt.Errorf("config: %s: %w", what, err)
 	}
 	s.mu.Lock()
 	s.cfg = cfg

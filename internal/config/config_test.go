@@ -111,3 +111,27 @@ func TestInvalidReloadKeepsPrevious(t *testing.T) {
 		t.Fatal("previous config must be retained")
 	}
 }
+
+func TestLoadReloadShareBehavior(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.json")
+	if err := os.WriteFile(path, []byte(`{"listen":"127.0.0.1:1","tiers":[]}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	s := NewStore(path)
+	if err := s.Load(); err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if got := s.Get().Listen; got != "127.0.0.1:1" {
+		t.Fatalf("Load listen = %q", got)
+	}
+	if err := os.WriteFile(path, []byte(`{"listen":"127.0.0.1:2","tiers":[]}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Reload(); err != nil {
+		t.Fatalf("Reload: %v", err)
+	}
+	if got := s.Get().Listen; got != "127.0.0.1:2" {
+		t.Fatalf("Reload listen = %q", got)
+	}
+}
