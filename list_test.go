@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"encoding/json"
 	"strings"
 	"testing"
 
@@ -59,5 +60,27 @@ func TestPrintUsageToNoTraffic(t *testing.T) {
 	printUsageTo(&buf, nil, false)
 	if !strings.Contains(buf.String(), "no traffic yet") {
 		t.Fatalf("expected 'no traffic yet' message, got %q", buf.String())
+	}
+}
+
+func TestBuildListJSONShape(t *testing.T) {
+	doc, err := buildListJSON([]usage.Row{{Provider: "codex", Model: "m", Requests: 1}}, []map[string]any{
+		{"name": "openrouter", "key_set": true},
+	}, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var parsed map[string]any
+	if err := json.Unmarshal(doc, &parsed); err != nil {
+		t.Fatalf("invalid JSON: %v\n%s", err, doc)
+	}
+	for _, k := range []string{"providers", "ledger", "totals", "source"} {
+		if _, ok := parsed[k]; !ok {
+			t.Fatalf("JSON missing key %q: %s", k, doc)
+		}
+	}
+	totals := parsed["totals"].(map[string]any)
+	if totals["requests"] != float64(1) {
+		t.Fatalf("totals.requests = %v", totals["requests"])
 	}
 }

@@ -19,12 +19,16 @@ import (
 // live cooldown status from a running gateway) and token/cost usage grouped
 // by client (coding agent), with totals. Works fully offline from config +
 // persisted usage when the gateway is not running.
-func cmdList(cfgPath, url string, logger *log.Logger) error {
+func cmdList(cfgPath, url string, asJSON bool, logger *log.Logger) error {
 	st := config.NewStore(cfgPath)
 	if err := st.Load(); err != nil {
 		return err
 	}
 	cfg := st.Get()
+
+	if asJSON {
+		return cmdListJSON(cfg, url)
+	}
 
 	fmt.Println("== configured providers ==")
 	if len(cfg.Tiers) == 0 {
@@ -88,6 +92,76 @@ func cmdList(cfgPath, url string, logger *log.Logger) error {
 	}
 	printUsage(rows, live)
 	return nil
+}
+
+// cmdListJSON renders the same data as the table (providers, ledger, totals)
+// as one JSON document for scripting. It never errors on an unreachable
+// gateway — it reports providers from config and usage from the persisted
+// file, exactly like the table path.
+func cmdListJSON(cfg config.Config, url string) error {
+	providers := make([]map[string]any, 0, len(cfg.Tiers))
+	for _, t := range cfg.Tiers {
+		for _, p := range t.Providers {
+			_, keySet := lookupKey(p.APIKeyEnv)
+			providers = append(providers, map[string]any{
+				"name": p.Name, "tier": t.Name, "kind": string(p.Kind),
+				"base_url": p.BaseURL, "api_key_env": p.APIKeyEnv,
+				"models": p.Models, "key_set": keySet,
+			})
+		}
+	}
+
+	rows := []usage.Row{}
+	live := false
+	if u, err := fetchJSON(url + "/v1/usage"); err == nil {
+		if ra, ok := u["rows"].([]any); ok {
+			for _, r := range ra {
+				rows = append(rows, parseRow(r))
+			}
+		}
+		live = true
+	}
+	if len(rows) == 0 && !live {
+		if use, lerr := usage.Load(usageFilePath()); lerr == nil {
+			rows = use.Snapshot()
+		}
+	}
+
+	doc, err := buildListJSON(rows, providers, live)
+	if err != nil {
+		return err
+	}
+	fmt.Println(string(doc))
+	return nil
+}
+
+// buildListJSON builds the list --json document. ledgers rows plus the
+// per-provider metadata and aggregate totals.
+func buildListJSON(rows []usage.Row, providers []map[string]any, live bool) ([]byte, error) {
+	var prompt, completion, saved, requests int64
+	var cost, savedUSD float64
+	for _, r := range rows {
+		prompt += r.PromptTokens
+		completion += r.CompletionTokens
+		saved += r.TotalSavedTokens()
+		requests += r.Requests
+		cost += r.CostUSD
+		savedUSD += r.SavedUSD
+	}
+	doc := map[string]any{
+		"source":    map[string]any{"live": live},
+		"providers": providers,
+		"ledger":    rows,
+		"totals": map[string]any{
+			"requests":          requests,
+			"prompt_tokens":     prompt,
+			"completion_tokens": completion,
+			"saved_tokens":      saved,
+			"cost_usd":          cost,
+			"saved_usd":         savedUSD,
+		},
+	}
+	return json.MarshalIndent(doc, "", "  ")
 }
 
 // printUsage renders the token/cost ledger grouped by client, with totals.

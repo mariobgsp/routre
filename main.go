@@ -59,6 +59,7 @@ func run(args []string, logger *log.Logger) error {
 	port := fs.String("port", "", "override listen address (e.g. :20128)")
 	target := fs.Float64("target", 90, "bench: required token-reduction %% (0 disables the gate)")
 	url := fs.String("url", "http://127.0.0.1:20128", "list: gateway base URL to query")
+	asJSON := fs.Bool("json", false, "list: emit JSON instead of the table")
 	autostart := fs.Bool("autostart", false, "start: enable auto-start (systemctl enable / launchctl load -w); stop: disable auto-start (systemctl disable / launchctl unload -w)")
 
 	// `logs` owns its own flag set (-n, -f, -config); the shared flags
@@ -94,7 +95,7 @@ func run(args []string, logger *log.Logger) error {
 		return cmdRestart(*cfgPath, logger)
 
 	case "list":
-		return cmdList(*cfgPath, *url, logger)
+		return cmdList(*cfgPath, *url, *asJSON, logger)
 
 	case "logs":
 		return cmdLogs("", args, logger)
