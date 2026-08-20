@@ -285,10 +285,19 @@ func pct(saved, base int64) float64 {
 	return 100 * float64(saved) / float64(base)
 }
 
-// fetchJSON GETs url and decodes a JSON object. Non-200 is an error.
+// fetchJSON GETs url and decodes a JSON object. Non-200 is an error. When a
+// per-process CLI token exists (gateway auth enabled), it is sent as
+// Authorization: Bearer so list works without pasting the shared secret.
 func fetchJSON(url string) (map[string]any, error) {
 	client := &http.Client{Timeout: 3 * time.Second}
-	resp, err := client.Get(url)
+	req, err := http.NewRequest(http.MethodGet, url, nil)
+	if err != nil {
+		return nil, err
+	}
+	if tok := readProcessToken(); tok != "" {
+		req.Header.Set("Authorization", "Bearer "+tok)
+	}
+	resp, err := client.Do(req)
 	if err != nil {
 		return nil, err
 	}

@@ -320,6 +320,29 @@ the structured detail.
   without an installed service they fall back to a detached background
   process logging to `~/.routre-cli/daemon.log`.
 
+### Security (optional gateway auth)
+
+The gateway binds `127.0.0.1` by default, so it is only reachable from the
+local machine — but any local process could still send requests through it
+and burn your provider keys. For shared machines or extra hardening you can
+enable a **shared secret**:
+
+```jsonc
+"auth": { "secret_env": "ROUTRE_SECRET", "header": "X-Routre-Key" }
+```
+
+With `auth.secret_env` set, every `/v1/*` request must carry the matching
+secret in the configured header (or `Authorization: Bearer <secret>`);
+mismatches get a `401 invalid_api_key` with no upstream call. `/healthz`
+and `/metrics` stay open for probes/scrapers. The secret lives in
+`routre-cli.env` (0600), never in the config.
+
+`routre-cli setup` offers to enable this and generates a random secret.
+When enabled, `routre-cli serve` also mints a one-time **process token**
+(`~/.routre-cli/auth.tok`, 0600, regenerated each start) so the local
+`list`/`check`/`logs` commands keep working without you pasting the secret
+into flags.
+
 ---
 
 ## Configuration

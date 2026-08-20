@@ -214,6 +214,11 @@ responses are never cached.
     upstream failures, cache hit ratio, RTK applied/saved, cache-read
     tokens, uptime), documented in the README. Per-request JSONL via the
     `request_log` config field is tailed by `routre-cli logs`.
+11. **Optional gateway auth**: `auth.secret_env` protects every `/v1/*`
+    request with a shared secret (off by default; `/healthz` + `/metrics`
+    exempt). A per-process CLI token (`~/.routre-cli/auth.tok`, regenerated
+    each start) lets `list`/`check`/`logs` authenticate. Documented in the
+    README "Security" section.
 
 ## 7. Validation plan (roadmap)
 

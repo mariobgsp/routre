@@ -17,12 +17,15 @@
 package main
 
 import (
+	"crypto/rand"
+	"encoding/hex"
 	"flag"
 	"fmt"
 	"log"
 	"os"
 	"os/signal"
 	"path/filepath"
+	"strings"
 	"syscall"
 	"time"
 
@@ -179,6 +182,20 @@ func cmdServe(cfgPath, port string, logger *log.Logger) error {
 	reqlog.SetPath(cfg.RequestLog)
 	srv := proxy.New(h, logger)
 
+	// When gateway auth is enabled, seed the shared secret into the keystore
+	// and mint a per-process CLI token so `list`/`check`/`logs` keep working.
+	if cfg.Auth.SecretEnv != "" {
+		if v, ok := os.LookupEnv(cfg.Auth.SecretEnv); ok && v != "" {
+			h.Keys.Set(cfg.Auth.SecretEnv, v)
+		}
+		tok, terr := mintProcessToken()
+		if terr != nil {
+			return terr
+		}
+		srv.SetProcessToken(tok)
+		logger.Printf("gateway auth enabled; CLI token written to %s", authTokenPath())
+	}
+
 	ln, err := srv.Listen(cfg.Listen)
 	if err != nil {
 		return err
@@ -289,4 +306,45 @@ func usageFilePath() string {
 		home = "."
 	}
 	return filepath.Join(home, ".routre-cli", "usage.json")
+}
+
+// authTokenPath returns the per-process CLI token location (used when
+// gateway auth is enabled, so the local CLI can authenticate without the
+// user pasting the shared secret into flags).
+func authTokenPath() string {
+	if dir := os.Getenv("ROUTRE_CLI_DATA_DIR"); dir != "" {
+		return filepath.Join(dir, "auth.tok")
+	}
+	home, err := os.UserHomeDir()
+	if err != nil {
+		home = "."
+	}
+	return filepath.Join(home, ".routre-cli", "auth.tok")
+}
+
+// mintProcessToken generates a random 32-byte token, writes it to auth.tok
+// (0600), and returns it. Called by serve at startup when auth is enabled.
+func mintProcessToken() (string, error) {
+	b := make([]byte, 32)
+	if _, err := rand.Read(b); err != nil {
+		return "", err
+	}
+	tok := hex.EncodeToString(b)
+	path := authTokenPath()
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		return "", err
+	}
+	if err := os.WriteFile(path, []byte(tok), 0o600); err != nil {
+		return "", err
+	}
+	return tok, nil
+}
+
+// readProcessToken reads the per-process CLI token ("" if absent).
+func readProcessToken() string {
+	b, err := os.ReadFile(authTokenPath())
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(string(b))
 }

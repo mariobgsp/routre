@@ -66,6 +66,20 @@ type CacheConfig struct {
 	PromptCache bool `json:"prompt_cache,omitempty"`
 }
 
+// AuthConfig is the optional gateway shared-secret protection. When
+// SecretEnv is set (and non-empty), every /v1/* request must present the
+// matching secret. Off by default (SecretEnv empty) — zero-config behavior
+// is unchanged.
+type AuthConfig struct {
+	// SecretEnv is the env var (from routre-cli.env or the environment)
+	// holding the shared secret. Empty = auth disabled.
+	SecretEnv string `json:"secret_env,omitempty"`
+	// Header is the HTTP header carrying the secret. Defaults to
+	// X-Routre-Key when empty. "Authorization: Bearer <secret>" is also
+	// accepted.
+	Header string `json:"header,omitempty"`
+}
+
 // Config is the root document.
 type Config struct {
 	// Listen is the bind address, e.g. "127.0.0.1:20128".
@@ -74,6 +88,8 @@ type Config struct {
 	Tiers    []Tier      `json:"tiers"`
 	RTK      RTKConfig   `json:"rtk"`
 	Cache    CacheConfig `json:"cache"`
+	// Auth: optional shared-secret protection for the gateway port.
+	Auth AuthConfig `json:"auth"`
 	// RequestLog: path of the per-request JSONL log ("" = disabled).
 	RequestLog string `json:"request_log"`
 	// PreferredModel: the user's default model (their preferred provider).
@@ -152,6 +168,9 @@ func (c *Config) Validate() error {
 	}
 	if c.Cache.MaxBytes < 0 {
 		return errors.New("config: cache.max_bytes must be >= 0")
+	}
+	if c.Auth.SecretEnv != "" && c.Auth.Header == "" {
+		return errors.New("config: auth.header must be set when auth.secret_env is set")
 	}
 	return nil
 }
