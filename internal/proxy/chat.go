@@ -591,7 +591,7 @@ func (h *Handlers) buildUpstreamRequest(ctx context.Context, baseURL, kind, path
 	// Provider API key: the gateway holds the key (from api_key_env), NOT
 	// the client. A client-sent Authorization header is only a placeholder
 	// (many CLIs require one); it must never reach the upstream.
-	providerKey, missing := upstreamKey(apiKeyEnv)
+	providerKey, missing := h.providerKey(apiKeyEnv)
 	if missing {
 		return nil, fmt.Errorf("provider key %s is not set (use `routre-cli setup` or export it)", apiKeyEnv)
 	}
@@ -853,13 +853,25 @@ func readRawFrame(br *bufio.Reader) ([]byte, bool, error) {
 }
 
 // upstreamKey returns the provider's API key from the environment. The
-// gateway holds keys; clients never need to know them.
+// gateway holds keys; clients never need to know them. It is the fallback
+// for tests that construct a Handlers without a keystore.
 func upstreamKey(envName string) (string, bool) {
 	v := os.Getenv(envName)
 	if v == "" {
 		return "", true
 	}
 	return v, false
+}
+
+// providerKey returns the provider key from the gateway's keystore, falling
+// back to the process environment when no keystore is wired (tests).
+func (h *Handlers) providerKey(envName string) (string, bool) {
+	if h != nil && h.Keys != nil {
+		if v, ok := h.Keys.Get(envName); ok && v != "" {
+			return v, false
+		}
+	}
+	return upstreamKey(envName)
 }
 
 // bearerKey extracts the bearer token from the incoming Authorization header
@@ -905,25 +917,12 @@ func parseRetryAfter(s string) time.Duration {
 }
 
 // refreshCredentials re-reads the routre-cli.env key file and reports
-// whether the provider's API key actually changed as a result. Serialized
-// with a mutex so concurrent 401s from one rotation don't race the reload.
-// The mutex makes an in-flight guard unnecessary: when the key file is
-// absent or the value is unchanged it returns false, and the caller treats
-// it as a permanent auth failure (fails over).
+// whether the provider's API key actually changed as a result. The keystore
+// serializes concurrent refreshes under its own mutex and never mutates the
+// process environment.
 func (h *Handlers) refreshCredentials(apiKeyEnv string) bool {
-	h.refreshMu.Lock()
-	defer h.refreshMu.Unlock()
-	old := os.Getenv(apiKeyEnv)
-	// Force a real re-read: LoadEnvFile only sets vars that are absent, so
-	// the rotated value is ignored unless we clear the key first.
-	_ = os.Unsetenv(apiKeyEnv)
-	if err := config.LoadEnvFile(config.EnvFilePath(h.Cfg.Path())); err != nil {
-		// Restore the old value so the provider isn't left keyless.
-		_ = os.Setenv(apiKeyEnv, old)
-		return false
-	}
-	newV := os.Getenv(apiKeyEnv)
-	return newV != "" && newV != old
+	_, changed := h.Keys.Refresh(config.EnvFilePath(h.Cfg.Path()), apiKeyEnv)
+	return changed
 }
 
 // injectPromptCache marks Anthropic cache breakpoints on an outbound
