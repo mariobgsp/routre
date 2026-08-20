@@ -14,6 +14,7 @@ import {
   chmodSync,
   copyFileSync,
   existsSync,
+  readFileSync,
 } from "node:fs";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -21,7 +22,10 @@ import { fileURLToPath } from "node:url";
 const root = join(dirname(fileURLToPath(import.meta.url)), "..");
 const npmDir = join(root, "npm");
 const distDir = join(npmDir, "dist");
-const version = "0.1.8";
+// Single source of truth for the npm version is the launcher package.json.
+const version = JSON.parse(
+  readFileSync(join(npmDir, "routre-cli", "package.json"), "utf8"),
+).version;
 
 const targets = [
   {
@@ -102,7 +106,7 @@ for (const t of targets) {
   const out = join(binDir, `routre-cli${t.ext}`);
 
   console.log(`building ${t.pkg} (${t.goos}/${t.arch})...`);
-  run(`go build -trimpath -ldflags "-s -w" -o "${out}" .`, {
+  run(`go build -trimpath -ldflags "-s -w -X main.version=${version}" -o "${out}" .`, {
     cwd: root,
     stdio: "inherit",
     env: { ...process.env, GOOS: t.goos, GOARCH: t.arch, CGO_ENABLED: "0" },

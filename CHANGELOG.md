@@ -7,6 +7,86 @@ Releases are published to npm via a `v*` tag push (see
 The format loosely follows [Keep a Changelog](https://keepachangelog.com/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.3.0] — 2026-08-20
+
+### Added
+
+- **Pure-Go BPE tokenizer.** `internal/tokenize` now counts tokens with the
+  real byte-pair-encoding algorithm using an embedded (gzip-compressed,
+  `go:embed`) `cl100k_base` vocab — replacing the old ≈4-bytes/token
+  heuristic. The ledger fallback, the `max_tokens` clamp, and the bench gate
+  now measure real BPE token counts. Still stdlib-only and offline. Falls
+  back to the heuristic on a missing/corrupt vocab (fail-open). The heap-
+  based merge runs in O(n log n), fast enough for the live clamp and the
+  multi-hundred-KB bench payloads.
+- **`scripts/gen-vocab.sh`** — fetches the vocab tables from the pinned
+  source URLs, gzip-compresses them into `internal/tokenize/data/`, and
+  records SHA-256 checksums for auditability.
+- **Bench gate re-baselined to the real tokenizer.** Re-measured:
+  aggregate tool reduction **91.2%**, per-payload worst **90.3%** (git-diff)
+  — still ≥ the 90% gate, so the target is unchanged.
+- **Gemini as a streaming dialect (OpenAI↔Gemini).** A `gemini`-kind
+  provider is now served to OpenAI-dialect clients: `openAIToGemini`
+  request translation, `geminiToOpenAI` non-streaming response translation
+  (carrying Gemini's `usageMetadata`), and an in-flight `g2o` SSE state
+  machine that turns `streamGenerateContent` into OpenAI
+  `chat.completion.chunk` with `[DONE]` termination. The relay builds the
+  per-model `/v1beta/models/:generateContent` path (`?alt=sse` for
+  streaming). The Anthropic↔Gemini pair is not yet implemented and is
+  rejected rather than mis-answered. `config.all.json` gains a `gemini`
+  provider (506 models). Covered by unit tests + a Gemini mock upstream and
+  non-streaming/streaming e2e relay tests.
+- **Optional gateway auth (`auth.secret_env`).** Off by default (zero-config
+  unchanged). When enabled, every `/v1/*` request must carry the shared
+  secret in the configured header (default `X-Routre-Key`) or
+  `Authorization: Bearer`; mismatches get a `401 invalid_api_key` with no
+  upstream call, and `/healthz` + `/metrics` stay open. `serve` mints a
+  per-process token (`~/.routre-cli/auth.tok`, 0600, regenerated each start)
+  so `list`/`check`/`logs` authenticate without pasting the secret. The
+  `setup` wizard offers to enable it and generates the secret into
+  `routre-cli.env`.
+
+## [0.2.0] — 2026-08-20
+
+### Added
+
+- **CI test + bench gate (`.github/workflows/ci.yml`).** fmt, vet, `go test`,
+  `go test -race`, the 90% RTK bench gate, and fuzz smoke now run on every
+  push and PR — the bench gate previously ran only locally.
+- **`routre-cli list --json`.** Emits the providers/ledger/totals data as one
+  JSON document for scripting; the table output is unchanged.
+- **Fuzz targets** for the SSE frame parser and the RTK pipeline (no-panic /
+  never-grow invariants).
+- **Tests** for `internal/metrics`, `internal/reqlog`, `internal/mock`, and
+  the `list`/`setup` commands.
+- **Version single-sourcing.** `main.version` is injected via `-ldflags`
+  (Makefile + npm build), read from the launcher `package.json` by the npm
+  build — prevents the stale-version bug from recurring.
+- **Documented `/metrics`** Prometheus endpoint in the README/SPEC.
+
+### Changed
+
+- Provider API keys now live in an in-memory keystore
+  (`internal/keystore`) instead of being mutated into the process
+  environment on 401/403 refresh — no torn-key state under concurrent
+  auth failures.
+- `config.Load`/`Reload` and the `relay`/`relayStream` upstream request
+  construction were deduplicated behind shared helpers (no behavior change).
+
+## [0.1.9] — 2026-08-20
+
+### Added
+
+- **OpenAI Responses API bridge (`/v1/responses`).** opencode's built-in
+  `openai` provider speaks the Responses API, not `chat.completions`, so it
+  could not use the gateway with plain `OPENAI_BASE_URL`. Inbound Responses
+  requests are translated to `chat.completions` for relay, then wrapped back
+  into the Responses envelope for non-streaming clients or re-emitted as the
+  named Responses SSE events (`response.created`, `output_text.delta`,
+  `response.completed`, …) for streaming. Only openai-kind upstreams can serve
+  a Responses request; an anthropic upstream is rejected rather than silently
+  mis-answered. Covered by `responses_test.go` / `responses_stream_test.go`.
+
 ## [0.1.8] — 2026-08-19
 
 ### Added

@@ -1,0 +1,29 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.26"
+      - name: gofmt
+        run: test -z "$(gofmt -l . | grep -v '^npm/')"
+      - name: vet
+        run: go vet ./...
+      - name: test
+        run: go test ./...
+      - name: race
+        run: go test -race ./...
+      - name: bench gate
+        run: go run . bench -config config.example.json -target 90
+      - name: fuzz smoke
+        run: |
+          go test ./internal/proxy -run=^$ -fuzz=FuzzSSEFrame -fuzztime=30s
+          go test ./internal/rtk -run=^$ -fuzz=FuzzRTKApply -fuzztime=30s

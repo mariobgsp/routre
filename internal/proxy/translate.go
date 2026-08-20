@@ -16,6 +16,8 @@ func translateBody(from, to apiFormat, body []byte) ([]byte, error) {
 		return openAItoAnthropic(body)
 	case from == fmtAnthropic && to == fmtOpenAI:
 		return anthropicToOpenAI(body)
+	case from == fmtOpenAI && to == fmtGemini:
+		return openAIToGemini(body)
 	default:
 		return nil, fmt.Errorf("unsupported translation %v -> %v", from, to)
 	}

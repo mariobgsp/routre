@@ -17,12 +17,15 @@
 package main
 
 import (
+	"crypto/rand"
+	"encoding/hex"
 	"flag"
 	"fmt"
 	"log"
 	"os"
 	"os/signal"
 	"path/filepath"
+	"strings"
 	"syscall"
 	"time"
 
@@ -35,7 +38,9 @@ import (
 	"routre-cli/internal/usage"
 )
 
-const version = "0.1.8"
+// version is the release version, injected at build time via
+// -ldflags "-X main.version=...". Defaults to "dev" for local builds.
+var version = "dev"
 
 func main() {
 	logger := log.New(os.Stderr, "[routre-cli] ", log.LstdFlags)
@@ -57,6 +62,7 @@ func run(args []string, logger *log.Logger) error {
 	port := fs.String("port", "", "override listen address (e.g. :20128)")
 	target := fs.Float64("target", 90, "bench: required token-reduction %% (0 disables the gate)")
 	url := fs.String("url", "http://127.0.0.1:20128", "list: gateway base URL to query")
+	asJSON := fs.Bool("json", false, "list: emit JSON instead of the table")
 	autostart := fs.Bool("autostart", false, "start: enable auto-start (systemctl enable / launchctl load -w); stop: disable auto-start (systemctl disable / launchctl unload -w)")
 
 	// `logs` owns its own flag set (-n, -f, -config); the shared flags
@@ -92,7 +98,7 @@ func run(args []string, logger *log.Logger) error {
 		return cmdRestart(*cfgPath, logger)
 
 	case "list":
-		return cmdList(*cfgPath, *url, logger)
+		return cmdList(*cfgPath, *url, *asJSON, logger)
 
 	case "logs":
 		return cmdLogs("", args, logger)
@@ -175,6 +181,20 @@ func cmdServe(cfgPath, port string, logger *log.Logger) error {
 	// explicitly for the initial config too.
 	reqlog.SetPath(cfg.RequestLog)
 	srv := proxy.New(h, logger)
+
+	// When gateway auth is enabled, seed the shared secret into the keystore
+	// and mint a per-process CLI token so `list`/`check`/`logs` keep working.
+	if cfg.Auth.SecretEnv != "" {
+		if v, ok := os.LookupEnv(cfg.Auth.SecretEnv); ok && v != "" {
+			h.Keys.Set(cfg.Auth.SecretEnv, v)
+		}
+		tok, terr := mintProcessToken()
+		if terr != nil {
+			return terr
+		}
+		srv.SetProcessToken(tok)
+		logger.Printf("gateway auth enabled; CLI token written to %s", authTokenPath())
+	}
 
 	ln, err := srv.Listen(cfg.Listen)
 	if err != nil {
@@ -286,4 +306,45 @@ func usageFilePath() string {
 		home = "."
 	}
 	return filepath.Join(home, ".routre-cli", "usage.json")
+}
+
+// authTokenPath returns the per-process CLI token location (used when
+// gateway auth is enabled, so the local CLI can authenticate without the
+// user pasting the shared secret into flags).
+func authTokenPath() string {
+	if dir := os.Getenv("ROUTRE_CLI_DATA_DIR"); dir != "" {
+		return filepath.Join(dir, "auth.tok")
+	}
+	home, err := os.UserHomeDir()
+	if err != nil {
+		home = "."
+	}
+	return filepath.Join(home, ".routre-cli", "auth.tok")
+}
+
+// mintProcessToken generates a random 32-byte token, writes it to auth.tok
+// (0600), and returns it. Called by serve at startup when auth is enabled.
+func mintProcessToken() (string, error) {
+	b := make([]byte, 32)
+	if _, err := rand.Read(b); err != nil {
+		return "", err
+	}
+	tok := hex.EncodeToString(b)
+	path := authTokenPath()
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		return "", err
+	}
+	if err := os.WriteFile(path, []byte(tok), 0o600); err != nil {
+		return "", err
+	}
+	return tok, nil
+}
+
+// readProcessToken reads the per-process CLI token ("" if absent).
+func readProcessToken() string {
+	b, err := os.ReadFile(authTokenPath())
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(string(b))
 }

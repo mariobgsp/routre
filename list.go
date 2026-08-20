@@ -3,6 +3,7 @@ package main
 import (
 	"encoding/json"
 	"fmt"
+	"io"
 	"log"
 	"net/http"
 	"os"
@@ -18,12 +19,16 @@ import (
 // live cooldown status from a running gateway) and token/cost usage grouped
 // by client (coding agent), with totals. Works fully offline from config +
 // persisted usage when the gateway is not running.
-func cmdList(cfgPath, url string, logger *log.Logger) error {
+func cmdList(cfgPath, url string, asJSON bool, logger *log.Logger) error {
 	st := config.NewStore(cfgPath)
 	if err := st.Load(); err != nil {
 		return err
 	}
 	cfg := st.Get()
+
+	if asJSON {
+		return cmdListJSON(cfg, url)
+	}
 
 	fmt.Println("== configured providers ==")
 	if len(cfg.Tiers) == 0 {
@@ -89,16 +94,91 @@ func cmdList(cfgPath, url string, logger *log.Logger) error {
 	return nil
 }
 
+// cmdListJSON renders the same data as the table (providers, ledger, totals)
+// as one JSON document for scripting. It never errors on an unreachable
+// gateway — it reports providers from config and usage from the persisted
+// file, exactly like the table path.
+func cmdListJSON(cfg config.Config, url string) error {
+	providers := make([]map[string]any, 0, len(cfg.Tiers))
+	for _, t := range cfg.Tiers {
+		for _, p := range t.Providers {
+			_, keySet := lookupKey(p.APIKeyEnv)
+			providers = append(providers, map[string]any{
+				"name": p.Name, "tier": t.Name, "kind": string(p.Kind),
+				"base_url": p.BaseURL, "api_key_env": p.APIKeyEnv,
+				"models": p.Models, "key_set": keySet,
+			})
+		}
+	}
+
+	rows := []usage.Row{}
+	live := false
+	if u, err := fetchJSON(url + "/v1/usage"); err == nil {
+		if ra, ok := u["rows"].([]any); ok {
+			for _, r := range ra {
+				rows = append(rows, parseRow(r))
+			}
+		}
+		live = true
+	}
+	if len(rows) == 0 && !live {
+		if use, lerr := usage.Load(usageFilePath()); lerr == nil {
+			rows = use.Snapshot()
+		}
+	}
+
+	doc, err := buildListJSON(rows, providers, live)
+	if err != nil {
+		return err
+	}
+	fmt.Println(string(doc))
+	return nil
+}
+
+// buildListJSON builds the list --json document. ledgers rows plus the
+// per-provider metadata and aggregate totals.
+func buildListJSON(rows []usage.Row, providers []map[string]any, live bool) ([]byte, error) {
+	var prompt, completion, saved, requests int64
+	var cost, savedUSD float64
+	for _, r := range rows {
+		prompt += r.PromptTokens
+		completion += r.CompletionTokens
+		saved += r.TotalSavedTokens()
+		requests += r.Requests
+		cost += r.CostUSD
+		savedUSD += r.SavedUSD
+	}
+	doc := map[string]any{
+		"source":    map[string]any{"live": live},
+		"providers": providers,
+		"ledger":    rows,
+		"totals": map[string]any{
+			"requests":          requests,
+			"prompt_tokens":     prompt,
+			"completion_tokens": completion,
+			"saved_tokens":      saved,
+			"cost_usd":          cost,
+			"saved_usd":         savedUSD,
+		},
+	}
+	return json.MarshalIndent(doc, "", "  ")
+}
+
 // printUsage renders the token/cost ledger grouped by client, with totals.
 // A coding agent is identified by User-Agent; unknown traffic is grouped
-// under "unknown".
+// under "unknown". Output goes to stdout.
 func printUsage(rows []usage.Row, live bool) {
-	fmt.Println("\n== token & cost ledger ==")
+	printUsageTo(os.Stdout, rows, live)
+}
+
+// printUsageTo is printUsage with an explicit output writer (testable).
+func printUsageTo(w io.Writer, rows []usage.Row, live bool) {
+	fmt.Fprintln(w, "\n== token & cost ledger ==")
 	source := "persisted"
 	if live {
 		source = "live"
 	}
-	fmt.Printf("  source: %s\n", source)
+	fmt.Fprintf(w, "  source: %s\n", source)
 
 	// Client rows: each client's totals across all providers/models.
 	byClient := map[string]*usage.Row{}
@@ -115,7 +195,7 @@ func printUsage(rows []usage.Row, live bool) {
 		byClient[c].Add(r)
 	}
 	if len(clients) == 0 {
-		fmt.Println("  no traffic yet — make a request through the gateway")
+		fmt.Fprintln(w, "  no traffic yet — make a request through the gateway")
 		return
 	}
 	sort.Strings(clients)
@@ -139,14 +219,14 @@ func printUsage(rows []usage.Row, live bool) {
 		totCost += cr.CostUSD
 		totSavedUSD += cr.SavedUSD
 
-		fmt.Printf("\n  %s\n", c)
-		fmt.Printf("    requests: %d\n", cr.Requests)
-		fmt.Printf("    consumed: %d tokens (%d in + %d out)\n",
+		fmt.Fprintf(w, "\n  %s\n", c)
+		fmt.Fprintf(w, "    requests: %d\n", cr.Requests)
+		fmt.Fprintf(w, "    consumed: %d tokens (%d in + %d out)\n",
 			cr.TotalTokens(), cr.PromptTokens, cr.CompletionTokens)
-		fmt.Printf("    saved:    %d tokens (rtk %d + cache %d)\n",
+		fmt.Fprintf(w, "    saved:    %d tokens (rtk %d + cache %d)\n",
 			cr.TotalSavedTokens(), cr.RTKSavedTokens, cr.CacheSavedTokens)
 		if cr.CacheReadTokens > 0 {
-			fmt.Printf("    cache read: %d tokens (provider-reported)\n", cr.CacheReadTokens)
+			fmt.Fprintf(w, "    cache read: %d tokens (provider-reported)\n", cr.CacheReadTokens)
 		}
 		costStr := "n/a (no prices configured)"
 		savedStr := "n/a"
@@ -154,11 +234,11 @@ func printUsage(rows []usage.Row, live bool) {
 			costStr = fmtMoney(cr.CostUSD)
 			savedStr = fmtMoney(cr.SavedUSD)
 		}
-		fmt.Printf("    cost:     %s   saved: %s\n", costStr, savedStr)
+		fmt.Fprintf(w, "    cost:     %s   saved: %s\n", costStr, savedStr)
 
 		rows := byClientModel[c]
 		if len(rows) > 1 || rows[0].Model != "" {
-			fmt.Printf("    by provider/model:\n")
+			fmt.Fprintf(w, "    by provider/model:\n")
 			sort.Slice(rows, func(i, j int) bool {
 				if rows[i].Provider != rows[j].Provider {
 					return rows[i].Provider < rows[j].Provider
@@ -171,15 +251,15 @@ func printUsage(rows []usage.Row, live bool) {
 				if r.CacheReadTokens > 0 {
 					line += fmt.Sprintf("  cache-read %d", r.CacheReadTokens)
 				}
-				fmt.Println(line)
+				fmt.Fprintln(w, line)
 			}
 		}
 	}
 
-	fmt.Println("\n  TOTAL")
-	fmt.Printf("    requests: %d\n", totRequests)
-	fmt.Printf("    consumed: %d tokens (%d in + %d out)\n", totPrompt+totCompletion, totPrompt, totCompletion)
-	fmt.Printf("    saved:    %d tokens (%.1f%% of consumed)\n",
+	fmt.Fprintln(w, "\n  TOTAL")
+	fmt.Fprintf(w, "    requests: %d\n", totRequests)
+	fmt.Fprintf(w, "    consumed: %d tokens (%d in + %d out)\n", totPrompt+totCompletion, totPrompt, totCompletion)
+	fmt.Fprintf(w, "    saved:    %d tokens (%.1f%% of consumed)\n",
 		totSaved, pct(totSaved, totPrompt+totCompletion+totSaved))
 	totalCostStr := "n/a"
 	totalSavedStr := "n/a"
@@ -187,7 +267,7 @@ func printUsage(rows []usage.Row, live bool) {
 		totalCostStr = fmtMoney(totCost)
 		totalSavedStr = fmtMoney(totSavedUSD)
 	}
-	fmt.Printf("    cost:     %s   saved: %s\n", totalCostStr, totalSavedStr)
+	fmt.Fprintf(w, "    cost:     %s   saved: %s\n", totalCostStr, totalSavedStr)
 }
 
 // fmtMoney renders USD with enough precision for tiny per-request costs.
@@ -205,10 +285,19 @@ func pct(saved, base int64) float64 {
 	return 100 * float64(saved) / float64(base)
 }
 
-// fetchJSON GETs url and decodes a JSON object. Non-200 is an error.
+// fetchJSON GETs url and decodes a JSON object. Non-200 is an error. When a
+// per-process CLI token exists (gateway auth enabled), it is sent as
+// Authorization: Bearer so list works without pasting the shared secret.
 func fetchJSON(url string) (map[string]any, error) {
 	client := &http.Client{Timeout: 3 * time.Second}
-	resp, err := client.Get(url)
+	req, err := http.NewRequest(http.MethodGet, url, nil)
+	if err != nil {
+		return nil, err
+	}
+	if tok := readProcessToken(); tok != "" {
+		req.Header.Set("Authorization", "Bearer "+tok)
+	}
+	resp, err := client.Do(req)
 	if err != nil {
 		return nil, err
 	}

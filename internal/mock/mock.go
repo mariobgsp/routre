@@ -31,6 +31,7 @@ type Server struct {
 	AbortMid       bool          // start SSE then abort
 	Stream         bool          // force SSE responses
 	Anthropic      bool          // emit Anthropic-style (event: ...) SSE frames
+	Gemini         bool          // emit Gemini generateContent responses
 	Count          atomic.Int64  // requests seen
 	LastBody       atomic.Value  // []byte of last request body
 	LastHeader     atomic.Value  // http.Header of last request
@@ -120,6 +121,14 @@ func (m *Server) SetAnthropic(on bool) {
 	m.Anthropic = on
 }
 
+// SetGemini makes the mock emit Gemini generateContent responses (and
+// streamGenerateContent SSE when the request is streaming).
+func (m *Server) SetGemini(on bool) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.Gemini = on
+}
+
 // SetModels configures the model list served by the /v1/models endpoint.
 func (m *Server) SetModels(models []string) {
 	m.mu.Lock()
@@ -162,6 +171,7 @@ func (m *Server) handle(w http.ResponseWriter, r *http.Request) {
 	abort := m.AbortMid
 	stream := m.Stream
 	anthropic := m.Anthropic
+	gemini := m.Gemini
 	delay := m.Delay
 	models := append([]string(nil), m.models...)
 	m.mu.Unlock()
@@ -210,6 +220,14 @@ func (m *Server) handle(w http.ResponseWriter, r *http.Request) {
 	streaming := stream
 	if !streaming {
 		streaming = bytes.Contains(body, []byte(`"stream":true`)) || bytes.Contains(body, []byte(`"stream": true`))
+	}
+	// Gemini signals streaming via the ?alt=sse URL query, not the body.
+	if gemini && r.URL.Query().Get("alt") == "sse" {
+		streaming = true
+	}
+	if gemini {
+		m.geminiResponse(w, streaming, m.Name)
+		return
 	}
 	if !streaming {
 		resp := map[string]any{
@@ -280,4 +298,34 @@ func (m *Server) handle(w http.ResponseWriter, r *http.Request) {
 
 func contains(b []byte, s string) bool {
 	return bytes.Contains(b, []byte(s))
+}
+
+// geminiResponse writes a Gemini generateContent (non-streaming) or
+// streamGenerateContent (SSE) response, matching the shapes the proxy's
+// Gemini translator consumes.
+func (m *Server) geminiResponse(w http.ResponseWriter, streaming bool, name string) {
+	resp := func() map[string]any {
+		return map[string]any{
+			"candidates": []any{map[string]any{
+				"content":      map[string]any{"role": "model", "parts": []any{map[string]any{"text": "gemini response from " + name}}},
+				"finishReason": "STOP",
+			}},
+			"usageMetadata": map[string]any{"promptTokenCount": 10, "candidatesTokenCount": 5},
+		}
+	}
+	if !streaming {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		_ = json.NewEncoder(w).Encode(resp())
+		return
+	}
+	w.Header().Set("Content-Type", "text/event-stream")
+	w.Header().Set("Cache-Control", "no-cache")
+	w.WriteHeader(http.StatusOK)
+	flusher, _ := w.(http.Flusher)
+	_, _ = w.Write([]byte("data: " + `{"candidates":[{"content":{"parts":[{"text":"from-` + name + `"}]}}]}` + "\n\n"))
+	_, _ = w.Write([]byte("data: " + `{"candidates":[{"content":{"parts":[]},"finishReason":"STOP"}]}` + "\n\n"))
+	if flusher != nil {
+		flusher.Flush()
+	}
 }

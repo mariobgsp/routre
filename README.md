@@ -127,18 +127,25 @@ export ANTHROPIC_BASE_URL=http://127.0.0.1:20128   # Claude Code
 export OPENAI_BASE_URL=http://127.0.0.1:20128      # Codex / opencode / etc.
 ```
 
-Endpoints: `POST /v1/chat/completions`, `POST /v1/messages`,
-`GET /v1/models`, `GET /v1/status`, `GET /v1/usage`, `GET /healthz`.
+Endpoints: `POST /v1/chat/completions`, `POST /v1/responses`, `POST /v1/messages`,
+`GET /v1/models`, `GET /v1/status`, `GET /v1/usage`, `GET /healthz`,
+`GET /metrics` (Prometheus).
+
+`/v1/responses` speaks the OpenAI Responses API (what opencode's built-in
+`openai` provider uses) and is translated to `/v1/chat/completions` for the
+upstream providers, then wrapped back into the Responses envelope for the
+client. It works with `OPENAI_BASE_URL` out of the box.
 
 ### Connect everything (opencode-go, opencode zen, OpenRouter)
 
-The repo ships `config.all.json` — a ready config exposing **501 models**
+The repo ships `config.all.json` — a ready config exposing **506 models**
 through one endpoint, verified live:
 
 | Provider | Base URL | Models | Key env |
 | --- | --- | --- | --- |
 | `opencode-go` | `https://opencode.ai/zen/go/v1` | 26 (minimax, kimi, glm, deepseek, qwen, hy3, …) | `OPENCODE_GO_API_KEY` |
 | `opencode-zen` | `https://opencode.ai/zen/v1` | 62 (claude-fable-5, gemini, gpt-5.x, grok, free tier, …) | `OPENCODE_GO_API_KEY` |
+| `gemini` | `https://generativelanguage.googleapis.com` | 4 (gemini-2.0-flash, …) | `GEMINI_API_KEY` |
 | `openrouter` | `https://openrouter.ai/api/v1` | 413 (all OpenRouter models) | `OPENROUTER_API_KEY` |
 
 ```bash
@@ -147,7 +154,7 @@ cp config.all.json config.json
 #   OPENCODE_GO_API_KEY=<from ~/.local/share/opencode/auth.json>
 #   OPENROUTER_API_KEY=<your key>
 routre-cli serve
-curl http://127.0.0.1:20128/v1/models          # 501 models
+curl http://127.0.0.1:20128/v1/models          # 506 models
 # use any model as <provider>/<model>, e.g.:
 #   opencode-zen/claude-fable-5  opencode-go/hy3  openrouter/deepseek/deepseek-chat
 ```
@@ -290,6 +297,17 @@ cache savings, and estimated cost.
 - Tail per-request detail with `routre-cli logs`, see the ledger with
   `routre-cli list`.
 
+### Observability
+
+`GET /metrics` serves Prometheus exposition text — useful for dashboards and
+uptime checks. It reports: uptime seconds, request totals by
+client/provider/model/outcome class, upstream failover totals by
+provider/class, cache hits/misses and the hit ratio, RTK compression applied
+count and saved tokens, and provider-reported prompt-cache read tokens. The
+per-request JSONL log (`request_log` in config, tailed with
+`routre-cli logs`) and the `/v1/status` + `/v1/usage` JSON endpoints cover
+the structured detail.
+
 ### Always-on daemon
 
 - `deploy/routre-cli.service` + `deploy/routre-cli.socket` (systemd;
@@ -301,6 +319,29 @@ cache savings, and estimated cost.
   manage the daemon through systemd (system or `--user` scope) or launchd;
   without an installed service they fall back to a detached background
   process logging to `~/.routre-cli/daemon.log`.
+
+### Security (optional gateway auth)
+
+The gateway binds `127.0.0.1` by default, so it is only reachable from the
+local machine — but any local process could still send requests through it
+and burn your provider keys. For shared machines or extra hardening you can
+enable a **shared secret**:
+
+```jsonc
+"auth": { "secret_env": "ROUTRE_SECRET", "header": "X-Routre-Key" }
+```
+
+With `auth.secret_env` set, every `/v1/*` request must carry the matching
+secret in the configured header (or `Authorization: Bearer <secret>`);
+mismatches get a `401 invalid_api_key` with no upstream call. `/healthz`
+and `/metrics` stay open for probes/scrapers. The secret lives in
+`routre-cli.env` (0600), never in the config.
+
+`routre-cli setup` offers to enable this and generates a random secret.
+When enabled, `routre-cli serve` also mints a one-time **process token**
+(`~/.routre-cli/auth.tok`, 0600, regenerated each start) so the local
+`list`/`check`/`logs` commands keep working without you pasting the secret
+into flags.
 
 ---
 
@@ -330,7 +371,7 @@ cache savings, and estimated cost.
 | `price_in` / `price_out` | USD per 1M tokens for cost reporting (optional) |
 | `tiers` order | fallback order; keep subscription/cheap/free |
 
-A full reference config with 501 models lives in `config.all.json`; a
+A full reference config with 506 models lives in `config.all.json`; a
 minimal template is `config.example.json`.
 
 ---
@@ -438,8 +479,10 @@ npm/                     npm distribution (7 packages: 4 Unix + 2 scoped win32 +
 
 ## Known gaps (full detail in SPEC.md)
 
-- Gemini is not yet a streaming dialect (cross-kind works OpenAI↔Anthropic;
-  a third dialect would add 5 more pairs).
+- Gemini is a streaming dialect for **OpenAI↔Gemini** (request + non-streaming
+  response + in-flight SSE translation with `[DONE]` termination); the
+  **Anthropic↔Gemini** pair is not yet implemented (a gemini-kind provider
+  served to an Anthropic-dialect client is rejected, not mis-answered).
 - Token estimates are an approximation (≈4 bytes/token) — a benchmark
   instrument, not billing-grade (tiktoken integration is planned).
 - 90% is measured on tool-result tokens; output tokens are never

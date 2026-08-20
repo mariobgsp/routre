@@ -2,6 +2,7 @@ package proxy
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"io"
 	"log"
@@ -730,5 +731,30 @@ func TestModelsEndpoint(t *testing.T) {
 	resp, data := get(t, base, "/v1/models")
 	if resp.StatusCode != 200 || !strings.Contains(string(data), "a/m") {
 		t.Fatalf("models: %d %s", resp.StatusCode, data)
+	}
+}
+
+func TestBuildUpstreamRequestHeaderParity(t *testing.T) {
+	t.Setenv("KEY_ENV", "secret")
+	h := &Handlers{}
+	req, err := h.buildUpstreamRequest(context.Background(),
+		"https://up.example.com/v1", "openai", "/chat/completions",
+		[]byte(`{"model":"m"}`), &http.Request{
+			Header: http.Header{"Anthropic-Beta": {"b1"}},
+		}, "KEY_ENV", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := req.Header.Get("Authorization"); got != "Bearer secret" {
+		t.Fatalf("Authorization = %q", got)
+	}
+	if got := req.Header.Get("Content-Type"); got != "application/json" {
+		t.Fatalf("Content-Type = %q", got)
+	}
+	if got := req.Header.Get("Anthropic-Beta"); got != "b1" {
+		t.Fatalf("Anthropic-Beta passthrough = %q", got)
+	}
+	if got := req.Header.Get("Accept"); got != "" {
+		t.Fatalf("Accept should be empty when client sent none, got %q", got)
 	}
 }

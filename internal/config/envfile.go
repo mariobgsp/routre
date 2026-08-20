@@ -64,3 +64,40 @@ func LoadEnvFile(path string) error {
 func EnvFilePath(cfgPath string) string {
 	return filepath.Join(filepath.Dir(cfgPath), envFileName)
 }
+
+// EnvFileValue reads a single key from the env file at path WITHOUT touching
+// the process environment (unlike LoadEnvFile). It returns the value and
+// whether the key is present. Missing file or key => ("" , false, nil).
+func EnvFileValue(path, key string) (string, bool, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return "", false, nil
+		}
+		return "", false, fmt.Errorf("env: read %s: %w", path, err)
+	}
+	sc := bufio.NewScanner(strings.NewReader(string(data)))
+	for sc.Scan() {
+		raw := strings.TrimSpace(sc.Text())
+		if raw == "" || strings.HasPrefix(raw, "#") {
+			continue
+		}
+		raw = strings.TrimPrefix(raw, "export ")
+		eq := strings.Index(raw, "=")
+		if eq <= 0 {
+			continue
+		}
+		k := strings.TrimSpace(raw[:eq])
+		if k != key {
+			continue
+		}
+		val := strings.TrimSpace(raw[eq+1:])
+		if len(val) >= 2 {
+			if (val[0] == '"' && val[len(val)-1] == '"') || (val[0] == '\'' && val[len(val)-1] == '\'') {
+				val = val[1 : len(val)-1]
+			}
+		}
+		return val, true, nil
+	}
+	return "", false, sc.Err()
+}

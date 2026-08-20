@@ -86,7 +86,7 @@ func clampMaxTokens(doc map[string]any, ceiling int64) {
 	promptEst := int64(0)
 	if msgs, ok := doc["messages"]; ok {
 		if mb, err := json.Marshal(msgs); err == nil {
-			promptEst = int64(tokenize.Estimate(string(mb)))
+			promptEst = int64(tokenize.Count(string(mb), tokenize.KindOpenAI))
 		}
 	}
 	// Reserve margin for tokenizer drift between our estimate and the
@@ -131,12 +131,17 @@ const (
 	fmtUnknown apiFormat = iota
 	fmtOpenAI
 	fmtAnthropic
+	fmtResponses
+	fmtGemini
 )
 
 // detectFormat guesses the dialect from the request path and body shape.
 func detectFormat(path string, body []byte) apiFormat {
 	if strings.HasSuffix(path, "/messages") {
 		return fmtAnthropic
+	}
+	if strings.HasSuffix(path, "/responses") {
+		return fmtResponses
 	}
 	if strings.HasSuffix(path, "/chat/completions") {
 		return fmtOpenAI
@@ -155,6 +160,12 @@ func (h *Handlers) route(w http.ResponseWriter, r *http.Request, api apiFormat) 
 	start := time.Now()
 	ctx := r.Context()
 	client := clientName(r)
+
+	// The dialect the CLIENT speaks (response boundary), which may differ
+	// from the internal `api` used for upstream relay. For Responses API
+	// requests we translate the inbound body to chat up front and keep the
+	// upstream `api` as fmtOpenAI; the response is re-wrapped on exit.
+	clientFmt := api
 
 	// Request-log + metrics emission on every exit path.
 	logReq := func(e reqlog.Entry) {
@@ -178,6 +189,23 @@ func (h *Handlers) route(w http.ResponseWriter, r *http.Request, api apiFormat) 
 			"error": map[string]any{"message": "empty request body", "type": "invalid_request_error"},
 		})
 		return
+	}
+
+	// Responses API: translate the inbound request to chat.completions so
+	// the rest of the pipeline (RTK, ordering, cache, candidate relay) is
+	// unchanged. Response re-wrapping happens on exit per clientFmt.
+	if api == fmtResponses {
+		translated, terr := responsesToOpenAI(body)
+		if terr != nil {
+			logReq(reqlog.Entry{Client: client, Status: http.StatusBadRequest, Class: "error"})
+			h.Metrics.Request(client, "", "", "error")
+			writeJSON(w, http.StatusBadRequest, map[string]any{
+				"error": map[string]any{"message": "could not parse Responses request: " + terr.Error(), "type": "invalid_request_error"},
+			})
+			return
+		}
+		body = translated
+		api = fmtOpenAI
 	}
 
 	streaming := isStreaming(body)
@@ -207,17 +235,27 @@ func (h *Handlers) route(w http.ResponseWriter, r *http.Request, api apiFormat) 
 			// payloads: e.g. 160k vs the provider's 191k).
 			cacheSaved := e.PromptTokens
 			if cacheSaved == 0 {
-				cacheSaved = int64(tokenize.Estimate(string(processed)))
+				cacheSaved = int64(tokenize.Count(string(processed), tokenize.KindOpenAI))
 			}
 			if cacheSaved > 0 {
 				h.Usage.Record(client, modelFromBody(processed), 0, 0, 0, cacheSaved, usage.Prices{}, 0)
 			}
 			h.Metrics.CacheHit()
 			logReq(reqlog.Entry{Client: client, Model: requested, Status: http.StatusOK, Class: "cache", PromptTokens: cacheSaved, CompletionTokens: e.CompletionTokens, RTKSavedTokens: int64(rtkSaved)})
-			w.Header().Set("Content-Type", e.ContentType)
+			// Responses API client: the cache stores the chat envelope, so
+			// re-wrap before serving.
+			cacheBody := e.Body
+			cacheCT := e.ContentType
+			if clientFmt == fmtResponses {
+				if wrapped, werr := openAIToResponses(e.Body, requested); werr == nil {
+					cacheBody = wrapped
+					cacheCT = "application/json"
+				}
+			}
+			w.Header().Set("Content-Type", cacheCT)
 			w.Header().Set("X-Llrouter-Cache", "hit")
 			w.WriteHeader(http.StatusOK)
-			_, _ = w.Write(e.Body)
+			_, _ = w.Write(cacheBody)
 			return
 		}
 		h.Metrics.CacheMiss()
@@ -267,7 +305,7 @@ func (h *Handlers) route(w http.ResponseWriter, r *http.Request, api apiFormat) 
 			if attempt > 0 {
 				time.Sleep(transientRetryDelay)
 			}
-			ok := h.tryCandidate(ctx, w, r, api, cand, requested, body, processed, streaming, client, rtkSaved, &lastErr, logReq)
+			ok := h.tryCandidate(ctx, w, r, api, cand, requested, body, processed, streaming, client, rtkSaved, clientFmt, &lastErr, logReq)
 			if ok {
 				return
 			}
@@ -296,7 +334,7 @@ func (h *Handlers) route(w http.ResponseWriter, r *http.Request, api apiFormat) 
 // The caller owns the transient-retry loop around this: a provider that
 // fails once is retried (transientRetryAttempts) before its failure is
 // reported to the router's cooldown state.
-func (h *Handlers) tryCandidate(ctx context.Context, w http.ResponseWriter, r *http.Request, api apiFormat, cand router.Candidate, requested string, body []byte, processed []byte, streaming bool, client string, rtkSaved int, lastErr *error, logReq func(reqlog.Entry)) bool {
+func (h *Handlers) tryCandidate(ctx context.Context, w http.ResponseWriter, r *http.Request, api apiFormat, cand router.Candidate, requested string, body []byte, processed []byte, streaming bool, client string, rtkSaved int, clientFmt apiFormat, lastErr *error, logReq func(reqlog.Entry)) bool {
 	p := cand.Provider
 
 	kind := p.Provider.Kind
@@ -323,7 +361,15 @@ func (h *Handlers) tryCandidate(ctx context.Context, w http.ResponseWriter, r *h
 	}
 	defer cancel()
 
-	crossKind := (api == fmtOpenAI && kind == "anthropic") || (api == fmtAnthropic && kind == "openai")
+	crossKind := (api == fmtOpenAI && kind == "anthropic") || (api == fmtAnthropic && kind == "openai") || (api == fmtOpenAI && kind == "gemini")
+	// Responses API only maps onto openai-kind upstreams (chat.completions).
+	// An anthropic or gemini upstream cannot be answered in the Responses
+	// envelope, so reject rather than emit an unparseable response.
+	if clientFmt == fmtResponses && (kind == "anthropic" || kind == "gemini") {
+		h.Router.ReportFailure(p, router.ErrClient)
+		*lastErr = fmt.Errorf("provider %s (kind=anthropic) cannot serve a Responses API request", p.Provider.Name)
+		return false
+	}
 	if crossKind {
 		// Cross-kind requests are translated request-side (payload) and,
 		// when streaming, response-side by translateStream inside streamRelay
@@ -358,7 +404,7 @@ func (h *Handlers) tryCandidate(ctx context.Context, w http.ResponseWriter, r *h
 		payload = injectPromptCache(payload)
 	}
 
-	status, respBody, ct, retryAfter, susage, rerr := h.relay(attemptCtx, w, p.Provider.BaseURL, r, payload, streaming, kind, p.Provider.APIKeyEnv, api)
+	status, respBody, ct, retryAfter, susage, rerr := h.relay(attemptCtx, w, p.Provider.BaseURL, r, payload, streaming, kind, p.Provider.APIKeyEnv, api, clientFmt)
 
 	if rerr != nil {
 		// Network/transport failure: retryable (unless mid-stream).
@@ -393,7 +439,7 @@ func (h *Handlers) tryCandidate(ctx context.Context, w http.ResponseWriter, r *h
 		prompt := susage.prompt
 		completion := susage.completion
 		if prompt == 0 {
-			prompt = int64(tokenize.Estimate(string(processed)))
+			prompt = int64(tokenize.Count(string(processed), tokenize.KindOpenAI))
 		}
 		h.Usage.Record(client, modelFromBody(body), prompt, completion, int64(rtkSaved), 0, pricesOf(h.Cfg.Get(), p.Provider.Name), 0)
 		h.Metrics.Request(client, p.Provider.Name, requested, "ok")
@@ -405,6 +451,22 @@ func (h *Handlers) tryCandidate(ctx context.Context, w http.ResponseWriter, r *h
 		h.Router.ReportSuccess(p)
 		if ct == "" {
 			ct = "application/json"
+		}
+		// Responses API client: wrap the chat envelope in the Responses
+		// response shape before caching/writing. Gemini upstream: translate
+		// the generateContent response back to OpenAI first (this also lets
+		// usageFromBody read Gemini's usageMetadata via the OpenAI shape).
+		sendBody := respBody
+		if kind == "gemini" {
+			if gb, gerr := geminiToOpenAI(respBody, modelFromBody(body)); gerr == nil {
+				respBody = gb
+				sendBody = gb
+			}
+		}
+		if clientFmt == fmtResponses {
+			if wrapped, werr := openAIToResponses(respBody, requested); werr == nil {
+				sendBody = wrapped
+			}
 		}
 		// Usage: parse provider-reported tokens when present; fall back
 		// to estimates. RTK savings land on the provider's row.
@@ -421,7 +483,7 @@ func (h *Handlers) tryCandidate(ctx context.Context, w http.ResponseWriter, r *h
 			w.Header().Set("X-Llrouter-Free", cand.Upstream)
 		}
 		w.WriteHeader(status)
-		_, _ = w.Write(respBody)
+		_, _ = w.Write(sendBody)
 		return true
 	}
 
@@ -441,7 +503,7 @@ func (h *Handlers) tryCandidate(ctx context.Context, w http.ResponseWriter, r *h
 			// the new key. Reports both success and failure to the router on
 			// the retry path — a successful auth retry must clear any
 			// cooldown this provider accrued from past failures.
-			if h.tryCandidate(ctx, w, r, api, cand, requested, body, processed, streaming, client, rtkSaved, lastErr, logReq) {
+			if h.tryCandidate(ctx, w, r, api, cand, requested, body, processed, streaming, client, rtkSaved, clientFmt, lastErr, logReq) {
 				return true
 			}
 		}
@@ -496,6 +558,9 @@ func kindOf(kind string) apiFormat {
 	if kind == "anthropic" {
 		return fmtAnthropic
 	}
+	if kind == "gemini" {
+		return fmtGemini
+	}
 	return fmtOpenAI
 }
 
@@ -509,21 +574,12 @@ func writeStatus(w http.ResponseWriter, status int, body []byte, ct string) {
 	_, _ = w.Write(body)
 }
 
-// relay performs the actual upstream call.
-// For non-streaming it returns (status, body, contentType, retryAfter, err).
-// For streaming it streams SSE to w and returns (0, nil, "", retryAfter, err)
-// where err is nil on success, retryable on pre-first-byte failure, or
-// router.StreamAborted() after the first byte. from is the client's dialect,
-// used for cross-kind streaming translation. retryAfter is the parsed
-// upstream Retry-After delay (0 when absent) on a non-2xx response.
-func (h *Handlers) relay(ctx context.Context, w http.ResponseWriter, baseURL string, r *http.Request, payload []byte, streaming bool, kind, apiKeyEnv string, from apiFormat) (int, []byte, string, time.Duration, streamUsage, error) {
-	if streaming {
-		return h.relayStream(ctx, w, baseURL, r, payload, kind, apiKeyEnv, from)
-	}
-	path := "/v1/chat/completions"
-	if kind == "anthropic" {
-		path = "/v1/messages"
-	}
+// buildUpstreamRequest prepares an upstream *http.Request shared by the
+// streaming and non-streaming relay paths, applying the provider key and
+// passthrough headers. It does NOT send the request or read the response.
+// streaming selects whether the Accept header defaults to text/event-stream
+// (the non-streaming path sends no Accept when the client sent none).
+func (h *Handlers) buildUpstreamRequest(ctx context.Context, baseURL, kind, path string, payload []byte, r *http.Request, apiKeyEnv string, streaming bool) (*http.Request, error) {
 	base := strings.TrimRight(baseURL, "/")
 	if strings.HasSuffix(base, "/v1") {
 		// Base already includes the /v1 prefix (OpenAI-style base URLs).
@@ -531,14 +587,25 @@ func (h *Handlers) relay(ctx context.Context, w http.ResponseWriter, baseURL str
 	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, base+path, bytes.NewReader(payload))
 	if err != nil {
-		return 0, nil, "", 0, streamUsage{}, err
+		return nil, err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	// Upstreams that sniff Accept for SSE negotiation should see an explicit
+	// event-stream intent; default it when the client sent none on the
+	// streaming path.
+	if streaming {
+		if accept := r.Header.Get("Accept"); accept == "" {
+			req.Header.Set("Accept", "text/event-stream")
+		} else {
+			req.Header.Set("Accept", accept)
+		}
 	}
 	// Provider API key: the gateway holds the key (from api_key_env), NOT
 	// the client. A client-sent Authorization header is only a placeholder
 	// (many CLIs require one); it must never reach the upstream.
-	providerKey, missing := upstreamKey(apiKeyEnv)
+	providerKey, missing := h.providerKey(apiKeyEnv)
 	if missing {
-		return 0, nil, "", 0, streamUsage{}, fmt.Errorf("provider key %s is not set (use `routre-cli setup` or export it)", apiKeyEnv)
+		return nil, fmt.Errorf("provider key %s is not set (use `routre-cli setup` or export it)", apiKeyEnv)
 	}
 	if kind == "anthropic" {
 		req.Header.Set("X-Api-Key", providerKey)
@@ -546,14 +613,37 @@ func (h *Handlers) relay(ctx context.Context, w http.ResponseWriter, baseURL str
 	} else {
 		req.Header.Set("Authorization", "Bearer "+providerKey)
 	}
-	// Content-Type is required by some upstreams (opencode.ai returns 500
-	// without it); the streaming path sets it too.
-	req.Header.Set("Content-Type", "application/json")
-	// Provider-specific passthroughs.
+	// Provider-specific passthroughs (identical on both paths so beta-gated
+	// features behave the same streaming and non-streaming).
 	for _, hdr := range []string{"Anthropic-Version", "Anthropic-Beta", "OpenAI-Beta"} {
 		if v := r.Header.Get(hdr); v != "" {
 			req.Header.Set(hdr, v)
 		}
+	}
+	return req, nil
+}
+
+// relay performs the actual upstream call.
+// For non-streaming it returns (status, body, contentType, retryAfter, err).
+// For streaming it streams SSE to w and returns (0, nil, "", retryAfter, err)
+// where err is nil on success, retryable on pre-first-byte failure, or
+// router.StreamAborted() after the first byte. from is the client's dialect,
+// used for cross-kind streaming translation. retryAfter is the parsed
+// upstream Retry-After delay (0 when absent) on a non-2xx response.
+func (h *Handlers) relay(ctx context.Context, w http.ResponseWriter, baseURL string, r *http.Request, payload []byte, streaming bool, kind, apiKeyEnv string, from apiFormat, clientFmt apiFormat) (int, []byte, string, time.Duration, streamUsage, error) {
+	if streaming {
+		return h.relayStream(ctx, w, baseURL, r, payload, kind, apiKeyEnv, clientFmt)
+	}
+	path := "/v1/chat/completions"
+	if kind == "anthropic" {
+		path = "/v1/messages"
+	}
+	if kind == "gemini" {
+		path = "/v1beta/models/" + modelFromBody(payload) + ":generateContent"
+	}
+	req, err := h.buildUpstreamRequest(ctx, baseURL, kind, path, payload, r, apiKeyEnv, false)
+	if err != nil {
+		return 0, nil, "", 0, streamUsage{}, err
 	}
 
 	resp, err := h.HTTPClient.Do(req)
@@ -589,39 +679,12 @@ func (h *Handlers) relayStream(ctx context.Context, w http.ResponseWriter, baseU
 	if kind == "anthropic" {
 		path = "/v1/messages"
 	}
-	base := strings.TrimRight(baseURL, "/")
-	if strings.HasSuffix(base, "/v1") {
-		path = strings.TrimPrefix(path, "/v1")
+	if kind == "gemini" {
+		path = "/v1beta/models/" + modelFromBody(payload) + ":generateContent?alt=sse"
 	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, base+path, bytes.NewReader(payload))
+	req, err := h.buildUpstreamRequest(ctx, baseURL, kind, path, payload, r, apiKeyEnv, true)
 	if err != nil {
 		return 0, nil, "", 0, streamUsage{}, err
-	}
-	req.Header.Set("Content-Type", "application/json")
-	// Upstreams that sniff Accept for SSE negotiation should see an
-	// explicit event-stream intent; default it when the client sent none.
-	accept := r.Header.Get("Accept")
-	if accept == "" {
-		accept = "text/event-stream"
-	}
-	req.Header.Set("Accept", accept)
-	// Same key policy as relay: the gateway's key wins, never the client's.
-	providerKey, missing := upstreamKey(apiKeyEnv)
-	if missing {
-		return 0, nil, "", 0, streamUsage{}, fmt.Errorf("provider key %s is not set (use `routre-cli setup` or export it)", apiKeyEnv)
-	}
-	if kind == "anthropic" {
-		req.Header.Set("X-Api-Key", providerKey)
-		req.Header.Set("Anthropic-Version", firstNonEmpty(r.Header.Get("Anthropic-Version"), "2023-06-01"))
-	} else {
-		req.Header.Set("Authorization", "Bearer "+providerKey)
-	}
-	// Beta-feature passthroughs (mirror the non-streaming relay; beta-gated
-	// features must work identically on both paths).
-	for _, hdr := range []string{"Anthropic-Version", "Anthropic-Beta", "OpenAI-Beta"} {
-		if v := r.Header.Get(hdr); v != "" {
-			req.Header.Set(hdr, v)
-		}
 	}
 
 	resp, err := h.HTTPClient.Do(req)
@@ -808,13 +871,25 @@ func readRawFrame(br *bufio.Reader) ([]byte, bool, error) {
 }
 
 // upstreamKey returns the provider's API key from the environment. The
-// gateway holds keys; clients never need to know them.
+// gateway holds keys; clients never need to know them. It is the fallback
+// for tests that construct a Handlers without a keystore.
 func upstreamKey(envName string) (string, bool) {
 	v := os.Getenv(envName)
 	if v == "" {
 		return "", true
 	}
 	return v, false
+}
+
+// providerKey returns the provider key from the gateway's keystore, falling
+// back to the process environment when no keystore is wired (tests).
+func (h *Handlers) providerKey(envName string) (string, bool) {
+	if h != nil && h.Keys != nil {
+		if v, ok := h.Keys.Get(envName); ok && v != "" {
+			return v, false
+		}
+	}
+	return upstreamKey(envName)
 }
 
 // bearerKey extracts the bearer token from the incoming Authorization header
@@ -860,25 +935,12 @@ func parseRetryAfter(s string) time.Duration {
 }
 
 // refreshCredentials re-reads the routre-cli.env key file and reports
-// whether the provider's API key actually changed as a result. Serialized
-// with a mutex so concurrent 401s from one rotation don't race the reload.
-// The mutex makes an in-flight guard unnecessary: when the key file is
-// absent or the value is unchanged it returns false, and the caller treats
-// it as a permanent auth failure (fails over).
+// whether the provider's API key actually changed as a result. The keystore
+// serializes concurrent refreshes under its own mutex and never mutates the
+// process environment.
 func (h *Handlers) refreshCredentials(apiKeyEnv string) bool {
-	h.refreshMu.Lock()
-	defer h.refreshMu.Unlock()
-	old := os.Getenv(apiKeyEnv)
-	// Force a real re-read: LoadEnvFile only sets vars that are absent, so
-	// the rotated value is ignored unless we clear the key first.
-	_ = os.Unsetenv(apiKeyEnv)
-	if err := config.LoadEnvFile(config.EnvFilePath(h.Cfg.Path())); err != nil {
-		// Restore the old value so the provider isn't left keyless.
-		_ = os.Setenv(apiKeyEnv, old)
-		return false
-	}
-	newV := os.Getenv(apiKeyEnv)
-	return newV != "" && newV != old
+	_, changed := h.Keys.Refresh(config.EnvFilePath(h.Cfg.Path()), apiKeyEnv)
+	return changed
 }
 
 // injectPromptCache marks Anthropic cache breakpoints on an outbound

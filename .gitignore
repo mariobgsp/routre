@@ -8,3 +8,6 @@ npm/routre-cli-*/binary/
 npm/@*/*/binary/
 /routre-cli
 /cmd/mock-upstream/mock-upstream
+
+# local-only design/plan documents (never committed)
+docs/superpowers/

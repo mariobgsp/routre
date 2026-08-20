@@ -5,11 +5,12 @@ import (
 	"log"
 	"net"
 	"net/http"
-	"sync"
+	"os"
 	"time"
 
 	"routre-cli/internal/cache"
 	"routre-cli/internal/config"
+	"routre-cli/internal/keystore"
 	"routre-cli/internal/metrics"
 	"routre-cli/internal/reqlog"
 	"routre-cli/internal/router"
@@ -29,11 +30,10 @@ type Handlers struct {
 	HTTPClient *http.Client
 	Usage      *usage.Store
 	Metrics    *metrics.Metrics
-
-	// refreshMu serializes credential refreshes (401/403 recovery) so a
-	// burst of concurrent auth failures from one key rotation doesn't race
-	// the env-file reload.
-	refreshMu sync.Mutex
+	// Keys holds provider API keys in memory (and, when auth is enabled, the
+	// gateway's shared secret). Refresh swaps rotated keys atomically without
+	// mutating the process environment.
+	Keys *keystore.Store
 }
 
 // newHTTPClient builds the upstream transport. Note: no overall timeout —
@@ -65,6 +65,17 @@ func NewHandlers(st *config.Store, rtr *router.Router, cch *cache.Cache, tk *rtk
 		HTTPClient: newHTTPClient(),
 		Usage:      use,
 		Metrics:    metrics.New(),
+		Keys:       keystore.New(),
+	}
+	// Seed the keystore from the process environment (which Load populated
+	// from routre-cli.env + shell exports). The keystore is the gateway's
+	// source of truth for upstream keys thereafter.
+	for _, t := range st.Get().Tiers {
+		for _, p := range t.Providers {
+			if v, ok := os.LookupEnv(p.APIKeyEnv); ok {
+				h.Keys.Set(p.APIKeyEnv, v)
+			}
+		}
 	}
 	st.SetOnLoad(func(c config.Config) {
 		// Rebuild router (provider lists may have changed). Cooldowns reset.
@@ -102,7 +113,7 @@ func (h *Handlers) Health(w http.ResponseWriter, _ *http.Request) {
 // NotFound answers every unmatched path.
 func (h *Handlers) NotFound(w http.ResponseWriter, _ *http.Request) {
 	writeJSON(w, http.StatusNotFound, map[string]any{
-		"error": map[string]any{"message": "not found: only /v1/chat/completions, /v1/messages, /v1/models, /v1/status, /healthz", "type": "not_found"},
+		"error": map[string]any{"message": "not found: only /v1/chat/completions, /v1/responses, /v1/messages, /v1/models, /v1/status, /healthz", "type": "not_found"},
 	})
 }
 

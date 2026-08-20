@@ -166,7 +166,25 @@ responses are never cached.
    first-byte is preserved: a translate/read failure before any byte reaches
    the client is retryable; after it, the stream can't fail over (matches
    same-kind StreamingAborted). Covered by golden SSE-fixture tests in
-   `stream_translate_test.go`. Gemini remains a follow-up (5 more pairs).
+   `stream_translate_test.go`. **Gemini is now a third dialect for the
+   OpenAI↔Gemini pair** (request translation `openAIToGemini`, non-streaming
+   response `geminiToOpenAI`, and in-flight `g2o` SSE translation with
+   `[DONE]`); the Anthropic↔Gemini pair is not yet implemented — a gemini
+   upstream served to an Anthropic client is rejected, not mis-answered.
+1a. **The Responses API dialect (`/v1/responses`) is bridged** so opencode's
+   built-in `openai` provider — which speaks the OpenAI Responses API, not
+   chat.completions — works through the gateway with plain `OPENAI_BASE_URL`.
+   Inbound Responses requests are translated to chat.completions for relay
+   (`responsesToOpenAI`), then the response is wrapped back into the
+   Responses envelope (`openAIToResponses`) for non-streaming, or re-emitted
+   as the named Responses SSE events (`response.created`, `output_text.delta`,
+   `response.completed`, …) via the chat→responses stream translator. Only
+   openai-kind upstreams can serve a Responses request; an anthropic upstream
+   is rejected (not silently mis-answered). Known losses (mirror cross-kind):
+   Responses-only controls (`store`, `metadata`, `previous_response_id`, …)
+   are dropped; tool calls ride the OpenAI function-call dialect that
+   opencode's responses provider re-admits identically. Covered in
+   `responses_test.go` / `responses_stream_test.go`.
 2. **Non-streaming cross-kind translation is lossy**: tool definitions are
    dropped; `tool_use` blocks flatten to text; `tool_result` loses the
    `tool_call_id` link; images become placeholders. Documented in
@@ -191,7 +209,16 @@ responses are never cached.
 8. **API keys** come from the environment (`api_key_env`), never from the
    config file; `check` verifies presence. 401/403 token refresh is P2.
 9. 9router's 20–40% claims are marketing-grade (its own diagnostics
-   walked them back); our numbers are reproducible via `make bench`.
+    walked them back); our numbers are reproducible via `make bench`.
+10. **Observability**: `GET /metrics` exposes Prometheus text (requests,
+    upstream failures, cache hit ratio, RTK applied/saved, cache-read
+    tokens, uptime), documented in the README. Per-request JSONL via the
+    `request_log` config field is tailed by `routre-cli logs`.
+11. **Optional gateway auth**: `auth.secret_env` protects every `/v1/*`
+    request with a shared secret (off by default; `/healthz` + `/metrics`
+    exempt). A per-process CLI token (`~/.routre-cli/auth.tok`, regenerated
+    each start) lets `list`/`check`/`logs` authenticate. Documented in the
+    README "Security" section.
 
 ## 7. Validation plan (roadmap)
 

@@ -69,10 +69,10 @@ func cmdBench(cfgPath string, targetPct float64, logger *log.Logger) error {
 		if err != nil {
 			return err
 		}
-		pb := tokenize.Estimate(string(data))
+		pb := tokenize.Count(string(data), tokenize.KindOpenAI)
 		tb := toolTokens(data)
 		out, changed := tk.Apply(data)
-		pa := tokenize.Estimate(string(out))
+		pa := tokenize.Count(string(out), tokenize.KindOpenAI)
 		ta := toolTokens(out)
 		res := result{
 			file:          filepath.Base(f),
@@ -90,7 +90,7 @@ func cmdBench(cfgPath string, targetPct float64, logger *log.Logger) error {
 	}
 
 	fmt.Println("routre-cli bench — RTK token reduction")
-	fmt.Println("metric: estimated tokens (approx 4 bytes/token); see internal/tokenize")
+	fmt.Println("metric: BPE token count (cl100k_base, embedded); see internal/tokenize")
 	fmt.Println()
 	fmt.Printf("%-28s %10s %10s %10s %10s %6s\n", "file", "payload→", "payload%", "tool→", "tool%", "touched")
 	payloadRed, toolRed := 0.0, 0.0
@@ -166,7 +166,7 @@ func toolTokens(body []byte) int {
 		switch c := content.(type) {
 		case string:
 			if role == "tool" {
-				total += tokenize.Estimate(c)
+				total += tokenize.Count(c, tokenize.KindOpenAI)
 			}
 		case []any:
 			for _, blk := range c {
@@ -174,12 +174,12 @@ func toolTokens(body []byte) int {
 				switch b["type"] {
 				case "tool_result":
 					if s, ok := b["content"].(string); ok {
-						total += tokenize.Estimate(s)
+						total += tokenize.Count(s, tokenize.KindOpenAI)
 					} else if arr, ok := b["content"].([]any); ok {
 						for _, tb := range arr {
 							if tbm, ok := tb.(map[string]any); ok {
 								if s, ok := tbm["text"].(string); ok {
-									total += tokenize.Estimate(s)
+									total += tokenize.Count(s, tokenize.KindOpenAI)
 								}
 							}
 						}
@@ -187,7 +187,7 @@ func toolTokens(body []byte) int {
 				case "text":
 					if role == "tool" {
 						if s, ok := b["text"].(string); ok {
-							total += tokenize.Estimate(s)
+							total += tokenize.Count(s, tokenize.KindOpenAI)
 						}
 					}
 				}

@@ -2,12 +2,15 @@ package main
 
 import (
 	"bufio"
+	"crypto/rand"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"log"
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"routre-cli/internal/config"
 )
@@ -137,6 +140,16 @@ func cmdSetup(cfgPath string, logger *log.Logger) error {
 	}
 	cfg.Fallbacks = fallbacks
 
+	// Gateway security: optional shared-secret protection for the port.
+	fmt.Println()
+	fmt.Println("gateway security")
+	fmt.Println("(protect the localhost port so only processes that know the key can use your providers)")
+	if askBool("protect the gateway with a shared secret?", false) {
+		envName := ask("secret env var name", "ROUTRE_SECRET")
+		cfg.Auth = config.AuthConfig{SecretEnv: envName, Header: "X-Routre-Key"}
+		appendEnvLine(envName, generateSecret())
+	}
+
 	if err := cfg.Validate(); err != nil {
 		return err
 	}
@@ -209,6 +222,17 @@ func suggestEnvName(providerName string) string {
 // marshalConfig pretty-prints the config for writing.
 func marshalConfig(cfg config.Config) ([]byte, error) {
 	return json.MarshalIndent(cfg, "", "  ")
+}
+
+// generateSecret returns a random 32-byte hex secret for gateway auth.
+func generateSecret() string {
+	b := make([]byte, 32)
+	if _, err := rand.Read(b); err != nil {
+		// Unreachable in practice; fall back to a time-based value rather
+		// than failing setup.
+		return fmt.Sprintf("%d", time.Now().UnixNano())
+	}
+	return hex.EncodeToString(b)
 }
 
 // --- env file buffer -----------------------------------------------------
