@@ -117,17 +117,20 @@ func (h *Handlers) NotFound(w http.ResponseWriter, _ *http.Request) {
 	})
 }
 
-// Models lists every configured model as provider/model.
+// Models lists every configured model as provider/model (OpenAI-compatible format).
 func (h *Handlers) Models(w http.ResponseWriter, _ *http.Request) {
-	var ids []string
+	type modelObj struct {
+		ID string `json:"id"`
+	}
+	var data []modelObj
 	for _, s := range h.Router.Status() {
 		for _, m := range s.Models {
-			ids = append(ids, s.Provider+"/"+m)
+			data = append(data, modelObj{ID: s.Provider + "/" + m})
 		}
 	}
 	writeJSON(w, http.StatusOK, map[string]any{
 		"object": "list",
-		"data":   ids,
+		"data":   data,
 	})
 }
 
