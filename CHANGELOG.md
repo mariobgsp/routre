@@ -7,6 +7,20 @@ Releases are published to npm via a `v*` tag push (see
 The format loosely follows [Keep a Changelog](https://keepachangelog.com/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.3.1] — 2026-08-21
+
+### Fixed
+
+- **`/v1/models` now returns the OpenAI-compatible format.** Each entry is an
+  object with an `id` field (`{"data": [{"id": "provider/model"}, …]}`)
+  instead of a bare string, as expected by Hermes and other OpenAI-compatible
+  clients. Fixes model-verification warnings when adding models.
+
+### Added
+
+- **`stealth/ox-alpha` and `stealth/ox-alpha:free`** added to the OpenRouter
+  provider in `config.all.json`, matching the gateway's served models list.
+
 ## [0.3.0] — 2026-08-20
 
 ### Added
