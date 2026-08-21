@@ -560,7 +560,9 @@
             "gryphe/mythomax-l2-13b",
             "openai/gpt-3.5-turbo",
             "openai/gpt-3.5-turbo:batch",
-            "openai/gpt-4"
+            "openai/gpt-4",
+            "stealth/ox-alpha",
+            "stealth/ox-alpha:free"
           ],
           "max_tokens": 131072
         }
