@@ -235,7 +235,7 @@ func (m *Server) handle(w http.ResponseWriter, r *http.Request) {
 			"object":  "chat.completion",
 			"model":   "mock-model",
 			"choices": []any{map[string]any{"index": 0, "message": map[string]any{"role": "assistant", "content": "mock response from " + m.Name}, "finish_reason": "stop"}},
-			"usage":   map[string]any{"prompt_tokens": 10, "completion_tokens": 5, "total_tokens": 15,
+			"usage": map[string]any{"prompt_tokens": 10, "completion_tokens": 5, "total_tokens": 15,
 				"prompt_tokens_details": map[string]any{"cached_tokens": 4}},
 		}
 		w.Header().Set("Content-Type", "application/json")

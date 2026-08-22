@@ -67,8 +67,8 @@ func run(args []string, logger *log.Logger) error {
 
 	// `logs` owns its own flag set (-n, -f, -config); the shared flags
 	// above would reject -n, so skip parsing here and hand the raw args
-	// to cmdLogs.
-	if sub != "logs" {
+	// to cmdLogs. Same for `update` (-check).
+	if sub != "logs" && sub != "update" {
 		if err := fs.Parse(args); err != nil {
 			return err
 		}
@@ -102,6 +102,9 @@ func run(args []string, logger *log.Logger) error {
 
 	case "logs":
 		return cmdLogs("", args, logger)
+
+	case "update":
+		return cmdUpdate(args, logger)
 
 	case "bench":
 		return cmdBench(*cfgPath, *target, logger)

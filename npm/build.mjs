@@ -122,11 +122,14 @@ for (const t of targets) {
   const out = join(binDir, `routre-cli${t.ext}`);
 
   console.log(`building ${t.pkg} (${t.goos}/${t.arch})...`);
-  run(`go build -trimpath -ldflags "-s -w -X main.version=${version}" -o "${out}" .`, {
-    cwd: root,
-    stdio: "inherit",
-    env: { ...process.env, GOOS: t.goos, GOARCH: t.arch, CGO_ENABLED: "0" },
-  });
+  run(
+    `go build -trimpath -ldflags "-s -w -X main.version=${version}" -o "${out}" .`,
+    {
+      cwd: root,
+      stdio: "inherit",
+      env: { ...process.env, GOOS: t.goos, GOARCH: t.arch, CGO_ENABLED: "0" },
+    },
+  );
   if (t.os !== "win32") chmodSync(out, 0o755);
 
   // Ship benchdata next to the binary so `routre-cli bench` works from any

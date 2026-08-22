@@ -7,7 +7,8 @@ compression (≥90% on tool-heavy traffic), response caching, and a
 per-agent token/cost ledger.
 
 ```bash
-npm install -g routre-cli     # one command, no Go toolchain needed
+curl -fsSL https://raw.githubusercontent.com/mariobgsp/routre-cli/main/install.sh | sh
+                             # one command, no Go toolchain needed
 routre-cli setup              # wizard: provider URLs + API keys
 routre-cli serve              # gateway on 127.0.0.1:20128
 routre-cli start              # start the daemon (systemd/launchd or detached)
@@ -61,25 +62,33 @@ decision record and roadmap):
 
 ## Install
 
-### npm (macOS / Windows / Linux) — recommended
+### curl (macOS / Linux) — recommended
 
 ```bash
-npm install -g routre-cli
+curl -fsSL https://raw.githubusercontent.com/mariobgsp/routre-cli/main/install.sh | sh
 routre-cli version
 ```
 
-The npm package ships one static Go binary per platform (via optional
-dependencies) plus a tiny Node launcher. No Go toolchain, no runtime
-dependencies.
+Downloads the latest GitHub release, verifies its sha256 checksum, and
+installs a single static binary to `~/.local/bin` (no sudo; the installer
+prints a PATH line if that dir is not already on your PATH). Env overrides:
 
-| Platform | Package |
-| --- | --- |
-| linux x64 / arm64 | `routre-cli-linux-x64` / `routre-cli-linux-arm64` |
-| darwin x64 / arm64 | `routre-cli-darwin-x64` / `routre-cli-darwin-arm64` |
-| win32 x64 / arm64 | `@mariobgsp/routre-cli-win32-x64` / `@mariobgsp/routre-cli-win32-arm64` |
+- `ROUTRE_INSTALL_DIR=/usr/local/bin` — install somewhere else
+- `ROUTRE_VERSION=v0.4.0` — pin a specific release
 
-> The Windows packages are scoped (`@mariobgsp/…`) because npm's spam
-> detection rejects the unscoped `routre-cli-win32-*` names.
+Upgrades are built in: `routre-cli update`. Windows: download the
+`routre-cli_windows_*.zip` asset from
+[Releases](https://github.com/mariobgsp/routre-cli/releases/latest) and unzip.
+
+### npm (deprecated)
+
+```bash
+npm install -g routre-cli   # deprecated — prints the curl command and exits
+```
+
+npm packages remain published for pinned dependents but are **deprecated**:
+the launcher no longer runs the binary. Uninstall with
+`npm uninstall -g routre-cli` and switch to the curl installer.
 
 ### From source (developers)
 
@@ -88,7 +97,7 @@ make build          # needs Go ≥ 1.22
 ./routre-cli version
 ```
 
-### Build / publish the npm distribution
+### Build / publish the npm distribution (legacy)
 
 ```bash
 make dist-npm       # cross-compiles all 6 platforms → npm/dist/*.tgz (7 packages)

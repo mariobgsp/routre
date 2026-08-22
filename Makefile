@@ -33,6 +33,29 @@ install: build
 dist-npm:
 	node npm/build.mjs
 
+# Local mirror of .github/workflows/release.yml: same asset names
+# (routre-cli_{GOOS}_{GOARCH}.tar.gz / .zip + checksums.txt) so install.sh
+# and `routre-cli update` behave identically against a hand-made release.
+dist-release:
+	@set -eu; mkdir -p dist-release; rm -f dist-release/routre-cli*
+	@build() { \
+	  goos=$$1; goarch=$$2; arc=$$3; \
+	  CGO_ENABLED=0 GOOS=$$goos GOARCH=$$goarch go build -trimpath \
+	    -ldflags "-s -w -X main.version=$(VERSION)" -o dist-release/routre-cli . ; \
+	  if [ "$$goos" = windows ]; then \
+	    mv dist-release/routre-cli dist-release/routre-cli.exe; \
+	    (cd dist-release && zip -q routre-cli_windows_$${arc}.zip routre-cli.exe); \
+	    rm dist-release/routre-cli.exe; \
+	  else \
+	    tar czf dist-release/routre-cli_$${goos}_$${arc}.tar.gz -C dist-release routre-cli; \
+	    rm dist-release/routre-cli; \
+	  fi; }; \
+	build linux amd64 amd64; build linux arm64 arm64; \
+	build darwin amd64 amd64; build darwin arm64 arm64; \
+	build windows amd64 amd64; build windows arm64 arm64; \
+	cd dist-release && sha256sum routre-cli_*.tar.gz routre-cli_*.zip > checksums.txt
+	@echo "release assets in dist-release/"
+
 dist: dist-npm
 
 clean:

@@ -8,6 +8,31 @@ CI (`.github/workflows/ci.yml`) runs tests on every push and PR.
 The format loosely follows [Keep a Changelog](https://keepachangelog.com/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [Unreleased]
+
+### Added
+
+- **curl installer** — `curl -fsSL https://raw.githubusercontent.com/mariobgsp/routre-cli/main/install.sh | sh`
+  downloads the latest GitHub release, verifies its sha256 checksum, and
+  installs the static binary to `~/.local/bin` (no sudo). Env overrides:
+  `ROUTRE_INSTALL_DIR`, `ROUTRE_VERSION`.
+- **`routre-cli update`** — self-update: resolves the latest tag via the
+  releases redirect (no api.github.com calls), verifies checksums, and
+  atomically replaces the running binary with rollback on failure.
+  `-check` reports without applying. Windows prints a re-install hint
+  (rename-swap support deferred); npm-managed installs are refused with
+  switch instructions.
+- **Tag-driven release pipeline** (`.github/workflows/release.yml`): pushes of
+  `v*` tags now attach per-platform assets (`routre-cli_{GOOS}_{GOARCH}`) and
+  `checksums.txt` to GitHub Releases. Local twin: `make dist-release`.
+
+### Changed
+
+- **npm distribution deprecated.** The launcher shim now prints the curl
+  command and exits non-zero; all published npm versions carry an
+  `npm deprecate` notice. Registry packages remain installed for pinned
+  dependents.
+
 ## [0.3.2] — 2026-08-22
 
 ### Added
