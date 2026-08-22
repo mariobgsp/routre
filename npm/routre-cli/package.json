@@ -17,11 +17,11 @@
     "bin"
   ],
   "optionalDependencies": {
-    "routre-cli-linux-x64": "0.3.0",
-    "routre-cli-linux-arm64": "0.3.0",
-    "routre-cli-darwin-x64": "0.3.0",
-    "routre-cli-darwin-arm64": "0.3.0",
-    "@mariobgsp/routre-cli-win32-x64": "0.3.0",
-    "@mariobgsp/routre-cli-win32-arm64": "0.3.0"
+    "routre-cli-linux-x64": "0.3.2",
+    "routre-cli-linux-arm64": "0.3.2",
+    "routre-cli-darwin-x64": "0.3.2",
+    "routre-cli-darwin-arm64": "0.3.2",
+    "@mariobgsp/routre-cli-win32-x64": "0.3.2",
+    "@mariobgsp/routre-cli-win32-arm64": "0.3.2"
   }
 }

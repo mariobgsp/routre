@@ -23,9 +23,15 @@ const root = join(dirname(fileURLToPath(import.meta.url)), "..");
 const npmDir = join(root, "npm");
 const distDir = join(npmDir, "dist");
 // Single source of truth for the npm version is the launcher package.json.
-const version = JSON.parse(
-  readFileSync(join(npmDir, "routre-cli", "package.json"), "utf8"),
-).version;
+function readJson(path) {
+  try {
+    return JSON.parse(readFileSync(path, "utf8"));
+  } catch (err) {
+    console.error(`build.mjs: cannot parse ${path}: ${err.message}`);
+    process.exit(1);
+  }
+}
+const version = readJson(join(npmDir, "routre-cli", "package.json")).version;
 
 const targets = [
   {
@@ -73,6 +79,16 @@ const targets = [
     ext: ".exe",
   },
 ];
+
+// Pin the launcher's optionalDependencies to the same version — stale pins
+// (e.g. after a version bump) silently make `npm install routre-cli` fetch
+// OLD registry binaries.
+const launcherPkgPath = join(npmDir, "routre-cli", "package.json");
+const launcherPkg = readJson(launcherPkgPath);
+launcherPkg.optionalDependencies = Object.fromEntries(
+  targets.map((t) => [t.pkg, version]),
+);
+writeFileSync(launcherPkgPath, JSON.stringify(launcherPkg, null, 2) + "\n");
 
 rmSync(distDir, { recursive: true, force: true });
 mkdirSync(distDir, { recursive: true });
