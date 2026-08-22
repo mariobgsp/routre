@@ -102,6 +102,13 @@ type Config struct {
 	// entry is routed through the normal candidate logic (exact + free
 	// variants).
 	Fallbacks []string `json:"fallbacks"`
+	// ForwardUnknown: when true (default), a model not listed in any
+	// provider's `models` whitelist is still forwarded verbatim to every
+	// available provider in tier order, failing over automatically. New
+	// and future models then work with no config edit — the upstream is
+	// authoritative. When false, an unknown model returns model_not_found
+	// (the original 402-cascade guard).
+	ForwardUnknown bool `json:"forward_unknown"`
 }
 
 // Default returns the built-in defaults (3-tier shape must come from the
@@ -113,6 +120,9 @@ func Default() Config {
 		Tiers:    []Tier{},
 		RTK:      RTKConfig{Enabled: true, MinBytes: 0, MaxBytes: 10 << 20},
 		Cache:    CacheConfig{Enabled: true, MaxEntries: 4096, TTLSeconds: 86400, PrefixOrder: true, MaxBytes: 64 << 20},
+		// Zero-config model handling: unknown/future models forward to all
+		// providers and fail over, instead of requiring a whitelist edit.
+		ForwardUnknown: true,
 	}
 }
 

@@ -209,12 +209,14 @@ func TestServesModel(t *testing.T) {
 }
 
 // TestMinCooldownForModel: returns the shortest cooldown among providers
-// serving the model, and reports whether any provider serves it.
+// serving the model, and reports whether any provider serves it. With
+// forwardUnknown=true every provider counts as a potential server of an
+// unlisted model.
 func TestMinCooldownForModel(t *testing.T) {
 	r := New(mkTiers(), DefaultCooldownPolicy())
 
 	// No provider serves the model.
-	if _, found := r.MinCooldownForModel("m-nonexistent"); found {
+	if _, found := r.MinCooldownForModel("m-nonexistent", false); found {
 		t.Fatal("model configured nowhere must not be found")
 	}
 
@@ -222,12 +224,20 @@ func TestMinCooldownForModel(t *testing.T) {
 	// cooldown and found=true.
 	a := r.Next(0)
 	r.ReportFailure(a, ErrServer)
-	rem, found := r.MinCooldownForModel("m1")
+	rem, found := r.MinCooldownForModel("m1", false)
 	if !found {
 		t.Fatal("m1 is served by provider a even while cooling down")
 	}
 	if rem <= 0 {
 		t.Fatalf("expected a positive cooldown for m1, got %v", rem)
+	}
+
+	// forwardUnknown=true: an unlisted model counts every provider as a
+	// potential server, so a cooling-down fleet reports Retry-After instead
+	// of model_not_found identity.
+	_, found = r.MinCooldownForModel("m-nonexistent", true)
+	if !found {
+		t.Fatal("forwardUnknown must treat any provider as a potential server")
 	}
 }
 
@@ -274,6 +284,51 @@ func TestCandidatesQualifiedModel(t *testing.T) {
 	cands = or.Candidates("gpt-oss-20b")
 	if len(cands) == 0 || cands[0].Upstream != "openai/gpt-oss-20b:free" {
 		t.Fatalf("free variant must be preferred: %+v", cands)
+	}
+}
+
+func TestCandidatesForwardsUnknownModel(t *testing.T) {
+	r := New(mkModelTiers(), DefaultCooldownPolicy())
+	r.SetForwardUnknown(true)
+	// A model configured nowhere must still be forwarded verbatim to every
+	// available provider (tier order) when forward_unknown is on.
+	cands := r.Candidates("future-model-x")
+	if len(cands) != 3 {
+		t.Fatalf("forward_unknown must forward to all 3 providers, got %d: %+v", len(cands), cands)
+	}
+	for _, c := range cands {
+		if c.Upstream != "future-model-x" {
+			t.Fatalf("unknown model must be forwarded verbatim, got %q", c.Upstream)
+		}
+		if !c.IsWildcard {
+			t.Fatalf("forwarded candidate must be flagged IsWildcard: %+v", c)
+		}
+	}
+}
+
+func TestCandidatesUnknownModelStrict(t *testing.T) {
+	r := New(mkModelTiers(), DefaultCooldownPolicy())
+	r.SetForwardUnknown(false)
+	// Strict mode preserves the original 402-cascade guard.
+	if cands := r.Candidates("future-model-x"); len(cands) != 0 {
+		t.Fatalf("strict mode must return no candidates for unknown model: %+v", cands)
+	}
+}
+
+func TestCandidatesUnknownModelSkipsCooldown(t *testing.T) {
+	r := New(mkModelTiers(), DefaultCooldownPolicy())
+	r.SetForwardUnknown(true)
+	// A provider in cooldown must not be a wildcard candidate.
+	a := r.Next(0) // opencode-go
+	r.ReportFailure(a, ErrServer)
+	cands := r.Candidates("future-model-x")
+	if len(cands) != 2 {
+		t.Fatalf("cooled-down provider must be skipped, got %d: %+v", len(cands), cands)
+	}
+	for _, c := range cands {
+		if c.Provider.Provider.Name == "opencode-go" {
+			t.Fatal("opencode-go is in cooldown and must be skipped")
+		}
 	}
 }
 

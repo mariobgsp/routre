@@ -77,3 +77,26 @@ func TestUsageSnifferDrainCarryNoNewline(t *testing.T) {
 		t.Fatalf("expected last carry line scanned (prompt=15 completion=9), got %+v", u)
 	}
 }
+
+// Provider prompt-cache hits (OpenAI cached_tokens / Anthropic
+// cache_read_input_tokens) must be captured so `routre-cli list` can show
+// real cache savings. Splitting the final usage chunk across Read
+// boundaries must still work.
+func TestUsageSnifferCacheRead(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		body string
+		want int64
+	}{
+		{"openai_cached_tokens", `data: {"choices":[{"delta":{}}],"usage":{"prompt_tokens":120,"completion_tokens":10,"prompt_tokens_details":{"cached_tokens":95}}}` + "\n\n", 95},
+		{"anthropic_cache_read_input_tokens", `data: {"type":"message_delta","usage":{"output_tokens":20,"cache_read_input_tokens":80}}` + "\n\n", 80},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			s := newUsageSniffer(oneByteReader{strings.NewReader(tc.body)})
+			u := readAllSniff(t, s)
+			if u.cacheRead != tc.want {
+				t.Fatalf("%s: expected cacheRead=%d, got %+v", tc.name, tc.want, u)
+			}
+		})
+	}
+}

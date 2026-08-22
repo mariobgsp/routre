@@ -1,11 +1,36 @@
 # Changelog
 
 All notable changes to routre-cli are documented here, newest first.
-Releases are published to npm via a `v*` tag push (see
-[`.github/workflows/publish.yml`](.github/workflows/publish.yml)).
+Releases are version-tagged (`v*`) and built for npm locally via
+`make dist-npm`; publishing to the registry is a manual step.
+CI (`.github/workflows/ci.yml`) runs tests on every push and PR.
 
 The format loosely follows [Keep a Changelog](https://keepachangelog.com/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
+
+## [0.3.2] — 2026-08-22
+
+### Added
+
+- **Zero-config model handling (`forward_unknown`, default `true`).** A model
+  absent from every provider's `models` whitelist is forwarded verbatim to
+  available providers in tier order. A provider rejecting the model (400/404)
+  fails over to the next provider (no same-provider retry for deterministic
+  rejections); the last rejection is surfaced if all providers refuse.
+  Set `forward_unknown: false` to restore strict whitelist behavior.
+- **Provider prompt-cache read tokens are now captured on streaming requests**
+  (`cached_tokens` / `cache_read_input_tokens` / `cachedContentTokenCount`)
+  and surfaced in the token & cost ledger (`routre-cli list` →
+  "cache read: N tokens (provider-reported)") and in `/metrics`.
+- Sniffer fast path: usage regexes are skipped for stream frames that cannot
+  contain token fields.
+
+### Fixed
+
+- SIGHUP config reload now applies edits to `forward_unknown` (previously the
+  startup value was kept until restart).
+- Streaming responses previously recorded zero cache-read tokens; they now
+  feed the same ledger as non-streaming responses.
 
 ## [0.3.1] — 2026-08-21
 

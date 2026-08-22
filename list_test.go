@@ -14,10 +14,11 @@ func TestParseRow(t *testing.T) {
 		"provider": "p", "model": "m",
 		"prompt_tokens": float64(10), "completion_tokens": float64(5),
 		"rtk_saved_tokens": float64(2), "cache_saved_tokens": float64(1),
-		"cost_usd": float64(0.001), "saved_usd": float64(0.0005), "requests": float64(3),
+		"cache_read_tokens": float64(7),
+		"cost_usd":          float64(0.001), "saved_usd": float64(0.0005), "requests": float64(3),
 	})
 	if got.Provider != "p" || got.PromptTokens != 10 || got.CompletionTokens != 5 ||
-		got.RTKSavedTokens != 2 || got.CacheSavedTokens != 1 ||
+		got.RTKSavedTokens != 2 || got.CacheSavedTokens != 1 || got.CacheReadTokens != 7 ||
 		got.CostUSD != 0.001 || got.SavedUSD != 0.0005 || got.Requests != 3 {
 		t.Fatalf("parseRow = %+v", got)
 	}

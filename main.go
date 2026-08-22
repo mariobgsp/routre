@@ -284,7 +284,11 @@ func buildRouter(cfg config.Config) *router.Router {
 		}
 		tiers = append(tiers, router.TierInput{Name: t.Name, Providers: provs})
 	}
-	return router.New(tiers, router.DefaultCooldownPolicy())
+	r := router.New(tiers, router.DefaultCooldownPolicy())
+	// Zero-config model handling: forward unknown/future models to all
+	// providers (default true). Reset preserves this across reloads.
+	r.SetForwardUnknown(cfg.ForwardUnknown)
+	return r
 }
 
 func totalProviders(c config.Config) int {

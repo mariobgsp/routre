@@ -1,6 +1,6 @@
 {
   "name": "routre-cli-linux-arm64",
-  "version": "0.3.0",
+  "version": "0.3.1",
   "description": "routre-cli binary for linux-arm64",
   "license": "MIT",
   "repository": {

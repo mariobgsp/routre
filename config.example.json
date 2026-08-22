@@ -1,6 +1,7 @@
 {
   "listen": "127.0.0.1:20128",
   "log_level": "info",
+  "forward_unknown": true,
   "rtk": {
     "enabled": true,
     "min_bytes": 0,

@@ -80,6 +80,9 @@ func NewHandlers(st *config.Store, rtr *router.Router, cch *cache.Cache, tk *rtk
 	st.SetOnLoad(func(c config.Config) {
 		// Rebuild router (provider lists may have changed). Cooldowns reset.
 		rtr.Reset(tiersFromConfig(c), rtrPolicy(rtr))
+		// Reset preserves forwardUnknown; re-apply so config EDITS to it take
+		// effect on reload without a restart.
+		rtr.SetForwardUnknown(c.ForwardUnknown)
 		cch.Update(cache.Config{
 			Enabled:     c.Cache.Enabled,
 			MaxEntries:  c.Cache.MaxEntries,
