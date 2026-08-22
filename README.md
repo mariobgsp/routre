@@ -130,6 +130,7 @@ routre-cli serve        # gateway on 127.0.0.1:20128
 routre-cli start --autostart  # start daemon + enable boot/login auto-start
 routre-cli stop         # stop the daemon
 routre-cli list         # providers + token/cost ledger
+routre-cli update       # self-update to the latest release (-check to peek)
 ```
 
 `setup` writes two files next to `config.json`:
@@ -522,6 +523,10 @@ npm/                     DEPRECATED npm distribution (kept for pinned dependents
 - 401/403 **token refresh** is implemented (re-reads the env key file and
   retries once on rotation); cooldown + failover still apply when the key is
   unchanged or still rejected.
+- **Windows self-update is deferred**: `routre-cli update` on Windows prints
+  a re-install hint instead of replacing the running .exe (rename-swap
+  support tracked for a later release); win32 binaries are still shipped on
+  every release for manual install.
 
 ## Changelog
 
