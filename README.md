@@ -53,8 +53,8 @@ decision record and roadmap):
 - **Not LiteLLM/Portkey self-host** — Python/Postgres/Redis stacks sized in
   gigabytes.
 - **Single static Go binary, stdlib only** — proven low-RAM pattern (Go ~5K
-  QPS at ~11 ms proxy overhead), cross-compiled for 6 platforms (7 npm
-  packages, incl. scoped win32).
+  QPS at ~11 ms proxy overhead), cross-compiled for 6 platforms and shipped
+  as GitHub Release assets (curl installer, no Node needed).
 - **Honest metrics** — the 90% claim is defined, gated, and reproducible:
   `routre-cli bench` fails the build if it regresses.
 
@@ -97,19 +97,27 @@ make build          # needs Go ≥ 1.22
 ./routre-cli version
 ```
 
-### Build / publish the npm distribution (legacy)
+### Releasing
+
+```bash
+tag v0.4.0 && git push origin v0.4.0   # release.yml builds 6 platforms and
+                                       # attaches them to the GitHub Release
+```
+
+That's the whole pipeline: `release.yml` compiles every platform, stamps the
+version, generates `checksums.txt`, and publishes the release — which is
+exactly what `install.sh` and `routre-cli update` consume. Test locally with
+`make dist-release` first.
+
+### Legacy npm distribution (deprecated)
 
 ```bash
 make dist-npm       # cross-compiles all 6 platforms → npm/dist/*.tgz (7 packages)
 NPM_TOKEN=<token> bash ./npm/publish.sh   # optional: manual publish to the registry
 ```
 
-There is no CI publish workflow — npm releases are **tag-driven only**:
-cut a version, bump `npm/routre-cli/package.json`, tag `vX.Y.Z`. The tarballs
-in `npm/dist/` are built locally (`make dist-npm`). Publish order matters if
-you do push to the registry: platform packages first (Unix, then scoped
-Windows), launcher last — the launcher's `optionalDependencies` reference
-the platform packages.
+Kept only so pinned dependents keep resolving; no release automation remains
+for npm. See [Releasing](#releasing) for the current tag-driven pipeline.
 
 ---
 
@@ -407,6 +415,7 @@ minimal template is `config.example.json`.
 | `routre-cli list [-config f] [-url http://127.0.0.1:20128]` | connected providers + token/cost ledger |
 | `routre-cli logs [-n 50] [-f] [-config f]` | tail the per-request log |
 | `routre-cli bench [-config f] [-target 90]` | RTK token-reduction benchmark (gated) |
+| `routre-cli update [-check]` | self-update: download + verify + atomically replace this binary (refuses npm-managed copies) |
 | `routre-cli version` | print version |
 
 ### `list` — everything connected, per agent, with totals
@@ -473,12 +482,15 @@ make build test bench        # bench gates 90% (fails on regression)
 ## Project layout
 
 ```text
-main.go                  CLI (setup/serve/check/start/stop/restart/list/bench/version)
+main.go                  CLI (setup/serve/check/start/stop/restart/list/bench/update/version)
 bench.go                 RTK benchmark + 90% gate
 setup.go                 interactive setup wizard
 start.go                 daemon start/restart (systemd/launchd/detached spawn)
 stop.go                  daemon stop (systemd/launchd/port scan + SIGTERM)
 list.go                  providers + per-agent token/cost ledger
+update.go                `update` subcommand (self-update driver)
+install.sh               curl installer (latest release → ~/.local/bin)
+internal/update/         release discovery, checksums, atomic replace
 internal/config/         JSON config + routre-cli.env + SIGHUP reload
 internal/router/         tiers, failover, cooldowns (exponential backoff)
 internal/rtk/            token compression (12 filters + autodetect)
@@ -490,7 +502,8 @@ internal/mock/           mock upstream (tests + keyless e2e)
 benchdata/               tool-heavy request bodies for the bench gate
 scripts/measure-ram.sh   RSS/peak/growth measurement
 deploy/                  systemd unit+socket, launchd plist
-npm/                     npm distribution (7 packages: 4 Unix + 2 scoped win32 + launcher)
+.github/workflows/       ci.yml (tests) · release.yml (v* tag → GitHub Release assets)
+npm/                     DEPRECATED npm distribution (kept for pinned dependents)
 ```
 
 ---
