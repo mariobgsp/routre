@@ -1,0 +1,65 @@
+name: release
+
+# Tag-driven release: `git tag v0.4.0 && git push origin v0.4.0` builds all
+# six platforms, attaches routre-cli_{GOOS}_{GOARCH}.tar.gz (+ .zip for
+# windows) and a checksums.txt to the GitHub Release. install.sh and
+# `routre-cli update` consume exactly these asset names — do not rename.
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.26"
+
+      - name: Build release binaries
+        run: |
+          set -euo pipefail
+          VERSION="${GITHUB_REF_NAME}"
+          mkdir -p dist
+          build() {
+            local goos="$1" goarch="$2" arc="$3"
+            CGO_ENABLED=0 GOOS="$goos" GOARCH="$goarch" \
+              go build -trimpath \
+              -ldflags "-s -w -X main.version=${VERSION}" \
+              -o dist/routre-cli .
+            if [ "$goos" = "windows" ]; then
+              mv dist/routre-cli dist/routre-cli.exe
+              (cd dist && zip -q "routre-cli_windows_${arc}.zip" routre-cli.exe)
+              rm dist/routre-cli.exe
+            else
+              tar czf "dist/routre-cli_${goos}_${arc}.tar.gz" -C dist routre-cli
+              rm dist/routre-cli
+            fi
+          }
+          build linux   amd64 amd64
+          build linux   arm64 arm64
+          build darwin  amd64 amd64
+          build darwin  arm64 arm64
+          build windows amd64 amd64
+          build windows arm64 arm64
+
+      - name: Generate checksums
+        run: |
+          cd dist
+          sha256sum routre-cli_*.tar.gz routre-cli_*.zip > checksums.txt
+          cat checksums.txt
+
+      - name: Create GitHub release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            dist/routre-cli_*.tar.gz
+            dist/routre-cli_*.zip
+            dist/checksums.txt
+          generate_release_notes: true
