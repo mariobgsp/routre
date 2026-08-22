@@ -92,12 +92,13 @@ make build          # needs Go ≥ 1.22
 
 ```bash
 make dist-npm       # cross-compiles all 6 platforms → npm/dist/*.tgz (7 packages)
-NPM_TOKEN=<token> bash ./npm/publish.sh
+NPM_TOKEN=<token> bash ./npm/publish.sh   # optional: manual publish to the registry
 ```
 
-Releases are also published by CI on a `v*` tag push (see
-`.github/workflows/publish.yml`, npm Trusted Publishing / OIDC — no token
-on CI). Publish order matters: platform packages first (Unix, then scoped
+There is no CI publish workflow — npm releases are **tag-driven only**:
+cut a version, bump `npm/routre-cli/package.json`, tag `vX.Y.Z`. The tarballs
+in `npm/dist/` are built locally (`make dist-npm`). Publish order matters if
+you do push to the registry: platform packages first (Unix, then scoped
 Windows), launcher last — the launcher's `optionalDependencies` reference
 the platform packages.
 
@@ -213,6 +214,14 @@ opencode run --model <provider>/<model> "hello"
   could serve it is cooling down, the gateway returns `providers_unavailable`
   (503) with a `Retry-After` header instead — the remedy is waiting, not
   editing the config.
+- **Zero-config model handling** (`forward_unknown: true`, default): a model
+  absent from every provider's `models` whitelist is forwarded verbatim to
+  available providers in tier order. A provider that does not carry the model
+  rejects it (400/404); that rejection is treated as "try the next provider"
+  (with no pointless same-provider retry), so a model carried by **any**
+  configured provider works with no config edit. If every provider rejects
+  it, the last rejection is surfaced. Set `forward_unknown: false` to restore
+  strict whitelist behavior (unknown models return `model_not_found`).
 - The gateway **holds the provider API keys** (from `api_key_env` /
   `routre-cli.env`) and injects them upstream — a client's `Authorization`
   header is a placeholder and is never forwarded.

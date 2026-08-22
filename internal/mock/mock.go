@@ -235,7 +235,8 @@ func (m *Server) handle(w http.ResponseWriter, r *http.Request) {
 			"object":  "chat.completion",
 			"model":   "mock-model",
 			"choices": []any{map[string]any{"index": 0, "message": map[string]any{"role": "assistant", "content": "mock response from " + m.Name}, "finish_reason": "stop"}},
-			"usage":   map[string]any{"prompt_tokens": 10, "completion_tokens": 5, "total_tokens": 15},
+			"usage":   map[string]any{"prompt_tokens": 10, "completion_tokens": 5, "total_tokens": 15,
+				"prompt_tokens_details": map[string]any{"cached_tokens": 4}},
 		}
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusOK)
@@ -292,7 +293,7 @@ func (m *Server) handle(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	_ = write("data: " + fmt.Sprintf(`{"id":"mock-%s","object":"chat.completion.chunk","choices":[{"index":0,"delta":{},"finish_reason":"stop"}],"usage":{"prompt_tokens":12,"completion_tokens":8,"total_tokens":20}}`, m.Name) + "\n\n")
+	_ = write("data: " + fmt.Sprintf(`{"id":"mock-%s","object":"chat.completion.chunk","choices":[{"index":0,"delta":{},"finish_reason":"stop"}],"usage":{"prompt_tokens":12,"completion_tokens":8,"total_tokens":20,"prompt_tokens_details":{"cached_tokens":6}}}`, m.Name) + "\n\n")
 	_ = write("data: [DONE]\n\n")
 }
 

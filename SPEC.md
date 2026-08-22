@@ -122,11 +122,13 @@ installed service they fall back to a detached `serve` process
 Cooldown: `failures` count → `base·2^(failures-1)`, capped at 30 min;
 success resets. Stream aborts never escalate.
 
-Error identity: `model_not_found` (503) is reserved for models no
-configured provider lists (and no fallback matches). When every provider
-that could serve the model is in cooldown, the gateway returns
-`providers_unavailable` (503) with a `Retry-After` header instead — the
-remedy is waiting, not editing the config.
+Error identity: with `forward_unknown: false`, `model_not_found` (503) is
+reserved for models no configured provider lists (and no fallback matches).
+With `forward_unknown: true` (default), unlisted models are forwarded
+verbatim to available providers and a provider's model rejection fails over
+to the next; only when every provider is in cooldown does the gateway return
+`providers_unavailable` (503) with a `Retry-After` header — the remedy is
+waiting, not editing the config.
 
 ## 5. Token reduction design
 

@@ -1,6 +1,7 @@
 package proxy
 
 import (
+	"bytes"
 	"io"
 	"regexp"
 	"strconv"
@@ -10,6 +11,11 @@ import (
 type streamUsage struct {
 	prompt     int64
 	completion int64
+	// cacheRead: provider-reported prompt-cache hit tokens (OpenAI
+	// `cached_tokens`, Anthropic `cache_read_input_tokens`), billed at the
+	// discounted cache-read rate. Zero when the provider does not report
+	// them or the prefix was not cached.
+	cacheRead int64
 }
 
 // usageSniffer is a pass-through io.Reader that sits in front of an upstream
@@ -28,11 +34,16 @@ type usageSniffer struct {
 	carry      []byte
 	prompt     int64
 	completion int64
+	cacheRead  int64
 }
 
 var (
 	rePrompt     = regexp.MustCompile(`"(?:prompt_tokens|input_tokens)":\s*(\d+)`)
 	reCompletion = regexp.MustCompile(`"(?:completion_tokens|output_tokens)":\s*(\d+)`)
+	// cached_tokens (OpenAI/OpenRouter), cache_read_input_tokens (Anthropic)
+	// and cachedContentTokenCount (Gemini) report prompt-cache hits. Mirrors
+	// usageFromBody, which already parses the first two non-streaming.
+	reCached = regexp.MustCompile(`"(?:cached_tokens|cache_read_input_tokens|cachedContentTokenCount)":\s*(\d+)`)
 )
 
 func newUsageSniffer(r io.Reader) *usageSniffer { return &usageSniffer{r: r} }
@@ -50,7 +61,13 @@ func (u *usageSniffer) Read(p []byte) (int, error) {
 			}
 		}
 		if last > 0 {
-			u.scan(u.carry[:last])
+			chunk := u.carry[:last]
+			// Gate: every matched field contains "token"/"Token"; skip the
+			// three regexes entirely on frames that cannot match (the common
+			// case — content deltas).
+			if bytes.Contains(chunk, []byte("token")) || bytes.Contains(chunk, []byte("Token")) {
+				u.scan(chunk)
+			}
 			u.carry = append([]byte(nil), u.carry[last:]...)
 		}
 	}
@@ -71,10 +88,15 @@ func (u *usageSniffer) scan(b []byte) {
 			u.prompt = v
 		}
 	}
+	if ms := reCached.FindAllSubmatch(b, -1); len(ms) > 0 {
+		if v, e := strconv.ParseInt(string(ms[len(ms)-1][1]), 10, 64); e == nil {
+			u.cacheRead = v
+		}
+	}
 }
 
 func (u *usageSniffer) usage() streamUsage {
-	return streamUsage{prompt: u.prompt, completion: u.completion}
+	return streamUsage{prompt: u.prompt, completion: u.completion, cacheRead: u.cacheRead}
 }
 
 // drainCarry scans any remaining buffered carry (stream ended without a

@@ -274,7 +274,7 @@ func (h *Handlers) route(w http.ResponseWriter, r *http.Request, api apiFormat) 
 		// could serve it is in cooldown" — both collapse to an empty
 		// candidate list, but the remedies are different (fix the config
 		// vs wait/check the provider).
-		if retryAfter, served := h.Router.MinCooldownForModel(requested); served {
+		if retryAfter, served := h.Router.MinCooldownForModel(requested, h.Cfg.Get().ForwardUnknown); served {
 			h.Metrics.Request(client, "", requested, "providers_unavailable")
 			logReq(reqlog.Entry{Client: client, Model: requested, Status: http.StatusServiceUnavailable, Class: "providers_unavailable"})
 			if retryAfter < time.Second {
@@ -295,6 +295,7 @@ func (h *Handlers) route(w http.ResponseWriter, r *http.Request, api apiFormat) 
 	}
 
 	var lastErr error
+	var lastClass router.ErrClass
 	for _, cand := range cands {
 		// Retry transient failures (network errors, 5xx) on the same
 		// candidate before failing over: upstream 503 blips resolve in
@@ -303,9 +304,14 @@ func (h *Handlers) route(w http.ResponseWriter, r *http.Request, api apiFormat) 
 		attempts := 1 + retryTransientAttempts
 		for attempt := 0; attempt < attempts; attempt++ {
 			if attempt > 0 {
+				if lastClass == router.ErrClient {
+					// Deterministic rejection (400/404/422...): retrying the
+					// same candidate cannot produce a different result.
+					break
+				}
 				time.Sleep(transientRetryDelay)
 			}
-			ok := h.tryCandidate(ctx, w, r, api, cand, requested, body, processed, streaming, client, rtkSaved, clientFmt, &lastErr, logReq)
+			ok := h.tryCandidate(ctx, w, r, api, cand, requested, body, processed, streaming, client, rtkSaved, clientFmt, &lastErr, &lastClass, logReq)
 			if ok {
 				return
 			}
@@ -334,7 +340,7 @@ func (h *Handlers) route(w http.ResponseWriter, r *http.Request, api apiFormat) 
 // The caller owns the transient-retry loop around this: a provider that
 // fails once is retried (transientRetryAttempts) before its failure is
 // reported to the router's cooldown state.
-func (h *Handlers) tryCandidate(ctx context.Context, w http.ResponseWriter, r *http.Request, api apiFormat, cand router.Candidate, requested string, body []byte, processed []byte, streaming bool, client string, rtkSaved int, clientFmt apiFormat, lastErr *error, logReq func(reqlog.Entry)) bool {
+func (h *Handlers) tryCandidate(ctx context.Context, w http.ResponseWriter, r *http.Request, api apiFormat, cand router.Candidate, requested string, body []byte, processed []byte, streaming bool, client string, rtkSaved int, clientFmt apiFormat, lastErr *error, lastClass *router.ErrClass, logReq func(reqlog.Entry)) bool {
 	p := cand.Provider
 
 	kind := p.Provider.Kind
@@ -413,6 +419,9 @@ func (h *Handlers) tryCandidate(ctx context.Context, w http.ResponseWriter, r *h
 			return true
 		}
 		class := router.Classify(rerr)
+		if lastClass != nil {
+			*lastClass = class
+		}
 		if !router.IsRetryableClass(class) {
 			h.Metrics.Request(client, p.Provider.Name, requested, "error")
 			logReq(reqlog.Entry{Client: client, Model: requested, Provider: p.Provider.Name, Stream: streaming, Status: http.StatusBadGateway, Class: "error"})
@@ -441,9 +450,10 @@ func (h *Handlers) tryCandidate(ctx context.Context, w http.ResponseWriter, r *h
 		if prompt == 0 {
 			prompt = int64(tokenize.Count(string(processed), tokenize.KindOpenAI))
 		}
-		h.Usage.Record(client, modelFromBody(body), prompt, completion, int64(rtkSaved), 0, pricesOf(h.Cfg.Get(), p.Provider.Name), 0)
+		h.Usage.RecordFull(client, modelFromBody(body), prompt, completion, int64(rtkSaved), 0, susage.cacheRead, pricesOf(h.Cfg.Get(), p.Provider.Name), 0)
+		h.Metrics.CacheRead(susage.cacheRead)
 		h.Metrics.Request(client, p.Provider.Name, requested, "ok")
-		logReq(reqlog.Entry{Client: client, Model: requested, UpstreamModel: cand.Upstream, Provider: p.Provider.Name, Stream: true, Status: http.StatusOK, Class: "ok", PromptTokens: int64(prompt), RTKSavedTokens: int64(rtkSaved)})
+		logReq(reqlog.Entry{Client: client, Model: requested, UpstreamModel: cand.Upstream, Provider: p.Provider.Name, Stream: true, Status: http.StatusOK, Class: "ok", PromptTokens: int64(prompt), CompletionTokens: completion, RTKSavedTokens: int64(rtkSaved), CacheReadTokens: susage.cacheRead})
 		return true
 	}
 
@@ -491,6 +501,9 @@ func (h *Handlers) tryCandidate(ctx context.Context, w http.ResponseWriter, r *h
 	// credits body) fail over WITHOUT cooldown escalation — the provider
 	// may still serve free variants.
 	class := router.ClassifyStatusBody(status, respBody)
+	if lastClass != nil {
+		*lastClass = class
+	}
 
 	// 401/403 auth failure: before failing over, attempt a credential
 	// refresh (the API key may have rotated in routre-cli.env). If the key
@@ -503,13 +516,23 @@ func (h *Handlers) tryCandidate(ctx context.Context, w http.ResponseWriter, r *h
 			// the new key. Reports both success and failure to the router on
 			// the retry path — a successful auth retry must clear any
 			// cooldown this provider accrued from past failures.
-			if h.tryCandidate(ctx, w, r, api, cand, requested, body, processed, streaming, client, rtkSaved, clientFmt, lastErr, logReq) {
+			if h.tryCandidate(ctx, w, r, api, cand, requested, body, processed, streaming, client, rtkSaved, clientFmt, lastErr, lastClass, logReq) {
 				return true
 			}
 		}
 	}
 
 	if !router.IsRetryableClass(class) {
+		// Wildcard-forwarded models (forward_unknown): one provider
+		// rejecting the model (400/404) means "this provider lacks it",
+		// not "the request is bad" — try the next candidate. If every
+		// provider rejects, the exhaustion path surfaces the last error.
+		if cand.IsWildcard {
+			h.Metrics.Request(client, p.Provider.Name, requested, "client_error")
+			logReq(reqlog.Entry{Client: client, Model: requested, Provider: p.Provider.Name, Stream: false, Status: status, Class: "client_error"})
+			*lastErr = fmt.Errorf("provider %s rejected model %q (HTTP %d)", p.Provider.Name, cand.Upstream, status)
+			return false
+		}
 		// Client-caused (400/404/422...): surface it, no failover.
 		h.Metrics.Request(client, p.Provider.Name, requested, "client_error")
 		logReq(reqlog.Entry{Client: client, Model: requested, Provider: p.Provider.Name, Stream: streaming, Status: status, Class: "client_error"})

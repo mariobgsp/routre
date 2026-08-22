@@ -37,6 +37,7 @@ func testEnv(t *testing.T, cfgJSON string) (base string, mocks map[string]*mock.
 	cfg := st.Get()
 
 	rtr := router.New(tiersFromConfig(cfg), router.DefaultCooldownPolicy())
+	rtr.SetForwardUnknown(cfg.ForwardUnknown) // mirror main.buildRouter
 	cch := cache.New(cache.Config{
 		Enabled: cfg.Cache.Enabled, MaxEntries: cfg.Cache.MaxEntries,
 		TTLSeconds: cfg.Cache.TTLSeconds, PrefixOrder: cfg.Cache.PrefixOrder,
@@ -468,7 +469,13 @@ func TestStreamingUpstream429Surfaces(t *testing.T) {
 func TestModelNotConfiguredVsCooldown(t *testing.T) {
 	a, _ := mock.New("a")
 	defer a.Close()
-	base, _ := testEnv(t, buildConfigWithMocks(t, map[string]*mock.Server{"a": a}))
+	// Strict mode on purpose: this test pins the model_not_found vs
+	// providers_unavailable error-identity distinction, which applies when
+	// forwarding is off. Default (forward_unknown=true) behavior for
+	// unlisted models is covered by the wildcard tests.
+	cfg := strings.Replace(buildConfigWithMocks(t, map[string]*mock.Server{"a": a}),
+		`"tiers":[`, `"forward_unknown":false,"tiers":[`, 1)
+	base, _ := testEnv(t, cfg)
 
 	// Model absent from every provider list.
 	body := bytes.Replace(chatBody(false, ""), []byte(`"m"`), []byte(`"no-such-model"`), 1)

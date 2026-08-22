@@ -181,6 +181,11 @@ type Router struct {
 	provs  []*ProviderState // flattened in tier order
 	policy CooldownPolicy
 	now    func() time.Time // clock injection for tests
+	// forwardUnknown: when true, a model absent from every provider's
+	// whitelist is still forwarded verbatim to all available providers
+	// (tier order, failover). Enables zero-config handling of new/future
+	// models. Set via SetForwardUnknown.
+	forwardUnknown bool
 }
 
 // CandidatesWithFallbacks returns Candidates(model), then the candidates
@@ -213,6 +218,12 @@ type Candidate struct {
 	Provider *ProviderState
 	Upstream string // model name to send upstream (free variant or original)
 	IsFree   bool
+	// IsWildcard: the provider does not whitelist this model; the request
+	// was forwarded verbatim under forward_unknown. A client-error rejection
+	// (400/404) from a wildcard candidate means "this provider lacks the
+	// model", not "the request is bad" — so the gateway fails over to the
+	// next candidate instead of surfacing the first rejection.
+	IsWildcard bool
 }
 
 // stripProviderPrefix removes the leading "provider/" label from a client
@@ -350,6 +361,20 @@ func (r *Router) Candidates(model string) []Candidate {
 		// Provider does not list the model but has a free variant of it.
 		if fv := freeVariantOf(p.Provider.Models, model); fv != "" {
 			out = append(out, Candidate{Provider: p, Upstream: fv, IsFree: true})
+		}
+	}
+	if len(out) == 0 && r.forwardUnknown {
+		// Unknown/future model: forward verbatim to every available
+		// provider in tier order so the request is attempted (and fails
+		// over automatically). This is the zero-config path — a model that
+		// appears upstream works immediately, no whitelist edit needed.
+		// A 402/404 from one provider cascades to the next. Cooldowns are
+		// still respected (a provider in cooldown is skipped).
+		for _, p := range r.provs {
+			if now.Before(p.until) {
+				continue
+			}
+			out = append(out, Candidate{Provider: p, Upstream: model, IsFree: false, IsWildcard: true})
 		}
 	}
 	return out
@@ -536,7 +561,7 @@ func (r *Router) ServesModel(model string) bool {
 // at least one such provider exists. Qualified "<provider>/<model>" counts
 // as served by that provider (forwarder contract). Callers use it to set
 // Retry-After when every candidate is cooling down.
-func (r *Router) MinCooldownForModel(model string) (time.Duration, bool) {
+func (r *Router) MinCooldownForModel(model string, forwardUnknown bool) (time.Duration, bool) {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 	now := r.now()
@@ -544,7 +569,10 @@ func (r *Router) MinCooldownForModel(model string) (time.Duration, bool) {
 	found := false
 	for _, p := range r.provs {
 		qualified := stripProviderPrefix(p.Provider.Name, model) != ""
-		if !qualified && !providerServes(p.Provider.Models, p.Provider.Name, model) && freeVariantOf(p.Provider.Models, model) == "" {
+		serves := qualified || providerServes(p.Provider.Models, p.Provider.Name, model) || freeVariantOf(p.Provider.Models, model) != ""
+		// Under forward_unknown every provider is a potential server of an
+		// unlisted model, so cooldown (not the whitelist) decides identity.
+		if !serves && !forwardUnknown {
 			continue
 		}
 		found = true
@@ -581,6 +609,15 @@ func (r *Router) Len() int {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 	return len(r.provs)
+}
+
+// SetForwardUnknown toggles zero-config forwarding of unknown/future
+// models. Threaded from config (defaults true). Reset preserves it because
+// Reset mutates the existing Router in place.
+func (r *Router) SetForwardUnknown(v bool) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.forwardUnknown = v
 }
 
 var (

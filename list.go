@@ -336,6 +336,7 @@ func parseRow(v any) usage.Row {
 		CompletionTokens: num("completion_tokens"),
 		RTKSavedTokens:   num("rtk_saved_tokens"),
 		CacheSavedTokens: num("cache_saved_tokens"),
+		CacheReadTokens:  num("cache_read_tokens"),
 		CostUSD:          flt("cost_usd"),
 		SavedUSD:         flt("saved_usd"),
 		Requests:         num("requests"),
