@@ -31,7 +31,7 @@ func cmdBench(cfgPath string, targetPct float64, logger *log.Logger) error {
 		return err
 	}
 	cfg := st.Get()
-	tk := rtk.New(rtk.Config{Enabled: cfg.RTK.Enabled, MinBytes: cfg.RTK.MinBytes, MaxBytes: cfg.RTK.MaxBytes})
+	tk := rtk.New(rtk.Config{Enabled: cfg.RTK.Enabled, MinBytes: cfg.RTK.MinBytes, MaxBytes: cfg.RTK.MaxBytes, Level: cfg.RTK.Level})
 
 	pattern := filepath.Join("benchdata", "*.json")
 	files, err := filepath.Glob(pattern)

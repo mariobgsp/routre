@@ -152,7 +152,7 @@ func cmdServe(cfgPath, port string, logger *log.Logger) error {
 		Enabled: cfg.Cache.Enabled, MaxEntries: cfg.Cache.MaxEntries,
 		TTLSeconds: cfg.Cache.TTLSeconds, PrefixOrder: cfg.Cache.PrefixOrder,
 	})
-	tk := rtk.New(rtk.Config{Enabled: cfg.RTK.Enabled, MinBytes: cfg.RTK.MinBytes, MaxBytes: cfg.RTK.MaxBytes})
+	tk := rtk.New(rtk.Config{Enabled: cfg.RTK.Enabled, MinBytes: cfg.RTK.MinBytes, MaxBytes: cfg.RTK.MaxBytes, Level: cfg.RTK.Level})
 
 	// Model auto-discovery: fetch each provider's own /v1/models list at
 	// startup, then refresh periodically and on SIGHUP reload. Additive

@@ -28,6 +28,13 @@ type Config struct {
 	// MaxBytes: content larger than this is skipped (bounded work; very
 	// large blobs are usually images/logs where heuristics do more harm).
 	MaxBytes int `json:"max_bytes"`
+	// Level: "" or "standard" (default pipeline) or "routre"
+	// (routre level — ultra-aggressive: after the matched filter,
+	// additionally strips blank lines, dedups runs of >=2 identical lines,
+	// and keeps only head+tail of the result — head+tail bias per the
+	// "lost in the middle" finding). Still obeys the fail-open contract:
+	// output is used only when strictly smaller.
+	Level string `json:"level,omitempty"`
 }
 
 // DefaultConfig matches 9router RTK's operating window (500B..10MiB), on by
@@ -190,7 +197,26 @@ func compressText(cfg Config, text string) (string, bool) {
 	if cand == "" || len(cand) >= len(text) {
 		return text, false
 	}
+	if cfg.Level == "routre" || cfg.Level == "caveman" { // caveman kept as alias
+		cand = routrePass(cand)
+	}
+	if cand == "" || len(cand) >= len(text) {
+		return text, false
+	}
 	return cand, true
+}
+
+// routrePass is the routre-level post-filter: drop blank lines, dedup
+// runs of >=2 identical lines, then cap at head+tail lines.
+func routrePass(text string) string {
+	lines := splitLines(text)
+	kept := lines[:0]
+	for _, l := range lines {
+		if l != "" {
+			kept = append(kept, l)
+		}
+	}
+	return truncateAt(dedupConsecutive(joinLines(kept), 2), 40, 15)
 }
 
 // filterByAutodetect scores the first 1KiB of text against known command

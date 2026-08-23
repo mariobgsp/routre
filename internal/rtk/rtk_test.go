@@ -180,3 +180,44 @@ func jsonStr(s string) string {
 	b, _ := json.Marshal(s)
 	return string(b)
 }
+
+func TestRoutreLevel(t *testing.T) {
+	// Big repetitive tool result: routre must shrink at least as much as
+	// standard and never grow the payload. caveman is kept as alias.
+	var b strings.Builder
+	for i := 0; i < 400; i++ {
+		b.WriteString("some log line of output\n")
+		if i%10 == 0 {
+			b.WriteString("\n")
+		}
+	}
+	text := b.String()
+
+	std := Config{Enabled: true, MinBytes: 500, MaxBytes: 1 << 20}
+	routre := std
+	routre.Level = "routre"
+
+	sOut, sOK := compressText(std, text)
+	if !sOK || len(sOut) >= len(text) {
+		t.Fatal("standard must compress")
+	}
+	rOut, rOK := compressText(routre, text)
+	if !rOK || len(rOut) >= len(text) {
+		t.Fatal("routre must compress")
+	}
+	if len(rOut) > len(sOut) {
+		t.Fatalf("routre (%d) must not exceed standard (%d)", len(rOut), len(sOut))
+	}
+	// Alias still works.
+	cave := std
+	cave.Level = "caveman"
+	cOut, cOK := compressText(cave, text)
+	if !cOK || cOut != rOut {
+		t.Fatalf("caveman alias must match routre")
+	}
+
+	small := "tiny\n"
+	if out, ok := compressText(routre, small); ok || out != small {
+		t.Fatal("routre must respect MinBytes")
+	}
+}

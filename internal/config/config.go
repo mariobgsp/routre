@@ -48,6 +48,8 @@ type RTKConfig struct {
 	Enabled  bool `json:"enabled"`
 	MinBytes int  `json:"min_bytes"`
 	MaxBytes int  `json:"max_bytes"`
+	// Level: "", "standard", or "routre" (routre level — ultra-aggressive).
+	Level string `json:"level,omitempty"`
 }
 
 // CacheConfig mirrors cache.Config for JSON.
@@ -166,6 +168,11 @@ func (c *Config) Validate() error {
 	}
 	if c.RTK.MinBytes < 0 || c.RTK.MaxBytes < 0 {
 		return errors.New("config: rtk byte bounds must be >= 0")
+	}
+	switch c.RTK.Level {
+	case "", "standard", "routre", "caveman": // caveman kept as deprecated alias for routre
+	default:
+		return fmt.Errorf("config: rtk.level must be \"standard\" or \"routre\", got %q", c.RTK.Level)
 	}
 	if c.RTK.MinBytes > c.RTK.MaxBytes {
 		return errors.New("config: rtk.min_bytes > rtk.max_bytes")
