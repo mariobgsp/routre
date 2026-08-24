@@ -6,105 +6,135 @@
 <title>routre-cli — The 9-MB gateway you forget is running</title>
 <meta name="description" content="One static binary (6.7 MiB, 9 MiB RAM) — failover, bench-gated 90% RTK token compression, cache, per-agent ledger.">
 <style>
-:root{--bg:#0a0a0b;--fg:#e8e8e6;--mut:#9a9a96;--acc:#ff3b30;--card:#141416;--bd:#232326;--mono:ui-monospace,Menlo,Consolas,monospace;--sans:Inter,system-ui,-apple-system,Segoe UI,Roboto,sans-serif}
-*{box-sizing:border-box}html,body{margin:0;background:var(--bg);color:var(--fg);font-family:var(--sans)}
-a{color:var(--fg);text-decoration:none;border-bottom:1px solid var(--bd)}a:hover{border-color:var(--acc)}
+:root{
+  --bg:#0A0A0A;
+  --fg:#fff;
+  --ink2:rgb(255 255 255 / 56%);
+  --ink3:rgb(255 255 255 / 40%);
+  --acc:#ff3b30;
+  --card:rgb(255 255 255 / 4%);
+  --bd:rgb(255 255 255 / 11%);
+  --hover:rgb(255 255 255 / 9%);
+  --mono:ui-monospace,Menlo,Consolas,monospace;
+  --sans:Inter,system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;
+}
+*{box-sizing:border-box}
+html,body{margin:0;background:var(--bg);color:var(--fg);font-family:var(--sans)}
+a{color:var(--fg);text-decoration:none;border-bottom:1px solid var(--bd)}
+a:hover{border-color:var(--ink2)}
+:focus-visible{outline:2px solid var(--fg);outline-offset:2px}
 .wrap{max-width:1080px;margin:0 auto;padding:0 20px}
-.nav{position:sticky;top:0;backdrop-filter:blur(8px);background:#0a0a0bcc;border-bottom:1px solid var(--bd);z-index:10}
+.nav{position:sticky;top:0;backdrop-filter:blur(8px);background:rgb(10 10 10 / 80%);border-bottom:1px solid var(--bd);z-index:10}
 .nav .wrap{display:flex;align-items:center;justify-content:space-between;padding:12px 20px}
-.logo{font-weight:800;letter-spacing:-.03em}.logo span{color:var(--acc)}
-.btn{border:1px solid var(--bd);background:var(--fg);color:var(--bg);padding:8px 14px;font-weight:700;font-size:.85rem}
-.btn.ghost{background:transparent;color:var(--fg)}
-.hero{padding:48px 0 28px;display:grid;grid-template-columns:1.1fr .9fr;gap:24px;align-items:center}
+.logo{font-weight:600;letter-spacing:-.02em}
+.logo em{font-style:normal;color:var(--acc)}
+.logo .sub{color:var(--ink3);font-family:var(--mono);font-weight:400;font-size:.8rem;margin-left:6px}
+.btn{display:inline-block;border:1px solid transparent;background:var(--fg);color:var(--bg);padding:8px 14px;font-weight:500;font-size:.85rem;border-bottom:none;border-radius:6px}
+.btn:hover{background:rgb(255 255 255 / 88%)}
+.btn.ghost{background:transparent;color:var(--fg);border-color:var(--bd)}
+.btn.ghost:hover{background:var(--hover)}
+.hero{padding:56px 0 32px;display:grid;grid-template-columns:1.1fr .9fr;gap:28px;align-items:center}
 @media(max-width:860px){.hero{grid-template-columns:1fr}}
-.kicker{color:var(--acc);font:700 .75rem var(--mono);letter-spacing:.12em;text-transform:uppercase}
-.h1{font-size:clamp(2rem,5vw,3.2rem);line-height:.95;letter-spacing:-.04em;margin:.3em 0}
-.lead{color:var(--mut);font-size:1.05rem;line-height:1.6;max-width:42em}
-.code{background:var(--card);border:1px solid var(--bd);padding:14px 16px;font:13px var(--mono);overflow:auto;white-space:pre}
-.grid{display:grid;grid-template-columns:repeat(3,1fr);gap:14px;margin:22px 0}
+.kicker{color:var(--ink3);font:500 .78rem/1.4 var(--mono)}
+.h1{font-weight:600;font-size:clamp(2rem,5vw,3rem);line-height:1.08;letter-spacing:-.03em;margin:.4em 0}
+.lead{color:var(--ink2);font-size:1.05rem;line-height:1.6;max-width:42em}
+.code{background:var(--card);border:1px solid var(--bd);padding:14px 16px;font:13px/1.7 var(--mono);overflow:auto;margin:0}
+.grid{display:grid;grid-template-columns:repeat(3,1fr);gap:14px;margin:26px 0}
 @media(max-width:860px){.grid{grid-template-columns:1fr}}
 .card{background:var(--card);border:1px solid var(--bd);padding:16px}
-.card h3{margin:0 0 6px;font-size:.95rem}.card p{margin:0;color:var(--mut);font-size:.9rem;line-height:1.5}
-.section{padding:28px 0;border-top:1px solid var(--bd)}
-.h2{font-size:1.4rem;letter-spacing:-.02em;margin:0 0 12px}
-.mono{font-family:var(--mono)} .mut{color:var(--mut)} .acc{color:var(--acc)}
+.card h3{margin:0 0 6px;font-weight:500;font-size:.95rem}
+.card p{margin:0;color:var(--ink2);font-size:.9rem;line-height:1.55}
+.section{padding:36px 0;border-top:1px solid var(--bd)}
+.h2{font-weight:600;font-size:1.3rem;letter-spacing:-.02em;margin:0 0 14px}
+.mono{font-family:var(--mono)}
+.mut{color:var(--ink2)}
+.acc{color:var(--acc)}
 .table{width:100%;border-collapse:collapse;font-size:.88rem}
-.table th,.table td{border:1px solid var(--bd);padding:8px 10px;text-align:left}.table th{background:var(--card)}
-.foot{padding:22px 0;color:var(--mut);font-size:.85rem;border-top:1px solid var(--bd)}
+.table th,.table td{border:1px solid var(--bd);padding:8px 10px;text-align:left}
+.table th{background:var(--card);font-weight:500}
+.stat{font-weight:600;font-size:2.1rem;letter-spacing:-.02em;margin:6px 0}
+.stats{display:flex;gap:12px;margin-top:12px}
+.stats .card{flex:1;display:flex;flex-direction:column;gap:2px}
+.lbl{color:var(--ink3);font-family:var(--mono);font-size:.75rem}
+.foot{padding:24px 0;color:var(--ink2);font-size:.85rem;border-top:1px solid var(--bd)}
 </style>
 </head>
 <body>
 <nav class="nav"><div class="wrap">
-  <div class="logo">routre<span>-cli</span> <span class="mono mut" style="font-weight:400;font-size:.8rem">— 9-MB gateway</span></div>
-  <div style="display:flex;gap:8px"><a class="btn ghost" href="https://github.com/mariobgsp/routre-cli">GitHub</a><a class="btn" href="#install">Install</a></div>
+  <div class="logo">routre<em>-cli</em><span class="sub">9-MB gateway</span></div>
+  <div style="display:flex;gap:8px">
+    <a class="btn ghost" href="https://github.com/mariobgsp/routre-cli">GitHub</a>
+    <a class="btn" href="#install">Install</a>
+  </div>
 </div></nav>
 
 <div class="wrap hero">
   <div>
     <div class="kicker">Single static binary · stdlib only · bench-gated</div>
     <h1 class="h1">The 9-MB gateway<br>you <span class="acc">forget</span> is running.</h1>
-    <p class="lead">6.7 MiB binary, ~9 MiB RAM idle. Gives every OpenAI/Anthropic CLI — opencode, Claude Code, Codex, Cursor — automatic failover, <b>90% RTK token compression</b> (bench-gated), response cache & per-agent ledger.</p>
-    <div class="code">curl -fsSL https://raw.githubusercontent.com/mariobgsp/routre-cli/main/install.sh | sh
+    <p class="lead">6.7 MiB binary, ~9 MiB RAM idle. Gives every OpenAI/Anthropic CLI — opencode, Claude Code, Codex, Cursor — automatic failover, <b>90% RTK token compression</b> (bench-gated), response cache &amp; per-agent ledger.</p>
+<pre class="code">curl -fsSL https://raw.githubusercontent.com/mariobgsp/routre-cli/main/install.sh | sh
 routre-cli setup --detect   # one-command hook
-routre-cli serve            # http://127.0.0.1:20128</div>
+routre-cli serve            # http://127.0.0.1:20128</pre>
     <p class="mut mono" style="font-size:.8rem;margin-top:8px">Not 80 MB + leak. Not Python/Postgres GBs. Just Go.</p>
   </div>
   <div>
     <div class="card">
-      <div class="mono mut" style="font-size:.75rem;letter-spacing:.08em">BENCH — TOOL REDUCTION</div>
-      <div style="font-size:2.2rem;font-weight:800;letter-spacing:-.04em;margin:6px 0">91.2% <span class="mut" style="font-size:1rem;font-weight:400">PASS 90% gate</span></div>
-      <div class="mono" style="font-size:.8rem;line-height:1.7">build-output 90.8%<br>git-diff 90.3% · git-log 92.8%<br>grep 92.0% · tree-ls 90.3%</div>
-      <div class="mut" style="font-size:.8rem;margin-top:8px">go run . bench -target 90 — fails build on regress</div>
+      <div class="lbl">Bench — tool reduction</div>
+      <div class="stat">91.2% <span class="mut" style="font-size:1rem;font-weight:400">pass 90% gate</span></div>
+      <div class="mono" style="font-size:.8rem;line-height:1.7;color:var(--ink2)">build-output 90.8% · git-diff 90.3%<br>git-log 92.8% · grep 92.0% · tree-ls 90.3%</div>
+      <div class="mut" style="font-size:.8rem;margin-top:8px"><span class="mono">go run . bench -target 90</span> — fails build on regress</div>
     </div>
-    <div class="card" style="margin-top:12px;display:flex;gap:10px;align-items:center">
-      <div style="flex:1"><div class="mono mut" style="font-size:.75rem">RAM IDLE</div><div style="font-weight:800">9 MiB</div></div>
-      <div style="flex:1"><div class="mono mut" style="font-size:.75rem">BINARY</div><div style="font-weight:800">6.7 MiB</div></div>
-      <div style="flex:1"><div class="mono mut" style="font-size:.75rem">QPS</div><div style="font-weight:800">~5K · 11ms</div></div>
+    <div class="stats">
+      <div class="card"><div class="lbl">RAM idle</div><div style="font-weight:600">9 MiB</div></div>
+      <div class="card"><div class="lbl">Binary</div><div style="font-weight:600">6.7 MiB</div></div>
+      <div class="card"><div class="lbl">Proxy overhead</div><div style="font-weight:600">~11 ms</div></div>
     </div>
   </div>
 </div>
 
 <div class="wrap grid">
-  <div class="card"><h3>Automatic failover</h3><p>Tiered providers, exp cooldown 2s→30m, retry only before first stream byte. No mid-SSE dup. 429/5xx failover, 400 surfaces.</p></div>
+  <div class="card"><h3>Automatic failover</h3><p>Tiered providers, exponential cooldown 2s→30m, retry only before first stream byte. No mid-SSE duplication.</p></div>
   <div class="card"><h3>RTK 90% compression</h3><p>Heuristic tool_result filter (git-diff/log/grep/tree/build) — no LM, no DB. Fail-open, never grows.</p></div>
-  <div class="card"><h3>Exact-match cache + ledger</h3><p>sha256 LRU 4096/86400 + prefix_order + per-agent token/cost ledger. <span class="mono">list</span> shows saved $.</p></div>
+  <div class="card"><h3>Cache + ledger</h3><p>Exact-match sha256 LRU with prefix ordering, per-agent token/cost ledger. <span class="mono">list</span> shows saved $.</p></div>
 </div>
 
 <div class="wrap section" id="install">
-  <h2 class="h2">Install — one command, no Go needed</h2>
-  <div class="code">curl -fsSL https://raw.githubusercontent.com/mariobgsp/routre-cli/main/install.sh | sh
+  <h2 class="h2">Install</h2>
+<pre class="code">curl -fsSL https://raw.githubusercontent.com/mariobgsp/routre-cli/main/install.sh | sh
 routre-cli version
 routre-cli setup --detect   # writes config.json + routre-cli.env (0600)
 routre-cli serve            # gateway on 127.0.0.1:20128
-# point any agent:
+
+# point any agent at it:
 export OPENAI_BASE_URL=http://127.0.0.1:20128
-export ANTHROPIC_BASE_URL=http://127.0.0.1:20128</div>
-  <p class="mut" style="font-size:.9rem;margin-top:10px">Self-update: <span class="mono">routre-cli update</span> (verifies sha256, atomic replace). npm is deprecated — shim prints curl command.</p>
+export ANTHROPIC_BASE_URL=http://127.0.0.1:20128</pre>
+  <p class="mut" style="font-size:.9rem;margin-top:10px">Self-update built in: <span class="mono">routre-cli update</span> verifies sha256 and atomically replaces the binary. npm distribution is deprecated.</p>
 </div>
 
 <div class="wrap section">
   <h2 class="h2">Why not X?</h2>
   <table class="table mono">
     <tr><th></th><th>RAM idle</th><th>Install</th><th>90% claim</th></tr>
-    <tr><td><b>routre-cli</b></td><td>9 MiB</td><td>curl one-liner, 6 platforms</td><td>bench-gated, fail build if regress</td></tr>
-    <tr><td>9router</td><td>80 MiB → 4.8 GB leak #1245</td><td>Node/Next.js</td><td>20–65% unbenchmarked, walked back</td></tr>
-    <tr><td>LiteLLM/Portkey</td><td>GBs (Python/Postgres/Redis)</td><td>stack</td><td>price discount / input-only</td></tr>
+    <tr><td>routre-cli</td><td>9 MiB</td><td>curl one-liner, 6 platforms</td><td>bench-gated, build fails on regress</td></tr>
+    <tr><td>9router</td><td>80 MiB, leak to 4.8 GB</td><td>Node/Next.js</td><td>unbenchmarked, walked back</td></tr>
+    <tr><td>LiteLLM / Portkey</td><td>GBs (Python/Postgres/Redis)</td><td>full stack</td><td>price discount / input-only</td></tr>
   </table>
 </div>
 
 <div class="wrap section">
   <h2 class="h2">Quick start</h2>
-  <div class="code">routre-cli check          # validate keys
-routre-cli list           # providers + 9-MB banner + BUDGET HIT
+<pre class="code">routre-cli check              # validate config + keys
+routre-cli list               # providers + savings banner + BUDGET HIT
 routre-cli start --autostart  # systemd/launchd daemon
-routre-cli logs -f --config config.json
-go run . bench -target 90 # honest metric</div>
-  <p class="mut">Endpoints: <span class="mono">/v1/chat/completions /v1/responses /v1/messages /v1/models /v1/status /v1/usage /healthz /metrics</span></p>
+routre-cli logs -f            # tail request log
+go run . bench -target 90     # honest metric</pre>
+  <p class="mut" style="font-size:.9rem;margin-top:10px">Endpoints: <span class="mono">/v1/chat/completions · /v1/responses · /v1/messages · /v1/models · /v1/status · /v1/usage · /healthz · /metrics</span></p>
 </div>
 
 <div class="wrap foot">
   <div>MIT · <a href="https://github.com/mariobgsp/routre-cli">github.com/mariobgsp/routre-cli</a> · <a href="https://github.com/mariobgsp/routre-cli/releases">Releases</a> · <a href="SPEC.md">SPEC</a></div>
-  <div class="mut" style="margin-top:6px">Built ponytail: stdlib only, deletion over addition, shortest diff wins.</div>
+  <div class="mut" style="margin-top:6px">stdlib only · deletion over addition · shortest diff wins</div>
 </div>
 </body>
 </html>
