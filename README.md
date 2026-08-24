@@ -40,7 +40,7 @@ Point any agent at `http://127.0.0.1:20128` via `OPENAI_BASE_URL` /
 
 ## Why this exists
 
-Built as a decision-driven spike (see [`SPEC.md`](SPEC.md) for the full
+Built as a decision-driven spike (see [`docs/SPEC.md`](docs/SPEC.md) for the full
 decision record and roadmap):
 
 - **Not 9router** — right feature set, but Node/Next.js with ~80 MB idle RAM
@@ -395,7 +395,7 @@ into flags.
 | `tiers` order | fallback order; keep subscription/cheap/free |
 
 A full reference config with 506 models lives in `config.all.json`; a
-minimal template is `config.example.json`.
+minimal template is `config.example.json` (also in `examples/`).
 
 ---
 
@@ -505,7 +505,7 @@ npm/                     DEPRECATED npm distribution (kept for pinned dependents
 
 ---
 
-## Known gaps (full detail in SPEC.md)
+## Known gaps (full detail in docs/SPEC.md)
 
 - Gemini is a streaming dialect for **OpenAI↔Gemini** (request + non-streaming
   response + in-flight SSE translation with `[DONE]` termination); the
@@ -538,5 +538,5 @@ reimplementation of the MIT-licensed 9router `open-sse/rtk` ideas.)
 
 ---
 
-See [`SPEC.md`](SPEC.md) for the full decision record, metric definitions,
+See [`docs/SPEC.md`](docs/SPEC.md) for the full decision record, metric definitions,
 failover policy table, and validation roadmap.
