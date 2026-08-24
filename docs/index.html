@@ -8,6 +8,12 @@
       name="description"
       content="One static binary (6.7 MiB, 9 MiB RAM) — failover, bench-gated 90% RTK token compression, cache, per-agent ledger."
     />
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;500;600&display=swap"
+      rel="stylesheet"
+    />
     <style>
       :root {
         --bg: #0a0a0a;
@@ -19,7 +25,7 @@
         --bd: rgb(255 255 255 / 11%);
         --hover: rgb(255 255 255 / 9%);
         --mono: ui-monospace, Menlo, Consolas, monospace;
-        --sans: Inter, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+        --sans: Outfit, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
       }
       * {
         box-sizing: border-box;
@@ -30,6 +36,32 @@
         background: var(--bg);
         color: var(--fg);
         font-family: var(--sans);
+        overflow-x: hidden;
+      }
+      /* ambient glow */
+      body::before {
+        content: "";
+        position: fixed;
+        inset: 0;
+        pointer-events: none;
+        z-index: 0;
+        background:
+          radial-gradient(
+            600px 400px at 75% -5%,
+            rgb(255 59 48 / 7%),
+            transparent 70%
+          ),
+          radial-gradient(
+            800px 500px at 10% 110%,
+            rgb(255 255 255 / 3%),
+            transparent 70%
+          );
+      }
+      nav,
+      main,
+      footer {
+        position: relative;
+        z-index: 1;
       }
       a {
         color: var(--fg);
@@ -60,7 +92,7 @@
         display: flex;
         align-items: center;
         justify-content: space-between;
-        padding: 12px 20px;
+        padding: 14px 20px;
       }
       .logo {
         font-weight: 600;
@@ -82,14 +114,18 @@
         border: 1px solid transparent;
         background: var(--fg);
         color: var(--bg);
-        padding: 8px 14px;
-        font-weight: 500;
-        font-size: 0.85rem;
+        padding: 9px 16px;
+        font-weight: 600;
+        font-size: 0.88rem;
+        font-family: var(--sans);
         border-bottom: none;
-        border-radius: 6px;
+        border-radius: 999px;
+        transition: transform 0.35s cubic-bezier(0.22, 1, 0.36, 1),
+          background 0.2s ease;
       }
       .btn:hover {
         background: rgb(255 255 255 / 88%);
+        transform: translateY(-1px);
       }
       .btn.ghost {
         background: transparent;
@@ -98,20 +134,19 @@
       }
       .btn.ghost:hover {
         background: var(--hover);
+        border-color: var(--ink2);
       }
       .hero {
-        padding: 56px 0 32px;
+        padding: clamp(56px, 10vh, 120px) 0 48px;
         display: grid;
         grid-template-columns: 1.1fr 0.9fr;
-        gap: 28px;
+        gap: 32px;
         align-items: center;
       }
       @media (max-width: 860px) {
         .hero {
           grid-template-columns: 1fr;
-        }
-        .hero {
-          padding: 36px 0 24px;
+          padding: 40px 0 28px;
         }
         .logo .sub {
           display: none;
@@ -119,7 +154,7 @@
       }
       @media (max-width: 420px) {
         .nav .btn {
-          padding: 7px 10px;
+          padding: 7px 11px;
         }
       }
       .kicker {
@@ -128,23 +163,29 @@
       }
       .h1 {
         font-weight: 600;
-        font-size: clamp(2rem, 5vw, 3rem);
-        line-height: 1.08;
+        font-size: clamp(2.2rem, 5vw, 3.4rem);
+        line-height: 1.05;
         letter-spacing: -0.03em;
-        margin: 0.4em 0;
+        margin: 0.45em 0;
       }
       .lead {
         color: var(--ink2);
-        font-size: 1.05rem;
-        line-height: 1.6;
+        font-size: 1.08rem;
+        font-weight: 300;
+        line-height: 1.65;
         max-width: 42em;
+      }
+      .lead b {
+        color: var(--fg);
+        font-weight: 600;
       }
       .code {
         background: var(--card);
         border: 1px solid var(--bd);
-        padding: 14px 16px;
-        font: 13px/1.7 var(--mono);
-        overflow: auto;
+        border-radius: 10px;
+        padding: 16px 18px;
+        font: 13px/1.75 var(--mono);
+        overflow-x: auto;
         margin: 0;
       }
       .grid {
@@ -161,29 +202,45 @@
       .card {
         background: var(--card);
         border: 1px solid var(--bd);
-        padding: 16px;
+        border-radius: 14px;
+        padding: 20px;
         text-align: center;
+        transition: transform 0.6s cubic-bezier(0.22, 1, 0.36, 1),
+          border-color 0.3s ease, background 0.3s ease;
+      }
+      .card:hover {
+        transform: translateY(-4px);
+        border-color: rgb(255 255 255 / 24%);
+        background: var(--hover);
+      }
+      .card.hot {
+        border-color: rgb(255 59 48 / 35%);
+      }
+      .card.hot:hover {
+        border-color: rgb(255 59 48 / 60%);
       }
       .card h3 {
-        margin: 0 0 6px;
-        font-weight: 500;
-        font-size: 0.95rem;
+        margin: 0 0 8px;
+        font-weight: 600;
+        font-size: 1rem;
+        letter-spacing: -0.01em;
       }
       .card p {
         margin: 0;
         color: var(--ink2);
         font-size: 0.9rem;
-        line-height: 1.55;
+        font-weight: 300;
+        line-height: 1.6;
       }
       .section {
-        padding: 36px 0;
+        padding: clamp(56px, 9vh, 112px) 0;
         border-top: 1px solid var(--bd);
       }
       .h2 {
         font-weight: 600;
-        font-size: 1.3rem;
+        font-size: clamp(1.5rem, 3vw, 2rem);
         letter-spacing: -0.02em;
-        margin: 0 0 14px;
+        margin: 0 0 20px;
       }
       .mono {
         font-family: var(--mono);
@@ -194,6 +251,56 @@
       .acc {
         color: var(--acc);
       }
+      /* marquee */
+      .marquee {
+        overflow: hidden;
+        border-top: 1px solid var(--bd);
+        border-bottom: 1px solid var(--bd);
+        padding: 18px 0;
+        mask-image: linear-gradient(
+          90deg,
+          transparent,
+          #000 12%,
+          #000 88%,
+          transparent
+        );
+      }
+      .marquee-track {
+        display: flex;
+        gap: 48px;
+        width: max-content;
+        animation: slide 30s linear infinite;
+      }
+      .marquee:hover .marquee-track {
+        animation-play-state: paused;
+      }
+      .marquee-track span {
+        color: var(--ink3);
+        font: 500 0.85rem var(--mono);
+        white-space: nowrap;
+      }
+      .marquee-track i {
+        font-style: normal;
+        color: var(--acc);
+      }
+      @keyframes slide {
+        to {
+          transform: translateX(-50%);
+        }
+      }
+      @media (prefers-reduced-motion: reduce) {
+        .marquee-track {
+          animation: none;
+        }
+        * {
+          transition: none !important;
+        }
+      }
+      .tablewrap {
+        overflow-x: auto;
+        border-radius: 10px;
+        border: 1px solid var(--bd);
+      }
       .table {
         width: 100%;
         border-collapse: collapse;
@@ -201,19 +308,29 @@
       }
       .table th,
       .table td {
-        border: 1px solid var(--bd);
-        padding: 8px 10px;
+        border-bottom: 1px solid var(--bd);
+        padding: 12px 14px;
         text-align: left;
+      }
+      .table tr:last-child td {
+        border-bottom: none;
       }
       .table th {
         background: var(--card);
         font-weight: 500;
       }
+      .table tbody tr {
+        transition: background 0.25s ease;
+      }
+      .table tbody tr:hover {
+        background: var(--hover);
+      }
       .stat {
         font-weight: 600;
-        font-size: 2.1rem;
+        font-size: 2.4rem;
         letter-spacing: -0.02em;
         margin: 6px 0;
+        line-height: 1;
       }
       .stats {
         display: flex;
@@ -223,23 +340,38 @@
       }
       .stats .card {
         min-width: 120px;
-      }
-      .tablewrap {
-        overflow-x: auto;
-      }
-      .stats .card {
         flex: 1;
         display: flex;
         flex-direction: column;
-        gap: 2px;
+        gap: 3px;
+        text-align: left;
       }
       .lbl {
         color: var(--ink3);
         font-family: var(--mono);
-        font-size: 0.75rem;
+        font-size: 0.72rem;
+        text-transform: uppercase;
+        letter-spacing: 0.06em;
+      }
+      /* giant CTA */
+      .cta {
+        text-align: center;
+        padding: clamp(72px, 12vh, 140px) 0;
+        border-top: 1px solid var(--bd);
+      }
+      .cta h2 {
+        font-weight: 600;
+        font-size: clamp(2rem, 6vw, 4rem);
+        letter-spacing: -0.03em;
+        line-height: 1.05;
+        margin: 0 0 28px;
+      }
+      .cta .btn {
+        font-size: 1rem;
+        padding: 13px 26px;
       }
       .foot {
-        padding: 24px 0;
+        padding: 32px 0 40px;
         color: var(--ink2);
         font-size: 0.85rem;
         border-top: 1px solid var(--bd);
@@ -269,7 +401,7 @@
         <h1 class="h1">
           The 9-MB gateway<br />you <span class="acc">forget</span> is running.
         </h1>
-        <p class="lead">
+        <p class="lead" id="lead">
           6.7 MiB binary, ~9 MiB RAM idle. Gives every OpenAI/Anthropic CLI —
           opencode, Claude Code, Codex, Cursor — automatic failover,
           <b>90% RTK token compression</b> (bench-gated), response cache &amp;
@@ -279,16 +411,16 @@
 curl -fsSL https://raw.githubusercontent.com/mariobgsp/routre-cli/main/install.sh | sh
 routre-cli setup --detect   # one-command hook
 routre-cli serve            # http://127.0.0.1:20128</pre>
-        <p class="mut mono" style="font-size: 0.8rem; margin-top: 8px">
+        <p class="mut mono" style="font-size: 0.8rem; margin-top: 10px">
           Not 80 MB + leak. Not Python/Postgres GBs. Just Go.
         </p>
       </div>
       <div>
-        <div class="card">
+        <div class="card hot" style="text-align: left">
           <div class="lbl">Bench — tool reduction</div>
           <div class="stat">
-            91.2%
-            <span class="mut" style="font-size: 1rem; font-weight: 400"
+            <span id="gate">91.2</span>%
+            <span class="mut" style="font-size: 1rem; font-weight: 300"
               >pass 90% gate</span
             >
           </div>
@@ -299,7 +431,7 @@ routre-cli serve            # http://127.0.0.1:20128</pre>
             build-output 90.8% · git-diff 90.3%<br />git-log 92.8% · grep 92.0%
             · tree-ls 90.3%
           </div>
-          <div class="mut" style="font-size: 0.8rem; margin-top: 8px">
+          <div class="mut" style="font-size: 0.8rem; margin-top: 10px">
             <span class="mono">go run . bench -target 90</span> — fails build on
             regress
           </div>
@@ -321,6 +453,15 @@ routre-cli serve            # http://127.0.0.1:20128</pre>
       </div>
     </div>
 
+    <div class="marquee" aria-hidden="true">
+      <div class="marquee-track" id="mq">
+        <span>opencode</span><i>·</i><span>Claude Code</span><i>·</i
+        ><span>Codex</span><i>·</i><span>Cursor</span><i>·</i
+        ><span>any OpenAI CLI</span><i>·</i><span>any Anthropic CLI</span
+        ><i>·</i>
+      </div>
+    </div>
+
     <div class="wrap grid">
       <div class="card">
         <h3>Automatic failover</h3>
@@ -329,7 +470,7 @@ routre-cli serve            # http://127.0.0.1:20128</pre>
           stream byte. No mid-SSE duplication.
         </p>
       </div>
-      <div class="card">
+      <div class="card hot">
         <h3>RTK 90% compression</h3>
         <p>
           Heuristic tool_result filter (git-diff/log/grep/tree/build) — no LM,
@@ -356,7 +497,7 @@ routre-cli serve            # gateway on 127.0.0.1:20128
 # point any agent at it:
 export OPENAI_BASE_URL=http://127.0.0.1:20128
 export ANTHROPIC_BASE_URL=http://127.0.0.1:20128</pre>
-      <p class="mut" style="font-size: 0.9rem; margin-top: 10px">
+      <p class="mut" style="font-size: 0.9rem; margin-top: 12px">
         Self-update built in:
         <span class="mono">routre-cli update</span> verifies sha256 and
         atomically replaces the binary. npm distribution is deprecated.
@@ -403,7 +544,7 @@ routre-cli list               # providers + savings banner + BUDGET HIT
 routre-cli start --autostart  # systemd/launchd daemon
 routre-cli logs -f            # tail request log
 go run . bench -target 90     # honest metric</pre>
-      <p class="mut" style="font-size: 0.9rem; margin-top: 10px">
+      <p class="mut" style="font-size: 0.9rem; margin-top: 12px">
         Endpoints:
         <span class="mono"
           >/v1/chat/completions · /v1/responses · /v1/messages · /v1/models ·
@@ -412,19 +553,107 @@ go run . bench -target 90     # honest metric</pre>
       </p>
     </div>
 
-    <div class="wrap foot">
-      <div>
-        MIT ·
-        <a href="https://github.com/mariobgsp/routre-cli"
-          >github.com/mariobgsp/routre-cli</a
-        >
-        ·
-        <a href="https://github.com/mariobgsp/routre-cli/releases">Releases</a>
-        · <a href="SPEC.md">SPEC</a>
-      </div>
-      <div class="mut" style="margin-top: 6px">
-        stdlib only · deletion over addition · shortest diff wins
+    <div class="cta">
+      <div class="wrap">
+        <h2>Stop paying<br />the token tax.</h2>
+        <a class="btn" href="#install">Install routre-cli</a>
       </div>
     </div>
+
+    <footer>
+      <div class="wrap foot">
+        <div>
+          MIT ·
+          <a href="https://github.com/mariobgsp/routre-cli"
+            >github.com/mariobgsp/routre-cli</a
+          >
+          ·
+          <a href="https://github.com/mariobgsp/routre-cli/releases"
+            >Releases</a
+          >
+          · <a href="SPEC.md">SPEC</a>
+        </div>
+        <div class="mut" style="margin-top: 6px">
+          stdlib only · deletion over addition · shortest diff wins
+        </div>
+      </div>
+    </footer>
+
+    <script
+      src="https://cdn.jsdelivr.net/npm/gsap@3.12.5/dist/gsap.min.js"
+      integrity="sha256-KAM+RJox68w5blvosTtjFSvwMJQoj7WGcDQyGSe84Ic="
+      crossorigin="anonymous"
+    ></script>
+    <script
+      src="https://cdn.jsdelivr.net/npm/gsap@3.12.5/dist/ScrollTrigger.min.js"
+      integrity="sha256-rTPC35raimY8IUc1eCj5gNC3ynMe8z6zxuTzJ8OyzaU="
+      crossorigin="anonymous"
+    ></script>
+    <script>
+      (function () {
+        if (!window.gsap || !window.ScrollTrigger) return; // graceful: static page stays
+        gsap.registerPlugin(ScrollTrigger);
+
+        // scrubbing lead reveal — words fade 0.15 -> 1 as you scroll
+        var lead = document.getElementById("lead");
+        var frag = document.createDocumentFragment();
+        Array.prototype.slice.call(lead.childNodes).forEach(function (node) {
+          if (node.nodeType === 3) {
+            node.textContent.split(/(\s+)/).forEach(function (tok) {
+              if (!tok) return;
+              if (/^\s+$/.test(tok)) {
+                frag.appendChild(document.createTextNode(tok));
+              } else {
+                var s = document.createElement("span");
+                s.className = "w";
+                s.textContent = tok;
+                frag.appendChild(s);
+              }
+            });
+          } else {
+            frag.appendChild(node); // keep <b> intact
+          }
+        });
+        lead.textContent = "";
+        lead.appendChild(frag);
+        var words = lead.querySelectorAll(".w");
+        gsap.fromTo(
+          words,
+          { opacity: 0.15 },
+          {
+            opacity: 1,
+            stagger: 0.05,
+            ease: "none",
+            scrollTrigger: { trigger: lead, start: "top 85%", end: "top 40%", scrub: true },
+          }
+        );
+
+        // cards + sections rise in
+        gsap.utils
+          .toArray(".grid .card, .section, .cta h2, .cta .btn")
+          .forEach(function (el) {
+            gsap.from(el, {
+              y: 28,
+              autoAlpha: 0,
+              duration: 0.9,
+              ease: "power3.out",
+              scrollTrigger: { trigger: el, start: "top 88%", once: true },
+            });
+          });
+
+        // bench gate count-up
+        var gate = document.getElementById("gate");
+        var o = { v: 80 };
+        gsap.to(o, {
+          v: 91.2,
+          duration: 1.6,
+          ease: "power2.out",
+          onUpdate: function () {
+            gate.textContent = o.v.toFixed(1);
+          },
+          scrollTrigger: { trigger: gate, start: "top 90%", once: true },
+        });
+      })();
+    </script>
   </body>
 </html>
