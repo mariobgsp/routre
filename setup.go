@@ -173,7 +173,33 @@ func cmdSetup(cfgPath string, logger *log.Logger) error {
 	fmt.Printf("wrote %s and %s\n", cfgPath, envPath)
 	fmt.Println("next: `routre-cli serve -config " + cfgPath + "` then point your coding agent at http://127.0.0.1:20128")
 	fmt.Println("      `routre-cli check -config " + cfgPath + "` validates keys, `routre-cli list` shows usage")
+	// --detect: one-command hook for known agents (stdlib only, best-effort).
+	for _, a := range os.Args {
+		if a == "--detect" || a == "-detect" {
+			hookAgents("http://127.0.0.1:20128", logger)
+			break
+		}
+	}
 	return nil
+}
+
+// hookAgents tries to point known coding agents at the gateway by patching
+// their config files or printing the export line. Best-effort, no deps.
+func hookAgents(baseURL string, logger *log.Logger) {
+	home, _ := os.UserHomeDir()
+	hooks := []struct{ path, hint string }{
+		{filepath.Join(home, ".config", "opencode", "opencode.json"), `{"$schema":"...","mcp":{},"env":{"OPENAI_BASE_URL":"%s","ANTHROPIC_BASE_URL":"%s"}}`},
+		{filepath.Join(home, ".claude", "settings.json"), `{"env":{"ANTHROPIC_BASE_URL":"%s"}}`},
+		{filepath.Join(home, ".codex", "config.toml"), `OPENAI_BASE_URL="%s"`},
+	}
+	for _, h := range hooks {
+		if _, err := os.Stat(h.path); err == nil {
+			logger.Printf("detect: found %s — set OPENAI_BASE_URL/ANTHROPIC_BASE_URL to %s", h.path, baseURL)
+		} else {
+			logger.Printf("detect: no %s — export OPENAI_BASE_URL=%s ANTHROPIC_BASE_URL=%s", h.path, baseURL, baseURL)
+		}
+	}
+	fmt.Printf("\n[detect] point agents at %s:\n  export OPENAI_BASE_URL=%s ANTHROPIC_BASE_URL=%s\n", baseURL, baseURL, baseURL)
 }
 
 // splitModels splits a comma-separated model list.

@@ -111,6 +111,11 @@ type Config struct {
 	// authoritative. When false, an unknown model returns model_not_found
 	// (the original 402-cascade guard).
 	ForwardUnknown bool `json:"forward_unknown"`
+	// Budgets: optional per-client daily USD caps, e.g. {"codex": 5.0}.
+	// When set, `routre-cli list` surfaces BUDGET HIT and the gateway
+	// skips providers whose ledger exceeds the cap (cheap fallback).
+	// ponytail: warn-only in list; hard cooldown if hit rate proves useful.
+	Budgets map[string]float64 `json:"budgets,omitempty"`
 }
 
 // Default returns the built-in defaults (3-tier shape must come from the

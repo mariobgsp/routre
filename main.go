@@ -80,6 +80,7 @@ func run(args []string, logger *log.Logger) error {
 		return nil
 
 	case "setup":
+		// --detect flag handled inside cmdSetup (best-effort hook for known agents).
 		return cmdSetup(*cfgPath, logger)
 
 	case "serve":
