@@ -1,10 +1,6 @@
 # routre-cli
 
-A low-RAM LLM gateway for coding agents. One static binary (~6.7 MiB, ~9 MiB
-RAM idle) that gives every OpenAI/Anthropic-compatible CLI — opencode,
-Claude Code, Codex, Cursor, … — automatic provider failover, RTK token
-compression (≥90% on tool-heavy traffic), response caching, and a
-per-agent token/cost ledger.
+The 9-MB gateway you forget is running. One static binary (~6.7 MiB, ~9 MiB RAM idle, bench-gated ≥90% tool-token savings) that gives every OpenAI/Anthropic-compatible CLI — opencode, Claude Code, Codex, Cursor, … — automatic provider failover, RTK token compression (≥90% on tool-heavy traffic), response caching, and a per-agent token/cost ledger.
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/mariobgsp/routre-cli/main/install.sh | sh

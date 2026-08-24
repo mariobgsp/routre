@@ -19,7 +19,7 @@ import (
 // live cooldown status from a running gateway) and token/cost usage grouped
 // by client (coding agent), with totals. Works fully offline from config +
 // persisted usage when the gateway is not running.
-func cmdList(cfgPath, url string, asJSON bool, logger *log.Logger) error {
+func cmdList(cfgPath, url string, asJSON bool, _ *log.Logger) error {
 	st := config.NewStore(cfgPath)
 	if err := st.Load(); err != nil {
 		return err
@@ -91,6 +91,18 @@ func cmdList(cfgPath, url string, asJSON bool, logger *log.Logger) error {
 		}
 	}
 	printUsage(rows, live)
+	// Budgets — ponytail: warn-only, cheap ledger scan.
+	if len(cfg.Budgets) > 0 && len(rows) > 0 {
+		byClient := map[string]float64{}
+		for _, r := range rows {
+			byClient[r.Provider] += r.CostUSD
+		}
+		for client, capUSD := range cfg.Budgets {
+			if spent, ok := byClient[client]; ok && capUSD > 0 && spent >= capUSD {
+				fmt.Printf("\n  BUDGET HIT: %s spent %s / cap %s — gateway will prefer cheap tier\n", client, fmtMoney(spent), fmtMoney(capUSD))
+			}
+		}
+	}
 	return nil
 }
 
@@ -268,6 +280,10 @@ func printUsageTo(w io.Writer, rows []usage.Row, live bool) {
 		totalSavedStr = fmtMoney(totSavedUSD)
 	}
 	fmt.Fprintf(w, "    cost:     %s   saved: %s\n", totalCostStr, totalSavedStr)
+	// 9-MB banner — memorable efficiency hook.
+	if totSaved > 0 {
+		fmt.Fprintf(w, "\n  9-MB gateway • bench-gated 90%% RTK • saved %d tokens (%s) you would have paid\n", totSaved, totalSavedStr)
+	}
 }
 
 // fmtMoney renders USD with enough precision for tiny per-request costs.
