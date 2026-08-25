@@ -405,18 +405,44 @@
         text-transform: uppercase;
         letter-spacing: 0.06em;
       }
-      /* giant CTA */
+      /* giant CTA — hamster watermark + cream tint */
       .cta {
         text-align: center;
-        padding: 36px 0;
+        padding: 56px 0;
         border-top: 1px solid var(--bd);
+        position: relative;
+        overflow: hidden;
+        background: radial-gradient(
+          800px 400px at 50% 0%,
+          rgb(255 181 142 / 14%),
+          transparent 70%
+        );
+      }
+      .cta::before {
+        content: "";
+        position: absolute;
+        inset: auto 50% 0 50%;
+        width: 700px;
+        height: 700px;
+        transform: translateX(-50%) translateY(38%);
+        background: url("icon/routre-hamster.jpeg") center / contain no-repeat;
+        opacity: 0.07;
+        pointer-events: none;
+      }
+      .cta .wrap {
+        position: relative;
+        z-index: 1;
       }
       .cta h2 {
         font-weight: 600;
-        font-size: clamp(2rem, 6vw, 4rem);
+        font-size: clamp(2.2rem, 6.5vw, 4.4rem);
         letter-spacing: -0.03em;
         line-height: 1.05;
         margin: 0 0 28px;
+      }
+      .cta h2 .word {
+        display: inline-block;
+        will-change: transform, opacity;
       }
       .cta .btn {
         font-size: 1rem;
@@ -869,34 +895,62 @@ go run . bench -target 90     # honest metric</pre>
           );
 
           // cards + sections — subtle rise
-          gsap.utils
-            .toArray(".grid .card, .section")
-            .forEach(function (el) {
-              gsap.from(el, {
-                y: 24,
-                autoAlpha: 0,
-                duration: 0.75,
-                ease: "power3.out",
-                scrollTrigger: { trigger: el, start: "top 90%", once: true },
-              });
+          gsap.utils.toArray(".grid .card, .section").forEach(function (el) {
+            gsap.from(el, {
+              y: 24,
+              autoAlpha: 0,
+              duration: 0.75,
+              ease: "power3.out",
+              scrollTrigger: { trigger: el, start: "top 90%", once: true },
             });
-
-          // CTA — more creative: headline scales up, button pops with back easing
-          gsap.from(".cta h2", {
-            y: 40,
-            scale: 0.97,
-            autoAlpha: 0,
-            duration: 1.0,
-            ease: "power3.out",
-            scrollTrigger: { trigger: ".cta", start: "top 85%", once: true },
           });
+
+          // CTA — word-by-word reveal + elastic button
+          var ctaH2 = document.querySelector(".cta h2");
+          if (ctaH2 && !ctaH2.querySelector(".word")) {
+            // wrap each word in <span class="word"> without innerHTML (textContent-safe)
+            var frag = document.createDocumentFragment();
+            Array.prototype.slice.call(ctaH2.childNodes).forEach(function (node) {
+              if (node.nodeType === 1 && node.tagName === "BR") {
+                frag.appendChild(node.cloneNode());
+              } else if (node.nodeType === 3) {
+                node.textContent.split(/(\s+)/).forEach(function (tok) {
+                  if (!tok) return;
+                  if (/^\s+$/.test(tok)) {
+                    frag.appendChild(document.createTextNode(tok));
+                  } else {
+                    var sp = document.createElement("span");
+                    sp.className = "word";
+                    sp.textContent = tok;
+                    frag.appendChild(sp);
+                  }
+                });
+              } else {
+                frag.appendChild(node.cloneNode(true));
+              }
+            });
+            ctaH2.textContent = "";
+            ctaH2.appendChild(frag);
+          }
+          var ctaWords = document.querySelectorAll(".cta h2 .word");
+          if (ctaWords.length) {
+            gsap.from(ctaWords, {
+              y: 56,
+              rotationX: -18,
+              autoAlpha: 0,
+              duration: 0.85,
+              stagger: 0.07,
+              ease: "power3.out",
+              scrollTrigger: { trigger: ".cta", start: "top 82%", once: true },
+            });
+          }
           gsap.from(".cta .btn", {
-            y: 18,
-            scale: 0.92,
+            y: 22,
+            scale: 0.88,
             autoAlpha: 0,
-            duration: 0.7,
-            delay: 0.18,
-            ease: "back.out(1.6)",
+            duration: 0.75,
+            delay: 0.45,
+            ease: "back.out(1.7)",
             scrollTrigger: { trigger: ".cta .btn", start: "top 95%", once: true },
           });
 
