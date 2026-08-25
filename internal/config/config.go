@@ -273,6 +273,44 @@ func (s *Store) Get() Config {
 // Path returns the config file path.
 func (s *Store) Path() string { return s.path }
 
+// Save validates cfg, writes it atomically to the store's file, and reloads.
+// It triggers the OnLoad callback on success. The write is via temp file +
+// rename, so readers never see a torn file.
+func (s *Store) Save(cfg Config) error {
+	if err := cfg.Validate(); err != nil {
+		return err
+	}
+	data, err := json.MarshalIndent(cfg, "", "  ")
+	if err != nil {
+		return err
+	}
+	data = append(data, '\n')
+	dir := s.path
+	if idx := len(s.path); idx > 0 {
+		// filepath.Dir without extra import (path is already validated)
+		for i := len(s.path) - 1; i >= 0; i-- {
+			if s.path[i] == '/' || s.path[i] == '\\' {
+				dir = s.path[:i]
+				break
+			}
+		}
+		if dir == s.path {
+			dir = "."
+		}
+	}
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return err
+	}
+	tmp := s.path + ".tmp"
+	if err := os.WriteFile(tmp, data, 0o644); err != nil {
+		return err
+	}
+	if err := os.Rename(tmp, s.path); err != nil {
+		return err
+	}
+	return s.Load()
+}
+
 // OverrideListen applies a CLI -port/-listen override on top of the loaded
 // config without touching the file.
 func (s *Store) OverrideListen(listen string) {

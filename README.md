@@ -1,6 +1,6 @@
 # routre-cli
 
-The 9-MB gateway you forget is running. One static binary (~6.7 MiB, ~9 MiB RAM idle, bench-gated ≥90% tool-token savings) that gives every OpenAI/Anthropic-compatible CLI — opencode, Claude Code, Codex, Cursor, … — automatic provider failover, RTK token compression (≥90% on tool-heavy traffic), response caching, and a per-agent token/cost ledger.
+The 9-MB gateway you forget is running. One static binary (~10 MiB, ~10 MiB RAM idle, bench-gated ≥90% tool-token savings) that gives every OpenAI/Anthropic-compatible CLI — opencode, Claude Code, Codex, Cursor, … — automatic provider failover, RTK token compression (≥90% on tool-heavy traffic), response caching, and a per-agent token/cost ledger. A localhost dashboard at `http://127.0.0.1:20128/ui` lets non-programmers configure it without editing JSON.
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/mariobgsp/routre-cli/main/install.sh | sh
@@ -21,6 +21,7 @@ Point any agent at `http://127.0.0.1:20128` via `OPENAI_BASE_URL` /
 - [Why this exists](#why-this-exists)
 - [Install](#install)
 - [Quick start](#quick-start)
+  - [Local dashboard for non-programmers](#local-dashboard-for-non-programmers)
 - [How it works](#how-it-works)
   - [Automatic failover](#automatic-failover)
   - [RTK token compression](#rtk-token-compression--90-on-tool-heavy-traffic)
@@ -144,12 +145,20 @@ export OPENAI_BASE_URL=http://127.0.0.1:20128      # Codex / opencode / etc.
 
 Endpoints: `POST /v1/chat/completions`, `POST /v1/responses`, `POST /v1/messages`,
 `GET /v1/models`, `GET /v1/status`, `GET /v1/usage`, `GET /healthz`,
-`GET /metrics` (Prometheus).
+`GET /metrics` (Prometheus). Local dashboard: `GET /ui` (loopback-only, no extra RAM at idle).
 
 `/v1/responses` speaks the OpenAI Responses API (what opencode's built-in
 `openai` provider uses) and is translated to `/v1/chat/completions` for the
 upstream providers, then wrapped back into the Responses envelope for the
 client. It works with `OPENAI_BASE_URL` out of the box.
+
+### Local dashboard for non-programmers
+
+Open `http://127.0.0.1:20128/ui` in a browser — no CLI needed. The page shows live status (RTK/cache/uptime, provider tiers, key presence), a form to set API keys (written to `routre-cli.env`, `0600`), and a validated JSON editor for the full config (`config.json`, atomic write + instant reload). Every change is validated before it is saved; bad JSON is rejected and the previous config is kept. The server binds `127.0.0.1` only, rejects non-loopback `Host`/`Origin` headers (DNS-rebinding/CSRF mitigation), and the dashboard adds ~0 MiB at idle and <2 MiB after use — binary grows from ~7 MiB to ~11 MiB.
+
+```text
+routre-cli serve          # then open http://127.0.0.1:20128/ui
+```
 
 ### Connect everything (opencode-go, opencode zen, OpenRouter)
 
@@ -413,6 +422,7 @@ minimal template is `config.example.json` (also in `examples/`).
 | `routre-cli logs [-n 50] [-f] [-config f]` | tail the per-request log |
 | `routre-cli bench [-config f] [-target 90]` | RTK token-reduction benchmark (gated) |
 | `routre-cli update [-check]` | self-update: download + verify + atomically replace this binary (refuses npm-managed copies) |
+| `http://127.0.0.1:20128/ui` | local dashboard: status, providers, keys, full config editor — loopback-only, `~0` idle RAM |
 | `routre-cli version` | print version |
 
 ### `list` — everything connected, per agent, with totals
@@ -458,9 +468,10 @@ Measured on this machine, 2026-08-15:
 | RTK tool-token reduction (bench, 5 tool-heavy payloads) | **91.5%** | ≥ 90% (aggregate **and** per-payload) |
 | Worst per-payload tool reduction | 90.3% (tree-ls) | ≥ 90% |
 | RTK payload-token reduction (whole request bodies) | **91.3%** | reported |
-| Idle RSS (`scripts/measure-ram.sh`) | **9 MiB** | ≤ 100 MiB |
+| Idle RSS (`scripts/measure-ram.sh`) | **10 MiB** (was 9 MiB pre-UI) | ≤ 100 MiB |
 | Peak RSS under live opencode load (3 sessions) | 12.9 MiB | ≤ 200 MiB hard cap |
-| Binary size (`CGO_ENABLED=0`, `-s -w`) | **6.7 MiB** | small |
+| Binary size (`CGO_ENABLED=0`, `-s -w`) | **10.6 MiB** (was 6.7 MiB pre-UI) | small |
+| Dashboard RAM delta (idle → after serving /ui once) | **+0.2 MiB** | <2 MiB |
 | Tests | all pass (`go test ./...`) | — |
 | OpenCode 1.18.15 e2e → gateway → upstream | answer delivered, exit 0 | — |
 | RTK on a real 23.4 KB tool_result request | 5.4 KB sent upstream | fail-open |
@@ -492,7 +503,7 @@ internal/config/         JSON config + routre-cli.env + SIGHUP reload
 internal/router/         tiers, failover, cooldowns (exponential backoff)
 internal/rtk/            token compression (12 filters + autodetect)
 internal/cache/          exact-match LRU + prefix ordering
-internal/proxy/          HTTP gateway, SSE relay, key injection, translation
+internal/proxy/          HTTP gateway, SSE relay, key injection, translation, loopback-only /ui dashboard
 internal/usage/          token/cost ledger (persisted to ~/.routre-cli/)
 internal/tokenize/       token estimator (benchmark instrument)
 internal/mock/           mock upstream (tests + keyless e2e)

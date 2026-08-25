@@ -2,6 +2,7 @@ package proxy
 
 import (
 	"net/http"
+	"strings"
 )
 
 // authEnabled reports whether gateway auth is configured (a secret_env is
@@ -63,7 +64,7 @@ func (h *Handlers) authMiddleware(processToken string, next http.Handler) http.H
 			next.ServeHTTP(w, r)
 			return
 		}
-		if r.URL.Path == "/healthz" || r.URL.Path == "/metrics" {
+		if r.URL.Path == "/healthz" || r.URL.Path == "/metrics" || r.URL.Path == "/ui" || strings.HasPrefix(r.URL.Path, "/ui/") {
 			next.ServeHTTP(w, r)
 			return
 		}
