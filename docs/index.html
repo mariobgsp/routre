@@ -445,6 +445,9 @@
         grid-template-columns: 1fr 1fr;
         gap: 14px;
       }
+      .cols > * {
+        min-width: 0;
+      }
       @media (max-width: 860px) {
         .cols {
           grid-template-columns: 1fr;
@@ -824,72 +827,91 @@ go run . bench -target 90     # honest metric</pre>
             setTimeout(initGSAP, 40);
             return;
           }
-        gsap.registerPlugin(ScrollTrigger);
+          gsap.registerPlugin(ScrollTrigger);
 
-        // scrubbing lead reveal — words fade 0.15 -> 1 as you scroll
-        var lead = document.getElementById("lead");
-        var frag = document.createDocumentFragment();
-        Array.prototype.slice.call(lead.childNodes).forEach(function (node) {
-          if (node.nodeType === 3) {
-            node.textContent.split(/(\s+)/).forEach(function (tok) {
-              if (!tok) return;
-              if (/^\s+$/.test(tok)) {
-                frag.appendChild(document.createTextNode(tok));
-              } else {
-                var s = document.createElement("span");
-                s.className = "w";
-                s.textContent = tok;
-                frag.appendChild(s);
-              }
-            });
-          } else {
-            frag.appendChild(node); // keep <b> intact
-          }
-        });
-        lead.textContent = "";
-        lead.appendChild(frag);
-        var words = lead.querySelectorAll(".w");
-        gsap.fromTo(
-          words,
-          { opacity: 0.15 },
-          {
-            opacity: 1,
-            stagger: 0.05,
-            ease: "none",
-            scrollTrigger: {
-              trigger: lead,
-              start: "top 85%",
-              end: "top 40%",
-              scrub: true,
+          // scrubbing lead reveal — words fade 0.15 -> 1 as you scroll
+          var lead = document.getElementById("lead");
+          var frag = document.createDocumentFragment();
+          Array.prototype.slice.call(lead.childNodes).forEach(function (node) {
+            if (node.nodeType === 3) {
+              node.textContent.split(/(\s+)/).forEach(function (tok) {
+                if (!tok) return;
+                if (/^\s+$/.test(tok)) {
+                  frag.appendChild(document.createTextNode(tok));
+                } else {
+                  var s = document.createElement("span");
+                  s.className = "w";
+                  s.textContent = tok;
+                  frag.appendChild(s);
+                }
+              });
+            } else {
+              frag.appendChild(node); // keep <b> intact
+            }
+          });
+          lead.textContent = "";
+          lead.appendChild(frag);
+          var words = lead.querySelectorAll(".w");
+          gsap.fromTo(
+            words,
+            { opacity: 0.15 },
+            {
+              opacity: 1,
+              stagger: 0.05,
+              ease: "none",
+              scrollTrigger: {
+                trigger: lead,
+                start: "top 85%",
+                end: "top 40%",
+                scrub: true,
+              },
             },
-          },
-        );
+          );
 
-        // cards + sections rise in
-        gsap.utils
-          .toArray(".grid .card, .section, .cta h2, .cta .btn")
-          .forEach(function (el) {
-            gsap.from(el, {
-              y: 28,
-              autoAlpha: 0,
-              duration: 0.9,
-              ease: "power3.out",
-              scrollTrigger: { trigger: el, start: "top 88%", once: true },
+          // cards + sections — subtle rise
+          gsap.utils
+            .toArray(".grid .card, .section")
+            .forEach(function (el) {
+              gsap.from(el, {
+                y: 24,
+                autoAlpha: 0,
+                duration: 0.75,
+                ease: "power3.out",
+                scrollTrigger: { trigger: el, start: "top 90%", once: true },
+              });
             });
+
+          // CTA — more creative: headline scales up, button pops with back easing
+          gsap.from(".cta h2", {
+            y: 40,
+            scale: 0.97,
+            autoAlpha: 0,
+            duration: 1.0,
+            ease: "power3.out",
+            scrollTrigger: { trigger: ".cta", start: "top 85%", once: true },
+          });
+          gsap.from(".cta .btn", {
+            y: 18,
+            scale: 0.92,
+            autoAlpha: 0,
+            duration: 0.7,
+            delay: 0.18,
+            ease: "back.out(1.6)",
+            scrollTrigger: { trigger: ".cta .btn", start: "top 95%", once: true },
           });
 
-        // bench gate count-up
-        var gate = document.getElementById("gate");
-        var o = { v: 80 };
-        gsap.to(o, {
-          v: 91.2,
-          duration: 1.6,
-          ease: "power2.out",
-          onUpdate: function () {
-            gate.textContent = o.v.toFixed(1);
-          },
-          scrollTrigger: { trigger: gate, start: "top 90%", once: true },
-        });
+          // bench gate count-up
+          var gate = document.getElementById("gate");
+          var o = { v: 80 };
+          gsap.to(o, {
+            v: 91.2,
+            duration: 1.6,
+            ease: "power2.out",
+            onUpdate: function () {
+              gate.textContent = o.v.toFixed(1);
+            },
+            scrollTrigger: { trigger: gate, start: "top 90%", once: true },
+          });
         }
         if (document.readyState === "loading") {
           document.addEventListener("DOMContentLoaded", initGSAP);
