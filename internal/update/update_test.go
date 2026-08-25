@@ -164,10 +164,10 @@ func TestExtractBinaryMissingEntry(t *testing.T) {
 
 func TestTagFromLocation(t *testing.T) {
 	cases := map[string]string{
-		"https://github.com/o/r/releases/tag/v1.2.3":                              "v1.2.3",
+		"https://github.com/o/r/releases/tag/v1.2.3":                          "v1.2.3",
 		"https://github.com/o/r/releases/download/v1.2.3/routre_linux.tar.gz": "v1.2.3",
-		"https://github.com/o/r/releases/download/0.4.0/x.zip":                    "0.4.0",
-		"https://github.com/o/r/other":                                            "",
+		"https://github.com/o/r/releases/download/0.4.0/x.zip":                "0.4.0",
+		"https://github.com/o/r/other":                                        "",
 	}
 	for loc, want := range cases {
 		if got := tagFromLocation(loc); got != want {

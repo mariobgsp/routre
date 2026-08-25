@@ -806,7 +806,7 @@ go run . bench -target 90     # honest metric</pre>
       crossorigin="anonymous"
     ></script>
     <script>
-      // duplicate marquee content for seamless -50% loop (no innerHTML)
+      // duplicate marquee content for seamless -50% loop (no innerHTML) — no GSAP dep, runs immediately
       (function () {
         var mq = document.getElementById("mq");
         if (!mq) return;
@@ -814,9 +814,16 @@ go run . bench -target 90     # honest metric</pre>
           mq.appendChild(n.cloneNode(true));
         });
       })();
-
+    </script>
+    <script>
+      // GSAP animations — deferred GSAP may not be loaded yet when this inline script runs during parsing,
+      // so wait for it. Keeps hero/CTA entrance and lead scrub working while still deferring the CDN for faster first paint.
       (function () {
-        if (!window.gsap || !window.ScrollTrigger) return; // graceful: static page stays
+        function initGSAP() {
+          if (!window.gsap || !window.ScrollTrigger) {
+            setTimeout(initGSAP, 40);
+            return;
+          }
         gsap.registerPlugin(ScrollTrigger);
 
         // scrubbing lead reveal — words fade 0.15 -> 1 as you scroll
@@ -883,6 +890,12 @@ go run . bench -target 90     # honest metric</pre>
           },
           scrollTrigger: { trigger: gate, start: "top 90%", once: true },
         });
+        }
+        if (document.readyState === "loading") {
+          document.addEventListener("DOMContentLoaded", initGSAP);
+        } else {
+          initGSAP();
+        }
       })();
     </script>
   </body>
