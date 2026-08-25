@@ -19,16 +19,16 @@
       :root {
         --bg: #fdfdfc;
         --fg: #2a2725;
-        --ink2: rgb(42 39 37 / 72%);
-        --ink3: rgb(42 39 37 / 56%);
+        --ink2: rgb(42 39 37 / 68%);
+        --ink3: rgb(42 39 37 / 52%);
         --acc: #2563eb;
         --acc-deep: #1d4ed8;
         --teal: #91cbcc;
         --peach: #ffb58e;
         --cream: #fff6eb;
-        --card: rgb(145 203 204 / 10%);
-        --bd: rgb(42 39 37 / 12%);
-        --hover: rgb(145 203 204 / 16%);
+        --card: #ffffff;
+        --bd: rgb(42 39 37 / 14%);
+        --hover: rgb(145 203 204 / 18%);
         --mono: ui-monospace, Menlo, Consolas, monospace;
         --sans:
           Outfit, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
@@ -89,9 +89,10 @@
       .nav {
         position: sticky;
         top: 0;
-        backdrop-filter: blur(8px);
-        background: rgb(253 253 252 / 82%);
+        backdrop-filter: blur(12px);
+        background: rgb(253 253 252 / 88%);
         border-bottom: 1px solid var(--bd);
+        box-shadow: 0 1px 12px rgb(42 39 37 / 6%);
         z-index: 10;
       }
       .nav .wrap {
@@ -211,13 +212,14 @@
         font-weight: 600;
       }
       .code {
-        background: var(--card);
+        background: #ffffff;
         border: 1px solid var(--bd);
         border-radius: 10px;
         padding: 16px 18px;
         font: 13px/1.75 var(--mono);
         overflow-x: auto;
         margin: 0;
+        box-shadow: 0 1px 10px rgb(42 39 37 / 4%);
       }
       .grid {
         display: grid;
@@ -236,15 +238,18 @@
         border-radius: 14px;
         padding: 20px;
         text-align: center;
+        box-shadow: 0 2px 20px rgb(42 39 37 / 6%);
         transition:
           transform 0.6s cubic-bezier(0.22, 1, 0.36, 1),
           border-color 0.3s ease,
-          background 0.3s ease;
+          background 0.3s ease,
+          box-shadow 0.3s ease;
       }
       .card:hover {
         transform: translateY(-4px);
-        border-color: rgb(37 99 235 / 35%);
-        background: var(--hover);
+        border-color: rgb(37 99 235 / 28%);
+        background: #ffffff;
+        box-shadow: 0 8px 32px rgb(42 39 37 / 10%);
       }
       .card.hot {
         border-color: rgb(255 181 142 / 65%);
