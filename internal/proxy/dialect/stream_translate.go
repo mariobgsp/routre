@@ -1,10 +1,9 @@
-package proxy
+package dialect
 
 import (
 	"bufio"
 	"encoding/json"
 	"fmt"
-	"github.com/mariobgsp/routre/internal/proxy/dialect"
 	"io"
 	"strconv"
 	"strings"
@@ -34,7 +33,7 @@ import (
 type streamTranslator struct {
 	// from is the client dialect, to the upstream dialect. The upstream
 	// produces `to` frames; we emit `from` frames to the client.
-	from, to apiFormat
+	from, to Format
 	// emitted records whether any byte reached the client yet.
 	emitted bool
 	// a2o holds Anthropic->OpenAI state when to==anthropic.
@@ -48,7 +47,7 @@ type streamTranslator struct {
 	g2o g2oState
 }
 
-func newStreamTranslator(from, to apiFormat) *streamTranslator {
+func newStreamTranslator(from, to Format) *streamTranslator {
 	st := &streamTranslator{from: from, to: to}
 	// o2a tracks the open content-block index and current tool index with a
 	// -1 sentinel for "none"; a zero-value struct would read 0 and suppress
@@ -63,13 +62,13 @@ func newStreamTranslator(from, to apiFormat) *streamTranslator {
 // (never an upstream-read failure, which translateStream handles).
 func (st *streamTranslator) translate(evt sseEvent) (string, error) {
 	switch {
-	case st.from == fmtOpenAI && st.to == fmtAnthropic:
+	case st.from == FormatOpenAI && st.to == FormatAnthropic:
 		return st.a2o.translate(evt)
-	case st.from == fmtAnthropic && st.to == fmtOpenAI:
+	case st.from == FormatAnthropic && st.to == FormatOpenAI:
 		return st.o2a.translate(evt)
-	case st.from == fmtResponses && st.to == fmtOpenAI:
+	case st.from == FormatResponses && st.to == FormatOpenAI:
 		return st.r2o.translate(evt)
-	case st.from == fmtOpenAI && st.to == fmtGemini:
+	case st.from == FormatOpenAI && st.to == FormatGemini:
 		return st.g2o.translate(evt)
 	default:
 		return "", fmt.Errorf("unsupported stream translation %v -> %v", st.from, st.to)
@@ -80,8 +79,46 @@ func (st *streamTranslator) translate(evt sseEvent) (string, error) {
 // writing to w. flush, if non-nil, is called after every frame to push SSE
 // chunks to the client in real time (streaming must not buffer until EOF). It
 // returns nil on success or a retryable pre-first-byte failure.
-func translateStream(w io.Writer, upstream io.Reader, from, to apiFormat, flush func()) error {
-	return dialect.New().Stream(dialect.Format(from), dialect.Format(to), upstream, w, flush)
+func translateStream(w io.Writer, upstream io.Reader, from, to Format, flush func()) error {
+	// Precondition: from != to. streamRelay routes same-kind to the byte-copy
+	// loop; cross-kind (only) reaches translateStream.
+	st := newStreamTranslator(from, to)
+	br := bufio.NewReader(upstream)
+	for {
+		evt := sseEvent{}
+		ok, ferr := evt.read(br)
+		if !ok && ferr == nil {
+			continue // blank frame
+		}
+		if ferr != nil {
+			if ferr == io.EOF {
+				return nil // clean end of stream
+			}
+			// Upstream read failure after first byte: not retryable.
+			if st.emitted {
+				// Client already received data; cannot fail over.
+				return nil
+			}
+			return ferr
+		}
+		out, perr := st.translate(evt)
+		if perr != nil {
+			if !st.emitted {
+				return perr // retryable: fail over to next candidate
+			}
+			return nil // mid-stream: can't fail over
+		}
+		if len(out) > 0 {
+			if _, werr := io.WriteString(w, out); werr != nil {
+				// Client went away: not an upstream failure.
+				return nil
+			}
+			st.emitted = true
+			if flush != nil {
+				flush()
+			}
+		}
+	}
 }
 
 // sseEvent is one SSE frame: an optional event name plus a data payload.

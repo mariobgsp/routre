@@ -15,10 +15,10 @@ import (
 
 	"github.com/mariobgsp/routre/internal/cache"
 	"github.com/mariobgsp/routre/internal/config"
+	"github.com/mariobgsp/routre/internal/proxy/dialect"
 	"github.com/mariobgsp/routre/internal/reqlog"
 	"github.com/mariobgsp/routre/internal/router"
 	"github.com/mariobgsp/routre/internal/tokenize"
-	"github.com/mariobgsp/routre/internal/usage"
 )
 
 // attemptTimeout bounds a single non-streaming upstream attempt. Streaming
@@ -51,106 +51,22 @@ func rewriteModel(body []byte, model string) ([]byte, error) {
 	return out, nil
 }
 
-// clampMaxTokens caps the max_tokens field of an already-decoded doc in
-// place so that the total context (prompt + max_tokens) fits the provider's
-// ceiling. The ceiling is the provider's TOTAL context window; upstreams
-// reject requests where prompt tokens + max_tokens exceed it, so the clamp
-// subtracts an estimate of the prompt size plus a small safety margin.
-// No-op when the ceiling is 0 (unset), the doc has no max_tokens, or it is
-// already within bounds.
-//
-// ponytail: operates on the shared decoded doc (set by buildPayload) instead
-// of re-decoding+marshaling the body, which cut two full JSON passes off the
-// same-kind relay hot path. No numeric-fidelity or boundary change: the
-// prompt estimate falls back to a length-based token  estimate exactly as
-// the old byte-level clamp did.
-func clampMaxTokens(doc map[string]any, ceiling int64) {
-	if ceiling <= 0 {
-		return
-	}
-	mt, ok := doc["max_tokens"]
-	if !ok {
-		return
-	}
-	var n int64
-	switch v := mt.(type) {
-	case float64:
-		n = int64(v)
-	case json.Number:
-		n, _ = v.Int64()
-	default:
-		return
-	}
-	// Estimate the prompt side (messages/system/tools) from the doc with
-	// the max_tokens field excluded so the estimate is not inflated by it.
-	promptEst := int64(0)
-	if msgs, ok := doc["messages"]; ok {
-		if mb, err := json.Marshal(msgs); err == nil {
-			promptEst = int64(tokenize.Count(string(mb), tokenize.KindOpenAI))
-		}
-	}
-	// Reserve margin for tokenizer drift between our estimate and the
-	// provider's exact count.
-	const margin = 512
-	maxAllowed := ceiling - promptEst - margin
-	if maxAllowed < 1024 {
-		maxAllowed = 1024
-	}
-	if n <= maxAllowed {
-		return
-	}
-	doc["max_tokens"] = maxAllowed
-}
-
-// buildPayload materializes the upstream request bytes for a same-kind
-// candidate from a single decoded doc, applying the model rewrite and the
-// max_tokens clamp as field mutations before ONE marshal. This collapses
-// the two per-mutation decode+marshal passes the relay used to run.
-// Fail-open: malformed input (or marshal failure) passes the processed body
-// through unchanged, matching the old per-step behavior.
-func buildPayload(processed []byte, requested, upstream string, ceiling int64) []byte {
-	var doc map[string]any
-	if err := json.Unmarshal(processed, &doc); err != nil {
-		return processed // malformed: pass through (fail-open)
-	}
-	if upstream != requested {
-		doc["model"] = upstream
-	}
-	clampMaxTokens(doc, ceiling)
-	out, err := json.Marshal(doc)
-	if err != nil {
-		return processed
-	}
-	return out
-}
-
 // apiFormat is the API dialect a request arrives in.
-type apiFormat int
+// Deep module seam: alias to dialect.Format (see internal/proxy/dialect).
+type apiFormat = dialect.Format
 
 const (
-	fmtUnknown apiFormat = iota
-	fmtOpenAI
-	fmtAnthropic
-	fmtResponses
-	fmtGemini
+	fmtUnknown   = dialect.FormatUnknown
+	fmtOpenAI    = dialect.FormatOpenAI
+	fmtAnthropic = dialect.FormatAnthropic
+	fmtResponses = dialect.FormatResponses
+	fmtGemini    = dialect.FormatGemini
 )
 
 // detectFormat guesses the dialect from the request path and body shape.
+// Delegates to dialect seam.
 func detectFormat(path string, body []byte) apiFormat {
-	if strings.HasSuffix(path, "/messages") {
-		return fmtAnthropic
-	}
-	if strings.HasSuffix(path, "/responses") {
-		return fmtResponses
-	}
-	if strings.HasSuffix(path, "/chat/completions") {
-		return fmtOpenAI
-	}
-	// Fall back to body shape.
-	if bytes.Contains(body, []byte(`"max_tokens"`)) && !bytes.Contains(body, []byte(`"stream_options"`)) {
-		return fmtAnthropic
-	}
-	return fmtOpenAI
+	return apiFormat(dialect.DetectFormat(path, body))
 }
 
 // route handles one chat-style request end to end: read, compress (RTK),
@@ -158,14 +74,7 @@ func detectFormat(path string, body []byte) apiFormat {
 // write. It is shared by the /v1/chat/completions and /v1/messages handlers.
 func (h *Handlers) route(w http.ResponseWriter, r *http.Request, api apiFormat) {
 	start := time.Now()
-	ctx := r.Context()
 	client := clientName(r)
-
-	// The dialect the CLIENT speaks (response boundary), which may differ
-	// from the internal `api` used for upstream relay. For Responses API
-	// requests we translate the inbound body to chat up front and keep the
-	// upstream `api` as fmtOpenAI; the response is re-wrapped on exit.
-	clientFmt := api
 
 	// Request-log + metrics emission on every exit path.
 	logReq := func(e reqlog.Entry) {
@@ -191,372 +100,62 @@ func (h *Handlers) route(w http.ResponseWriter, r *http.Request, api apiFormat) 
 		return
 	}
 
-	// Responses API: translate the inbound request to chat.completions so
-	// the rest of the pipeline (RTK, ordering, cache, candidate relay) is
-	// unchanged. Response re-wrapping happens on exit per clientFmt.
-	if api == fmtResponses {
-		translated, terr := responsesToOpenAI(body)
-		if terr != nil {
-			logReq(reqlog.Entry{Client: client, Status: http.StatusBadRequest, Class: "error"})
-			h.Metrics.Request(client, "", "", "error")
-			writeJSON(w, http.StatusBadRequest, map[string]any{
-				"error": map[string]any{"message": "could not parse Responses request: " + terr.Error(), "type": "invalid_request_error"},
-			})
-			return
-		}
-		body = translated
-		api = fmtOpenAI
-	}
-
-	streaming := isStreaming(body)
-	requested := modelFromBody(body)
-
-	// 1) RTK compression (token reduction).
-	processed, rtkChanged := h.RTK.Apply(body)
-	rtkSaved := 0
-	if rtkChanged {
-		rtkSaved = tokenize.Estimate(string(body)) - tokenize.Estimate(string(processed))
-		h.Metrics.RTKApplied()
-	}
-	h.Metrics.RTKSaved(int64(rtkSaved))
-	// 2) Cache-friendly ordering (only when enabled; keeps stable prefix).
-	if cfg := h.Cfg.Get(); cfg.Cache.PrefixOrder {
-		processed = orderPrompt(processed)
-	}
-
-	// 3) Exact-match cache (non-streaming only).
-	key := cacheKey(processed)
-	if !streaming {
-		if e, ok := h.Cache.Get(key); ok {
-			// Cache hit: nothing reached any provider. Count the tokens we
-			// just saved (prompt side) in the client's row. Prefer the
-			// upstream-reported count stored on the entry over the
-			// gateway's length-based estimate (the estimate drifts on large
-			// payloads: e.g. 160k vs the provider's 191k).
-			cacheSaved := e.PromptTokens
-			if cacheSaved == 0 {
-				cacheSaved = int64(tokenize.Count(string(processed), tokenize.KindOpenAI))
+	// Pipeline seam: everything (streaming + non-streaming) via deep module.
+	if h.pipeline != nil {
+		ctx := r.Context()
+		req := Request{Body: body, Path: r.URL.Path, Header: r.Header, Client: client}
+		if isStreaming(body) {
+			// Streaming: pipeline writes SSE directly to w and records usage.
+			if serr := h.pipeline.Stream(ctx, req, w); serr == nil {
+				logReq(reqlog.Entry{Client: client, Model: modelFromBody(body), Status: http.StatusOK, Class: "ok", Stream: true})
+				return
 			}
-			if cacheSaved > 0 {
-				h.Usage.Record(client, modelFromBody(processed), 0, 0, 0, cacheSaved, usage.Prices{}, 0)
-			}
-			h.Metrics.CacheHit()
-			logReq(reqlog.Entry{Client: client, Model: requested, Status: http.StatusOK, Class: "cache", PromptTokens: cacheSaved, CompletionTokens: e.CompletionTokens, RTKSavedTokens: int64(rtkSaved)})
-			// Responses API client: the cache stores the chat envelope, so
-			// re-wrap before serving.
-			cacheBody := e.Body
-			cacheCT := e.ContentType
-			if clientFmt == fmtResponses {
-				if wrapped, werr := openAIToResponses(e.Body, requested); werr == nil {
-					cacheBody = wrapped
-					cacheCT = "application/json"
+			// Fall through only if the pipeline could not start any stream;
+			// legacy path handles it (kept until pipeline covers all exits).
+		} else {
+			resp, perr := h.pipeline.Process(ctx, req)
+			if perr == nil {
+				reqModel := modelFromBody(body)
+				if resp.Provider != "" {
+					reqModel = resp.Provider
 				}
-			}
-			w.Header().Set("Content-Type", cacheCT)
-			w.Header().Set("X-Llrouter-Cache", "hit")
-			w.WriteHeader(http.StatusOK)
-			_, _ = w.Write(cacheBody)
-			return
-		}
-		h.Metrics.CacheMiss()
-	}
-
-	// 4) Tiered failover relay, model-aware: only providers that can serve
-	// the requested model (exact or free variant) are candidates, in tier
-	// order. If the requested model has no working candidate, the
-	// configured fallback models are tried in order — the gateway degrades
-	// to the user's fallback models (free tiers, or paid models on another
-	// provider) instead of erroring. Providers already attempted for this
-	// request are not retried.
-	cands := h.Router.CandidatesWithFallbacks(requested, h.Cfg.Get().Fallbacks)
-	if len(cands) == 0 {
-		// Distinguish "model never configured" from "every provider that
-		// could serve it is in cooldown" — both collapse to an empty
-		// candidate list, but the remedies are different (fix the config
-		// vs wait/check the provider).
-		if retryAfter, served := h.Router.MinCooldownForModel(requested, h.Cfg.Get().ForwardUnknown); served {
-			h.Metrics.Request(client, "", requested, "providers_unavailable")
-			logReq(reqlog.Entry{Client: client, Model: requested, Status: http.StatusServiceUnavailable, Class: "providers_unavailable"})
-			if retryAfter < time.Second {
-				retryAfter = time.Second
-			}
-			w.Header().Set("Retry-After", fmt.Sprintf("%d", int(retryAfter.Seconds())))
-			writeJSON(w, http.StatusServiceUnavailable, map[string]any{
-				"error": map[string]any{"message": fmt.Sprintf("all providers that serve model %q are cooling down (retry in %s)", requested, retryAfter.Round(time.Second)), "type": "providers_unavailable"},
-			})
-			return
-		}
-		h.Metrics.Request(client, "", requested, "model_not_found")
-		logReq(reqlog.Entry{Client: client, Model: requested, Status: http.StatusServiceUnavailable, Class: "model_not_found"})
-		writeJSON(w, http.StatusServiceUnavailable, map[string]any{
-			"error": map[string]any{"message": fmt.Sprintf("no configured provider serves model %q (check config tiers/models)", requested), "type": "model_not_found"},
-		})
-		return
-	}
-
-	var lastErr error
-	var lastClass router.ErrClass
-	for _, cand := range cands {
-		// Retry transient failures (network errors, 5xx) on the same
-		// candidate before failing over: upstream 503 blips resolve in
-		// seconds, and each retry costs only ~0.5s. Cooldown escalation
-		// only happens after the retries are exhausted.
-		attempts := 1 + retryTransientAttempts
-		for attempt := 0; attempt < attempts; attempt++ {
-			if attempt > 0 {
-				if lastClass == router.ErrClient {
-					// Deterministic rejection (400/404/422...): retrying the
-					// same candidate cannot produce a different result.
-					break
+				if resp.FromCache {
+					logReq(reqlog.Entry{Client: client, Model: reqModel, Status: resp.StatusCode, Class: "cache", PromptTokens: int64(tokenize.Count(string(body), tokenize.KindOpenAI))})
+				} else {
+					logReq(reqlog.Entry{Client: client, Model: reqModel, Status: resp.StatusCode, Class: "ok"})
 				}
-				time.Sleep(transientRetryDelay)
-			}
-			ok := h.tryCandidate(ctx, w, r, api, cand, requested, body, processed, streaming, client, rtkSaved, clientFmt, &lastErr, &lastClass, logReq)
-			if ok {
+				for k, vv := range resp.Header {
+					for _, v := range vv {
+						w.Header().Add(k, v)
+					}
+				}
+				if resp.ContentType != "" {
+					w.Header().Set("Content-Type", resp.ContentType)
+				}
+				w.WriteHeader(resp.StatusCode)
+				_, _ = w.Write(resp.Body)
 				return
 			}
 		}
 	}
 
-	// All providers exhausted (or in cooldown).
-	msg := "all providers unavailable"
-	if lastErr != nil {
-		msg = lastErr.Error()
-	}
-	h.Metrics.Request(client, "", requested, "all_failed")
-	logReq(reqlog.Entry{Client: client, Model: requested, Status: http.StatusServiceUnavailable, Class: "all_failed"})
+	// Legacy fallback removed — pipeline now owns RTK, cache, routing,
+	// translation and retry. This path is only reached if the pipeline is
+	// nil (tests that construct Handlers without NewHandlers) or if both
+	// pipeline.Process and pipeline.Stream failed before writing.
+	// Keep a minimal honest error to avoid silent 200.
+	h.Metrics.Request(client, "", modelFromBody(body), "all_failed")
+	logReq(reqlog.Entry{Client: client, Model: modelFromBody(body), Status: http.StatusServiceUnavailable, Class: "all_failed"})
 	w.Header().Set("Retry-After", "5")
 	writeJSON(w, http.StatusServiceUnavailable, map[string]any{
-		"error": map[string]any{"message": msg, "type": "all_providers_failed"},
+		"error": map[string]any{"message": "all providers unavailable", "type": "all_providers_failed"},
 	})
+
 }
 
-// tryCandidate relays the request to one candidate provider and reports
-// whether the response was fully handled. It returns true when the client
-// got a final response (success, surfaced client error, mid-stream abort)
-// and false when the failure is retryable so the caller can retry the same
-// candidate or fail over to the next one.
-//
-// The caller owns the transient-retry loop around this: a provider that
-// fails once is retried (transientRetryAttempts) before its failure is
-// reported to the router's cooldown state.
-func (h *Handlers) tryCandidate(ctx context.Context, w http.ResponseWriter, r *http.Request, api apiFormat, cand router.Candidate, requested string, body []byte, processed []byte, streaming bool, client string, rtkSaved int, clientFmt apiFormat, lastErr *error, lastClass *router.ErrClass, logReq func(reqlog.Entry)) bool {
-	p := cand.Provider
-
-	kind := p.Provider.Kind
-	// Same-kind payload: when a mutation is needed (free-variant / fallback
-	// model rewrite, or a max_tokens ceiling) do one decode -> field
-	// mutations -> one marshal (the old path did a decode+marshal per
-	// mutation). When neither applies, pass the processed body through with
-	// zero re-encoding.
-	payload := processed
-	if cand.Upstream != requested || p.Provider.MaxTokens > 0 {
-		payload = buildPayload(processed, requested, cand.Upstream, p.Provider.MaxTokens)
-	}
-
-	// Per-attempt timeout: a stuck provider must not hang the request
-	// forever. Non-streaming relays get a hard deadline; streaming
-	// relays keep the connection (they have their own first-byte
-	// timeout in the transport).
-	attemptCtx := ctx
-	var cancel context.CancelFunc
-	if !streaming {
-		attemptCtx, cancel = context.WithTimeout(ctx, attemptTimeout)
-	} else {
-		attemptCtx, cancel = context.WithCancel(ctx)
-	}
-	defer cancel()
-
-	crossKind := (api == fmtOpenAI && kind == "anthropic") || (api == fmtAnthropic && kind == "openai") || (api == fmtOpenAI && kind == "gemini")
-	// Responses API only maps onto openai-kind upstreams (chat.completions).
-	// An anthropic or gemini upstream cannot be answered in the Responses
-	// envelope, so reject rather than emit an unparseable response.
-	if clientFmt == fmtResponses && (kind == "anthropic" || kind == "gemini") {
-		h.Router.ReportFailure(p, router.ErrClient)
-		*lastErr = fmt.Errorf("provider %s (kind=anthropic) cannot serve a Responses API request", p.Provider.Name)
-		return false
-	}
-	if crossKind {
-		// Cross-kind requests are translated request-side (payload) and,
-		// when streaming, response-side by translateStream inside streamRelay
-		// (the old 501 is replaced by in-flight SSE translation). Both the
-		// request body and the response event stream are rewritten into the
-		// provider's / client's dialect respectively.
-		translated, terr := translateBody(api, kindOf(kind), processed)
-		if terr != nil {
-			h.Router.ReportFailure(p, router.ErrServer)
-			*lastErr = terr
-			return false
-		}
-		payload = translated
-		// The translation re-emits the client's original model string; the
-		// candidate's upstream model must win there too (provider-prefixed
-		// or free-variant names are neither valid upstream IDs nor the
-		// listed name).
-		if cand.Upstream != requested {
-			if rewritten, rerr := rewriteModel(payload, cand.Upstream); rerr == nil {
-				payload = rewritten
-			}
-		}
-	}
-
-	// Anthropic-bound prompt caching (opt-in): inject cache_control
-	// breakpoints into the final outbound /v1/messages body (works for
-	// both same-kind and cross-kind anthropic candidates) so repeat
-	// agentic prefixes are billed at the cache-read rate. Strictly
-	// additive; never rewrites an existing breakpoint. Applied after model
-	// rewrite so it sees the final outbound bytes.
-	if kind == "anthropic" && h.Cfg.Get().Cache.PromptCache {
-		payload = injectPromptCache(payload)
-	}
-
-	status, respBody, ct, retryAfter, susage, rerr := h.relay(attemptCtx, w, p.Provider.BaseURL, r, payload, streaming, kind, p.Provider.APIKeyEnv, api, clientFmt)
-
-	if rerr != nil {
-		// Network/transport failure: retryable (unless mid-stream).
-		if router.IsStreamAborted(rerr) {
-			// Client already received bytes; failover would duplicate.
-			return true
-		}
-		class := router.Classify(rerr)
-		if lastClass != nil {
-			*lastClass = class
-		}
-		if !router.IsRetryableClass(class) {
-			h.Metrics.Request(client, p.Provider.Name, requested, "error")
-			logReq(reqlog.Entry{Client: client, Model: requested, Provider: p.Provider.Name, Stream: streaming, Status: http.StatusBadGateway, Class: "error"})
-			writeJSON(w, http.StatusBadGateway, map[string]any{
-				"error": map[string]any{"message": rerr.Error(), "type": "upstream_error"},
-			})
-			return true
-		}
-		h.Metrics.Failure(p.Provider.Name, class.String())
-		h.Router.ReportFailureWithBackoff(p, class, retryAfter)
-		*lastErr = rerr
-		h.Logger.Printf("provider %s failed (%v): %v; failing over", p.Provider.Name, class, rerr)
-		return false
-	}
-
-	if streaming && status >= 200 && status < 300 {
-		// relay already streamed the response to the client. Token usage is
-		// captured from the SSE stream by the usage sniffer in streamRelay
-		// (same-kind and cross-kind), never buffering the response.
-		// A non-2xx was returned by relayStream as (status, body, ...)
-		// with nothing streamed yet, so it falls through to the shared
-		// error handling below (classify, report failure, fail over).
-		h.Router.ReportSuccess(p)
-		prompt := susage.prompt
-		completion := susage.completion
-		if prompt == 0 {
-			prompt = int64(tokenize.Count(string(processed), tokenize.KindOpenAI))
-		}
-		h.Usage.RecordFull(client, modelFromBody(body), prompt, completion, int64(rtkSaved), 0, susage.cacheRead, pricesOf(h.Cfg.Get(), p.Provider.Name), 0)
-		h.Metrics.CacheRead(susage.cacheRead)
-		h.Metrics.Request(client, p.Provider.Name, requested, "ok")
-		logReq(reqlog.Entry{Client: client, Model: requested, UpstreamModel: cand.Upstream, Provider: p.Provider.Name, Stream: true, Status: http.StatusOK, Class: "ok", PromptTokens: int64(prompt), CompletionTokens: completion, RTKSavedTokens: int64(rtkSaved), CacheReadTokens: susage.cacheRead})
-		return true
-	}
-
-	if !streaming && status >= 200 && status < 300 {
-		h.Router.ReportSuccess(p)
-		if ct == "" {
-			ct = "application/json"
-		}
-		// Responses API client: wrap the chat envelope in the Responses
-		// response shape before caching/writing. Gemini upstream: translate
-		// the generateContent response back to OpenAI first (this also lets
-		// usageFromBody read Gemini's usageMetadata via the OpenAI shape).
-		sendBody := respBody
-		if kind == "gemini" {
-			if gb, gerr := geminiToOpenAI(respBody, modelFromBody(body)); gerr == nil {
-				respBody = gb
-				sendBody = gb
-			}
-		}
-		if clientFmt == fmtResponses {
-			if wrapped, werr := openAIToResponses(respBody, requested); werr == nil {
-				sendBody = wrapped
-			}
-		}
-		// Usage: parse provider-reported tokens when present; fall back
-		// to estimates. RTK savings land on the provider's row.
-		prompt, completion, reportedCost, cacheRead := usageFromBody(respBody, body)
-		h.Usage.RecordFull(client, modelFromBody(body), prompt, completion, int64(rtkSaved), 0, cacheRead, pricesOf(h.Cfg.Get(), p.Provider.Name), reportedCost)
-		h.Cache.Put(cacheKey(processed), cacheEntry(respBody, ct, prompt, completion))
-		h.Metrics.Request(client, p.Provider.Name, requested, "ok")
-		h.Metrics.CacheRead(cacheRead)
-		logReq(reqlog.Entry{Client: client, Model: requested, UpstreamModel: cand.Upstream, Provider: p.Provider.Name, Stream: false, Status: status, Class: "ok", PromptTokens: prompt, CompletionTokens: completion, RTKSavedTokens: int64(rtkSaved), CacheReadTokens: cacheRead, CostUSD: reportedCost})
-		w.Header().Set("Content-Type", ct)
-		w.Header().Set("X-Llrouter-Cache", "miss")
-		w.Header().Set("X-Llrouter-Provider", p.Provider.Name)
-		if cand.IsFree {
-			w.Header().Set("X-Llrouter-Free", cand.Upstream)
-		}
-		w.WriteHeader(status)
-		_, _ = w.Write(sendBody)
-		return true
-	}
-
-	// Upstream error status. Credits failures (402, or 401 with a
-	// credits body) fail over WITHOUT cooldown escalation — the provider
-	// may still serve free variants.
-	class := router.ClassifyStatusBody(status, respBody)
-	if lastClass != nil {
-		*lastClass = class
-	}
-
-	// 401/403 auth failure: before failing over, attempt a credential
-	// refresh (the API key may have rotated in routre.env). If the key
-	// is stale and a fresh one changes the picture, retry this candidate
-	// once with the refreshed key. Only when refresh is a no-op or still
-	// rejects does it fail over like any other retryable failure.
-	if class == router.ErrAuth {
-		if refreshed := h.refreshCredentials(p.Provider.APIKeyEnv); refreshed {
-			// The key changed underneath us: retry this candidate once with
-			// the new key. Reports both success and failure to the router on
-			// the retry path — a successful auth retry must clear any
-			// cooldown this provider accrued from past failures.
-			if h.tryCandidate(ctx, w, r, api, cand, requested, body, processed, streaming, client, rtkSaved, clientFmt, lastErr, lastClass, logReq) {
-				return true
-			}
-		}
-	}
-
-	if !router.IsRetryableClass(class) {
-		// Wildcard-forwarded models (forward_unknown): one provider
-		// rejecting the model (400/404) means "this provider lacks it",
-		// not "the request is bad" — try the next candidate. If every
-		// provider rejects, the exhaustion path surfaces the last error.
-		if cand.IsWildcard {
-			h.Metrics.Request(client, p.Provider.Name, requested, "client_error")
-			logReq(reqlog.Entry{Client: client, Model: requested, Provider: p.Provider.Name, Stream: false, Status: status, Class: "client_error"})
-			*lastErr = fmt.Errorf("provider %s rejected model %q (HTTP %d)", p.Provider.Name, cand.Upstream, status)
-			return false
-		}
-		// Client-caused (400/404/422...): surface it, no failover.
-		h.Metrics.Request(client, p.Provider.Name, requested, "client_error")
-		logReq(reqlog.Entry{Client: client, Model: requested, Provider: p.Provider.Name, Stream: streaming, Status: status, Class: "client_error"})
-		writeStatus(w, status, respBody, ct)
-		return true
-	}
-	h.Metrics.Failure(p.Provider.Name, class.String())
-	h.Router.ReportFailureWithBackoff(p, class, retryAfter)
-	*lastErr = fmt.Errorf("provider %s: status %d (%v)", p.Provider.Name, status, class)
-	h.Logger.Printf("provider %s status %d (%v); failing over", p.Provider.Name, status, class)
-	return false
-}
-
-// isStreaming detects stream:true in the request body via JSON parsing.
-// A literal `"stream":true` inside user content (a quoted string) is
-// NOT treated as a streaming request; only the top-level field counts.
+// isStreaming detects stream:true via dialect seam.
 func isStreaming(body []byte) bool {
-	var probe struct {
-		Stream bool `json:"stream"`
-	}
-	if err := json.Unmarshal(body, &probe); err != nil {
-		return false
-	}
-	return probe.Stream
+	return dialect.IsStreaming(body)
 }
 
 // cacheKey is the exact-match key over the processed body (post-RTK,
@@ -576,15 +175,9 @@ func cacheEntry(body []byte, ct string, prompt, completion int64) cache.Entry {
 	return cache.Entry{Body: body, ContentType: ct, PromptTokens: prompt, CompletionTokens: completion}
 }
 
-// kindOf maps a provider kind string to an apiFormat.
+// kindOf maps a provider kind string to an apiFormat via dialect.
 func kindOf(kind string) apiFormat {
-	if kind == "anthropic" {
-		return fmtAnthropic
-	}
-	if kind == "gemini" {
-		return fmtGemini
-	}
-	return fmtOpenAI
+	return apiFormat(dialect.KindToFormat(kind))
 }
 
 // writeStatus copies an upstream error response to the client.
@@ -753,12 +346,10 @@ func (h *Handlers) streamRelay(w http.ResponseWriter, resp *http.Response, from,
 
 	flusher, _ := w.(http.Flusher)
 
-	// Cross-kind: run the SSE state-machine translator before writing to the
-	// client. It never buffers the whole response and never emits a byte until
-	// the first parseable frame, preserving the failover-before-first-byte rule.
+	// Cross-kind: via dialect seam (SSE state-machine translator).
 	sniffer := newUsageSniffer(resp.Body)
 	if from != to {
-		err := translateStream(w, sniffer, from, to, func() {
+		err := dialect.New().Stream(dialect.Format(from), dialect.Format(to), sniffer, w, func() {
 			if flusher != nil {
 				flusher.Flush()
 			}

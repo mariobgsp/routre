@@ -11,11 +11,16 @@
 package router
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
 	"sync"
+
+	"github.com/mariobgsp/routre/internal/config"
 	"time"
+
+	"github.com/mariobgsp/routre/internal/tokenize"
 )
 
 // ErrClass classifies an upstream failure for cooldown policy.
@@ -224,6 +229,72 @@ type Candidate struct {
 	// model", not "the request is bad" — so the gateway fails over to the
 	// next candidate instead of surfacing the first rejection.
 	IsWildcard bool
+}
+
+// Payload returns the wire payload for this candidate, with the model
+// rewritten to the upstream name and MaxTokens clamped. It is the deep
+// module's hidden behavior: callers pass the processed body and get back
+// ready-to-send bytes, without knowing about provider-qualified names or
+// free variants. Fail-open: malformed JSON passes through unchanged.
+func (c Candidate) Payload(processed []byte, requested string) []byte {
+	// Fast path: no mutation needed
+	if c.Upstream == requested && c.Provider.Provider.MaxTokens == 0 {
+		return processed
+	}
+	var doc map[string]any
+	if err := json.Unmarshal(processed, &doc); err != nil {
+		return processed
+	}
+	if c.Upstream != requested {
+		doc["model"] = c.Upstream
+	}
+	clampMaxTokens(doc, c.Provider.Provider.MaxTokens)
+	out, err := json.Marshal(doc)
+	if err != nil {
+		return processed
+	}
+	return out
+}
+
+// ShouldFailoverOnClientError reports whether a client-error (400/404)
+// from this candidate should be treated as "try next provider" rather
+// than surfacing the error. True only for wildcard-forwarded models.
+func (c Candidate) ShouldFailoverOnClientError() bool { return c.IsWildcard }
+
+// clampMaxTokens caps max_tokens in doc to fit the provider's ceiling.
+// Copied from proxy for locality; see proxy.clampMaxTokens for contract.
+func clampMaxTokens(doc map[string]any, ceiling int64) {
+	if ceiling <= 0 {
+		return
+	}
+	mt, ok := doc["max_tokens"]
+	if !ok {
+		return
+	}
+	var n int64
+	switch v := mt.(type) {
+	case float64:
+		n = int64(v)
+	case json.Number:
+		n, _ = v.Int64()
+	default:
+		return
+	}
+	promptEst := int64(0)
+	if msgs, ok := doc["messages"]; ok {
+		if mb, err := json.Marshal(msgs); err == nil {
+			promptEst = int64(tokenize.Count(string(mb), tokenize.KindOpenAI))
+		}
+	}
+	const margin = 512
+	maxAllowed := ceiling - promptEst - margin
+	if maxAllowed < 1024 {
+		maxAllowed = 1024
+	}
+	if n <= maxAllowed {
+		return
+	}
+	doc["max_tokens"] = maxAllowed
 }
 
 // stripProviderPrefix removes the leading "provider/" label from a client
@@ -618,6 +689,11 @@ func (r *Router) SetForwardUnknown(v bool) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.forwardUnknown = v
+}
+
+// Reconfigure implements config.Reconfigurable (partial; full Reset is done by proxy wrapper).
+func (r *Router) Reconfigure(cfg config.Config) {
+	r.SetForwardUnknown(cfg.ForwardUnknown)
 }
 
 var (
