@@ -14,16 +14,17 @@
       href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;500;600&display=swap"
       rel="stylesheet"
     />
+    <link rel="icon" type="image/jpeg" href="icon/routre-hamster-256.jpeg" />
     <style>
       :root {
-        --bg: #0a0a0a;
-        --fg: #fff;
-        --ink2: rgb(255 255 255 / 56%);
-        --ink3: rgb(255 255 255 / 40%);
-        --acc: #ff3b30;
-        --card: rgb(255 255 255 / 4%);
-        --bd: rgb(255 255 255 / 11%);
-        --hover: rgb(255 255 255 / 9%);
+        --bg: #91cbcc;
+        --fg: #2a2725;
+        --ink2: rgb(42 39 37 / 62%);
+        --ink3: rgb(42 39 37 / 42%);
+        --acc: #e76f2a;
+        --card: #fff6eb;
+        --bd: rgb(42 39 37 / 10%);
+        --hover: rgb(255 255 255 / 55%);
         --mono: ui-monospace, Menlo, Consolas, monospace;
         --sans:
           Outfit, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
@@ -39,7 +40,7 @@
         font-family: var(--sans);
         overflow-x: hidden;
       }
-      /* ambient glow */
+      /* ambient glow — peach/cream on teal, matching hamster */
       body::before {
         content: "";
         position: fixed;
@@ -48,14 +49,14 @@
         z-index: 0;
         background:
           radial-gradient(
-            600px 400px at 75% -5%,
-            rgb(255 59 48 / 7%),
-            transparent 70%
+            700px 420px at 78% -6%,
+            rgb(255 181 142 / 22%),
+            transparent 68%
           ),
           radial-gradient(
-            800px 500px at 10% 110%,
-            rgb(255 255 255 / 3%),
-            transparent 70%
+            900px 520px at 8% 115%,
+            rgb(255 246 230 / 45%),
+            transparent 72%
           );
       }
       nav,
@@ -85,7 +86,7 @@
         position: sticky;
         top: 0;
         backdrop-filter: blur(8px);
-        background: rgb(10 10 10 / 80%);
+        background: rgb(254 235 218 / 78%);
         border-bottom: 1px solid var(--bd);
         z-index: 10;
       }
@@ -408,7 +409,14 @@
   <body>
     <nav class="nav">
       <div class="wrap">
-        <div class="logo">
+        <div class="logo" style="display: flex; align-items: center; gap: 10px">
+          <img
+            src="icon/routre-hamster-256.jpeg"
+            alt="routre hamster"
+            width="36"
+            height="36"
+            style="border-radius: 10px; object-fit: cover; border: 1px solid var(--bd)"
+          />
           routre<span class="sub">10-MB gateway</span>
         </div>
         <div style="display: flex; gap: 8px">
@@ -542,9 +550,9 @@ routre serve   # http://127.0.0.1:20128  ·  dashboard /ui</pre>
       </div>
       <p class="mut" style="font-size: 0.9rem; margin-top: 12px">
         Self-update built in:
-        <span class="mono">routre update</span> verifies sha256 and
-        atomically replaces the binary. Old <span class="mono">routre-cli</span> installs still work (alias).
-        npm distribution is deprecated.
+        <span class="mono">routre update</span> verifies sha256 and atomically
+        replaces the binary. Old <span class="mono">routre-cli</span> installs
+        still work (alias). npm distribution is deprecated.
       </p>
     </div>
 
@@ -576,7 +584,9 @@ routre serve            # gateway + dashboard at http://127.0.0.1:20128/ui
 curl http://127.0.0.1:20128/healthz   # → ok
 routre check            # validates config + keys
 routre list             # providers + savings + BUDGET HIT</pre>
-      <div class="pill" style="margin-top: 16px">Option B — PowerShell one-liner (auto PATH)</div>
+      <div class="pill" style="margin-top: 16px">
+        Option B — PowerShell one-liner (auto PATH)
+      </div>
       <pre class="code">
 irm https://raw.githubusercontent.com/mariobgsp/routre/main/install.ps1 | iex
 # (falls back to manual zip if ps1 is not yet published — same 3 steps above)</pre>
@@ -584,25 +594,35 @@ irm https://raw.githubusercontent.com/mariobgsp/routre/main/install.ps1 | iex
         <div class="card" style="text-align: left">
           <h3 style="font-size: 0.9rem">Notes</h3>
           <p style="text-align: left">
-            SmartScreen may warn on first run — click <span class="mono">More info → Run anyway</span> (binary is unsigned, sha256-verified on update). Windows Defender: no Python/Postgres/Node, just one exe (~11 MiB, ~10 MiB RAM).
+            SmartScreen may warn on first run — click
+            <span class="mono">More info → Run anyway</span> (binary is
+            unsigned, sha256-verified on update). Windows Defender: no
+            Python/Postgres/Node, just one exe (~11 MiB, ~10 MiB RAM).
           </p>
         </div>
         <div class="card" style="text-align: left">
           <h3 style="font-size: 0.9rem">Run at startup</h3>
           <p style="text-align: left">
-            <span class="mono">routre start --autostart</span> registers a Scheduled Task (logon trigger). <span class="mono">routre stop --autostart</span> removes it. No service install, no admin.
+            <span class="mono">routre start --autostart</span> registers a
+            Scheduled Task (logon trigger).
+            <span class="mono">routre stop --autostart</span> removes it. No
+            service install, no admin.
           </p>
         </div>
       </div>
       <p class="mut mono" style="font-size: 0.8rem; margin-top: 10px">
-        Alias: <span class="mono">routre.exe</span> still launches the same binary. Config lives next to the exe: <span class="mono">config.json</span> + <span class="mono">routre.env</span>.
+        Alias: <span class="mono">routre.exe</span> still launches the same
+        binary. Config lives next to the exe:
+        <span class="mono">config.json</span> +
+        <span class="mono">routre.env</span>.
       </p>
     </div>
 
     <div class="wrap section" id="ai-install">
       <h2 class="h2">Install with an AI prompt</h2>
       <p class="mut" style="font-size: 0.95rem; margin-top: -6px">
-        Paste one prompt into Claude Code, Codex, Cursor, or opencode — the agent runs the same commands you would.
+        Paste one prompt into Claude Code, Codex, Cursor, or opencode — the
+        agent runs the same commands you would.
       </p>
       <div class="pill">Copy → paste into your agent</div>
       <pre class="code">
@@ -636,7 +656,10 @@ download routre_windows_amd64.zip from Releases, expand to $HOME\routre, add to 
         </div>
       </div>
       <p class="mut" style="font-size: 0.85rem; margin-top: 12px">
-        Tip: after the AI finishes, open <span class="mono">http://127.0.0.1:20128/ui</span> to edit providers/keys without touching JSON — loopback-only, Host-checked, &lt;2 MiB after use.
+        Tip: after the AI finishes, open
+        <span class="mono">http://127.0.0.1:20128/ui</span> to edit
+        providers/keys without touching JSON — loopback-only, Host-checked,
+        &lt;2 MiB after use.
       </p>
     </div>
 
@@ -704,9 +727,7 @@ go run . bench -target 90     # honest metric</pre>
             >github.com/mariobgsp/routre</a
           >
           ·
-          <a href="https://github.com/mariobgsp/routre/releases"
-            >Releases</a
-          >
+          <a href="https://github.com/mariobgsp/routre/releases">Releases</a>
           · <a href="SPEC.md">SPEC</a>
         </div>
         <div class="mut" style="margin-top: 6px">
