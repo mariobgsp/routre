@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/mariobgsp/routre/internal/config"
+	"github.com/mariobgsp/routre/internal/proxy"
 	"github.com/mariobgsp/routre/internal/usage"
 )
 
@@ -50,8 +51,9 @@ func cmdList(cfgPath, url string, asJSON bool, _ *log.Logger) error {
 		}
 	}
 
-	// Live status from the gateway (if running).
-	status, err := fetchJSON(url + "/v1/status")
+	// Live status from the gateway (if running) via Gateway seam.
+	gw := proxy.NewGateway(cfgPath, url)
+	status, err := gw.Status()
 	if err == nil {
 		fmt.Println("\n== live gateway ==")
 		if provs, ok := status["providers"].([]any); ok {

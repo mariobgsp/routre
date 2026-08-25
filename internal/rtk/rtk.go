@@ -14,6 +14,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"github.com/mariobgsp/routre/internal/config"
 	"sync"
 )
 
@@ -53,6 +54,15 @@ type RTK struct {
 func New(cfg Config) *RTK { return &RTK{cfg: cfg} }
 
 // Update swaps the config (called on SIGHUP reload).
+func (r *RTK) Reconfigure(cfg config.Config) {
+	r.Update(Config{
+		Enabled:  cfg.RTK.Enabled,
+		MinBytes: cfg.RTK.MinBytes,
+		MaxBytes: cfg.RTK.MaxBytes,
+		Level:    cfg.RTK.Level,
+	})
+}
+
 func (r *RTK) Update(cfg Config) {
 	r.mu.Lock()
 	defer r.mu.Unlock()

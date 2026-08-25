@@ -33,7 +33,8 @@ type Handlers struct {
 	// Keys holds provider API keys in memory (and, when auth is enabled, the
 	// gateway's shared secret). Refresh swaps rotated keys atomically without
 	// mutating the process environment.
-	Keys *keystore.Store
+	Keys     *keystore.Store
+	pipeline *Pipeline
 }
 
 // newHTTPClient builds the upstream transport. Note: no overall timeout —
@@ -67,6 +68,12 @@ func NewHandlers(st *config.Store, rtr *router.Router, cch *cache.Cache, tk *rtk
 		Metrics:    metrics.New(),
 		Keys:       keystore.New(),
 	}
+	h.pipeline = NewPipeline(h)
+	// Register reconfigurables for SIGHUP reload (deep module seam)
+	st.Register(rtr)
+	st.Register(cch)
+	st.Register(tk)
+	st.Register(reqLogAdapter{})
 	// Seed the keystore from the process environment (which Load populated
 	// from routre.env + shell exports). The keystore is the gateway's
 	// source of truth for upstream keys thereafter.
@@ -173,6 +180,11 @@ func (h *Handlers) Status(w http.ResponseWriter, _ *http.Request) {
 func (h *Handlers) UsageReport(w http.ResponseWriter, _ *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"rows": h.Usage.Snapshot()})
 }
+
+// reqLogAdapter implements config.Reconfigurable for the global request log path.
+type reqLogAdapter struct{}
+
+func (r reqLogAdapter) Reconfigure(cfg config.Config) { reqlog.SetPath(cfg.RequestLog) }
 
 // writeJSON is a small helper with content-type + status.
 func writeJSON(w http.ResponseWriter, status int, v any) {

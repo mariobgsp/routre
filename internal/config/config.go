@@ -194,12 +194,16 @@ func (c *Config) Validate() error {
 	return nil
 }
 
+// Reconfigurable is a subsystem that can apply a new Config without restart.
+type Reconfigurable interface{ Reconfigure(Config) }
+
 // Store holds the live config with reload support. Safe for concurrent use.
 type Store struct {
-	mu     sync.RWMutex
-	path   string
-	cfg    Config
-	onLoad func(Config) // called after every successful load/reload
+	mu              sync.RWMutex
+	path            string
+	cfg             Config
+	onLoad          func(Config) // legacy single-callback (kept for compat)
+	reconfigurables []Reconfigurable
 }
 
 // NewStore creates a store around the config file at path. If the file does
@@ -215,6 +219,14 @@ func (s *Store) SetOnLoad(fn func(Config)) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.onLoad = fn
+}
+
+// Register adds a Reconfigurable to be called on every successful Load/Reload.
+// Order of registration is the order of Reconfigure calls.
+func (s *Store) Register(r Reconfigurable) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.reconfigurables = append(s.reconfigurables, r)
 }
 
 // Load reads the config file. Missing file: defaults, no error. Invalid
@@ -256,7 +268,11 @@ func (s *Store) loadLocked(what string) error {
 	s.mu.Lock()
 	s.cfg = cfg
 	fn := s.onLoad
+	reconfigs := append([]Reconfigurable(nil), s.reconfigurables...)
 	s.mu.Unlock()
+	for _, r := range reconfigs {
+		r.Reconfigure(cfg)
+	}
 	if fn != nil {
 		fn(cfg)
 	}

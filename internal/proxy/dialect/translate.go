@@ -1,4 +1,4 @@
-package proxy
+package dialect
 
 import (
 	"bytes"
@@ -10,13 +10,13 @@ import (
 // for cross-kind provider routing. It is intentionally minimal and lossy:
 // full fidelity translation is out of scope for the first cut. Streaming
 // cross-kind translation is rejected upstream (501).
-func translateBody(from, to apiFormat, body []byte) ([]byte, error) {
+func translateBody(from, to Format, body []byte) ([]byte, error) {
 	switch {
-	case from == fmtOpenAI && to == fmtAnthropic:
+	case from == FormatOpenAI && to == FormatAnthropic:
 		return openAItoAnthropic(body)
-	case from == fmtAnthropic && to == fmtOpenAI:
+	case from == FormatAnthropic && to == FormatOpenAI:
 		return anthropicToOpenAI(body)
-	case from == fmtOpenAI && to == fmtGemini:
+	case from == FormatOpenAI && to == FormatGemini:
 		return openAIToGemini(body)
 	default:
 		return nil, fmt.Errorf("unsupported translation %v -> %v", from, to)
@@ -191,6 +191,75 @@ func anthropicToOpenAI(body []byte) ([]byte, error) {
 }
 
 // contentAsString returns the content field if it is a plain string.
+// AnthropicToOpenAIResponse maps a non-streaming Anthropic /v1/messages response to OpenAI chat.
+// It is the minimal response analog of anthropicToOpenAI (request). It extracts the text content
+// and maps stop_reason to finish_reason, preserving usage when present.
+func AnthropicToOpenAIResponse(body []byte) ([]byte, error) {
+	var in struct {
+		ID      string `json:"id"`
+		Model   string `json:"model"`
+		Content []struct {
+			Type  string          `json:"type"`
+			Text  string          `json:"text"`
+			ID    string          `json:"id"`
+			Name  string          `json:"name"`
+			Input json.RawMessage `json:"input"`
+		} `json:"content"`
+		StopReason string `json:"stop_reason"`
+		Usage      struct {
+			InputTokens  int `json:"input_tokens"`
+			OutputTokens int `json:"output_tokens"`
+		} `json:"usage"`
+	}
+	if err := json.Unmarshal(body, &in); err != nil {
+		return nil, err
+	}
+	text := ""
+	var toolCalls []map[string]any
+	for _, c := range in.Content {
+		switch c.Type {
+		case "text":
+			text += c.Text
+		case "tool_use":
+			toolCalls = append(toolCalls, map[string]any{
+				"id":   c.ID,
+				"type": "function",
+				"function": map[string]any{
+					"name":      c.Name,
+					"arguments": string(c.Input),
+				},
+			})
+		}
+	}
+	fr := "stop"
+	switch in.StopReason {
+	case "max_tokens":
+		fr = "length"
+	case "tool_use":
+		fr = "tool_calls"
+	case "content_filter":
+		fr = "content_filter"
+	}
+	msg := map[string]any{"role": "assistant", "content": text}
+	if len(toolCalls) > 0 {
+		msg["tool_calls"] = toolCalls
+	}
+	out := map[string]any{
+		"id":     in.ID,
+		"object": "chat.completion",
+		"model":  in.Model,
+		"choices": []any{map[string]any{
+			"index": 0, "message": msg, "finish_reason": fr,
+		}},
+		"usage": map[string]any{
+			"prompt_tokens":     in.Usage.InputTokens,
+			"completion_tokens": in.Usage.OutputTokens,
+			"total_tokens":      in.Usage.InputTokens + in.Usage.OutputTokens,
+		},
+	}
+	return json.Marshal(out)
+}
+
 func contentAsString(raw json.RawMessage) (string, bool) {
 	var s string
 	if err := json.Unmarshal(raw, &s); err == nil {

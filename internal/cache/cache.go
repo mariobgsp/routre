@@ -8,6 +8,7 @@ import (
 	"container/list"
 	"crypto/sha256"
 	"encoding/hex"
+	"github.com/mariobgsp/routre/internal/config"
 	"sync"
 	"time"
 )
@@ -69,6 +70,16 @@ func New(cfg Config) *Cache {
 
 // Update swaps config (SIGHUP reload). Entries are kept; eviction rules use
 // the new limits on next write.
+func (c *Cache) Reconfigure(cfg config.Config) {
+	c.Update(Config{
+		Enabled:     cfg.Cache.Enabled,
+		MaxEntries:  cfg.Cache.MaxEntries,
+		TTLSeconds:  cfg.Cache.TTLSeconds,
+		PrefixOrder: cfg.Cache.PrefixOrder,
+		MaxBytes:    cfg.Cache.MaxBytes,
+	})
+}
+
 func (c *Cache) Update(cfg Config) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
