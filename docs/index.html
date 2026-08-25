@@ -17,14 +17,18 @@
     <link rel="icon" type="image/jpeg" href="icon/routre-hamster-256.jpeg" />
     <style>
       :root {
-        --bg: #91cbcc;
+        --bg: #fdfdfc;
         --fg: #2a2725;
-        --ink2: rgb(42 39 37 / 62%);
-        --ink3: rgb(42 39 37 / 42%);
-        --acc: #e76f2a;
-        --card: #fff6eb;
-        --bd: rgb(42 39 37 / 10%);
-        --hover: rgb(255 255 255 / 55%);
+        --ink2: rgb(42 39 37 / 72%);
+        --ink3: rgb(42 39 37 / 56%);
+        --acc: #2563eb;
+        --acc-deep: #1d4ed8;
+        --teal: #91cbcc;
+        --peach: #ffb58e;
+        --cream: #fff6eb;
+        --card: rgb(145 203 204 / 10%);
+        --bd: rgb(42 39 37 / 12%);
+        --hover: rgb(145 203 204 / 16%);
         --mono: ui-monospace, Menlo, Consolas, monospace;
         --sans:
           Outfit, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
@@ -40,7 +44,7 @@
         font-family: var(--sans);
         overflow-x: hidden;
       }
-      /* ambient glow — peach/cream on teal, matching hamster */
+      /* ambient glow — soft peach + teal on near-white, matching hamster */
       body::before {
         content: "";
         position: fixed;
@@ -50,12 +54,12 @@
         background:
           radial-gradient(
             700px 420px at 78% -6%,
-            rgb(255 181 142 / 22%),
+            rgb(255 181 142 / 24%),
             transparent 68%
           ),
           radial-gradient(
             900px 520px at 8% 115%,
-            rgb(255 246 230 / 45%),
+            rgb(145 203 204 / 20%),
             transparent 72%
           );
       }
@@ -78,15 +82,15 @@
         outline-offset: 2px;
       }
       .wrap {
-        max-width: 1080px;
+        max-width: 1120px;
         margin: 0 auto;
-        padding: 0 20px;
+        padding: 0 32px;
       }
       .nav {
         position: sticky;
         top: 0;
         backdrop-filter: blur(8px);
-        background: rgb(254 235 218 / 78%);
+        background: rgb(253 253 252 / 82%);
         border-bottom: 1px solid var(--bd);
         z-index: 10;
       }
@@ -114,8 +118,8 @@
       .btn {
         display: inline-block;
         border: 1px solid transparent;
-        background: var(--fg);
-        color: var(--bg);
+        background: var(--acc);
+        color: #ffffff;
         padding: 9px 16px;
         font-weight: 600;
         font-size: 0.88rem;
@@ -127,7 +131,8 @@
           background 0.2s ease;
       }
       .btn:hover {
-        background: rgb(255 255 255 / 88%);
+        background: var(--acc-deep);
+        color: #ffffff;
         transform: translateY(-1px);
       }
       .btn.ghost {
@@ -140,10 +145,10 @@
         border-color: var(--ink2);
       }
       .hero {
-        padding: clamp(56px, 10vh, 120px) 0 48px;
+        padding: clamp(72px, 12vh, 140px) 0 64px;
         display: grid;
         grid-template-columns: 1.1fr 0.9fr;
-        gap: 32px;
+        gap: 56px;
         align-items: center;
       }
       @media (max-width: 860px) {
@@ -159,6 +164,29 @@
         .nav .btn {
           padding: 7px 11px;
         }
+      }
+      /* prominent one-line installer in hero */
+      .install-pill {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        margin: 26px 0 8px;
+        background: var(--cream);
+        border: 1px solid rgb(37 99 235 / 40%);
+        border-radius: 999px;
+        padding: 13px 20px;
+      }
+      .install-pill::before {
+        content: "$";
+        font: 600 14px var(--mono);
+        color: var(--acc);
+      }
+      .install-pill code {
+        font: 13px/1.5 var(--mono);
+        white-space: nowrap;
+        overflow-x: auto;
+        scrollbar-width: none;
+        flex: 1;
       }
       .kicker {
         color: var(--ink3);
@@ -194,8 +222,8 @@
       .grid {
         display: grid;
         grid-template-columns: repeat(3, 1fr);
-        gap: 14px;
-        margin: 26px auto;
+        gap: 22px;
+        margin: 44px auto;
       }
       @media (max-width: 860px) {
         .grid {
@@ -215,14 +243,16 @@
       }
       .card:hover {
         transform: translateY(-4px);
-        border-color: rgb(255 255 255 / 24%);
+        border-color: rgb(37 99 235 / 35%);
         background: var(--hover);
       }
       .card.hot {
-        border-color: rgb(255 59 48 / 35%);
+        border-color: rgb(255 181 142 / 65%);
+        box-shadow: 0 2px 14px rgb(255 181 142 / 18%);
       }
       .card.hot:hover {
-        border-color: rgb(255 59 48 / 60%);
+        border-color: rgb(255 181 142 / 95%);
+        background: rgb(255 181 142 / 10%);
       }
       .card h3 {
         margin: 0 0 8px;
@@ -238,7 +268,7 @@
         line-height: 1.6;
       }
       .section {
-        padding: clamp(56px, 9vh, 112px) 0;
+        padding: clamp(72px, 12vh, 140px) 0;
         border-top: 1px solid var(--bd);
       }
       .h2 {
@@ -261,7 +291,7 @@
         overflow: hidden;
         border-top: 1px solid var(--bd);
         border-bottom: 1px solid var(--bd);
-        padding: 18px 0;
+        padding: 24px 0;
         mask-image: linear-gradient(
           90deg,
           transparent,
@@ -315,7 +345,7 @@
       .table th,
       .table td {
         border-bottom: 1px solid var(--bd);
-        padding: 12px 14px;
+        padding: 15px 18px;
         text-align: left;
       }
       .table tr:last-child td {
@@ -397,7 +427,7 @@
       .cols {
         display: grid;
         grid-template-columns: 1fr 1fr;
-        gap: 14px;
+        gap: 22px;
       }
       @media (max-width: 860px) {
         .cols {
@@ -415,7 +445,11 @@
             alt="routre hamster"
             width="36"
             height="36"
-            style="border-radius: 10px; object-fit: cover; border: 1px solid var(--bd)"
+            style="
+              border-radius: 10px;
+              object-fit: cover;
+              border: 1px solid var(--bd);
+            "
           />
           routre<span class="sub">10-MB gateway</span>
         </div>
@@ -442,11 +476,16 @@
           <b>90% RTK token compression</b> (bench-gated), response cache &amp;
           per-agent ledger.
         </p>
-        <pre class="code">
-curl -fsSL https://raw.githubusercontent.com/mariobgsp/routre/main/install.sh | sh
-routre setup --detect   # one-command hook
-routre serve            # http://127.0.0.1:20128  ·  dashboard /ui</pre>
-        <p class="mut mono" style="font-size: 0.8rem; margin-top: 10px">
+        <div class="install-pill">
+          <code
+            >curl -fsSL https://raw.githubusercontent.com/mariobgsp/routre/main/install.sh | sh &amp;&amp; routre setup --detect &amp;&amp; routre serve</code
+          >
+        </div>
+        <p class="mut mono" style="font-size: 0.78rem; margin-top: 10px">
+          Copy → paste → done. Detects agents, starts gateway on
+          127.0.0.1:20128.
+        </p>
+        <p class="mut mono" style="font-size: 0.8rem; margin-top: 14px">
           Not 80 MB + leak. Not Python/Postgres GBs. Just Go.
         </p>
       </div>
