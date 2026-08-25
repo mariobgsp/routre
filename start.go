@@ -1,12 +1,12 @@
-// routre-cli start / restart: start or restart the gateway daemon.
+// routre start / restart: start or restart the gateway daemon.
 //
-//	routre-cli start   [--autostart] [-config config.json]
-//	routre-cli restart [-config config.json]
+//	routre start   [--autostart] [-config config.json]
+//	routre restart [-config config.json]
 //
 // When the daemon is installed as an OS service it is started through the
 // service manager (systemd unit in the system or --user scope, or launchd
 // agent, see deploy/); otherwise `start` spawns a detached `serve`
-// background process writing to ~/.routre-cli/daemon.log and waits for
+// background process writing to ~/.routre/daemon.log and waits for
 // the configured port to come up.
 //
 // With --autostart, boot/login auto-start is enabled as well
@@ -238,7 +238,7 @@ func daemonLogPath() string {
 	}
 	home, err := os.UserHomeDir()
 	if err != nil {
-		return "routre-cli-daemon.log"
+		return "routre-daemon.log"
 	}
-	return filepath.Clean(filepath.Join(home, ".routre-cli", "daemon.log"))
+	return filepath.Clean(filepath.Join(home, ".routre", "daemon.log"))
 }

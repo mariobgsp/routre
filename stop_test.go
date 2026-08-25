@@ -79,10 +79,10 @@ func testLogger() *log.Logger {
 // stop/disable go through `systemctl --user`.
 func TestStopSystemdUserScope(t *testing.T) {
 	s := newStubExec(t)
-	s.outs["systemctl list-unit-files routre-cli.service"] = ""
-	s.outs["systemctl --user list-unit-files routre-cli.service"] = "routre-cli.service enabled"
-	s.outs["systemctl --user is-active routre-cli.service"] = "active"
-	s.outs["systemctl --user is-active routre-cli.socket"] = "inactive"
+	s.outs["systemctl list-unit-files routre.service"] = ""
+	s.outs["systemctl --user list-unit-files routre.service"] = "routre.service enabled"
+	s.outs["systemctl --user is-active routre.service"] = "active"
+	s.outs["systemctl --user is-active routre.socket"] = "inactive"
 
 	stopped, err := stopManaged("linux", true, testLogger())
 	if err != nil {
@@ -91,13 +91,13 @@ func TestStopSystemdUserScope(t *testing.T) {
 	if !stopped {
 		t.Fatal("expected the systemd manager to handle the stop")
 	}
-	if !s.called("systemctl --user stop routre-cli.service") {
+	if !s.called("systemctl --user stop routre.service") {
 		t.Errorf("missing user-scope stop; calls: %v", s.calls)
 	}
-	if !s.called("systemctl --user disable routre-cli.service") {
+	if !s.called("systemctl --user disable routre.service") {
 		t.Errorf("missing user-scope disable (-autostart); calls: %v", s.calls)
 	}
-	if s.called("systemctl stop routre-cli.service") {
+	if s.called("systemctl stop routre.service") {
 		t.Errorf("must not touch the system scope; calls: %v", s.calls)
 	}
 }
@@ -108,9 +108,9 @@ func TestStopSystemdSystemScope(t *testing.T) {
 	s := newStubExec(t)
 	// System scope knows the unit and it is active there; the user scope
 	// does not know it → stop must go through the system manager.
-	s.outs["systemctl list-unit-files routre-cli.service"] = "routre-cli.service enabled"
-	s.outs["systemctl is-active routre-cli.service"] = "active"
-	s.outs["systemctl --user list-unit-files routre-cli.service"] = ""
+	s.outs["systemctl list-unit-files routre.service"] = "routre.service enabled"
+	s.outs["systemctl is-active routre.service"] = "active"
+	s.outs["systemctl --user list-unit-files routre.service"] = ""
 
 	stopped, err := stopManaged("linux", false, testLogger())
 	if err != nil {
@@ -119,10 +119,10 @@ func TestStopSystemdSystemScope(t *testing.T) {
 	if !stopped {
 		t.Fatal("expected the systemd manager to handle the stop")
 	}
-	if !s.called("systemctl stop routre-cli.service") {
+	if !s.called("systemctl stop routre.service") {
 		t.Errorf("missing system-scope stop; calls: %v", s.calls)
 	}
-	if s.called("systemctl disable routre-cli.service") {
+	if s.called("systemctl disable routre.service") {
 		t.Errorf("disable must not run without -autostart; calls: %v", s.calls)
 	}
 }
@@ -131,11 +131,11 @@ func TestStopSystemdSystemScope(t *testing.T) {
 // falls back to the port scan (stopManaged reports false).
 func TestStopSystemdInactive(t *testing.T) {
 	s := newStubExec(t)
-	s.outs["systemctl list-unit-files routre-cli.service"] = ""
-	s.outs["systemctl is-active routre-cli.service"] = "inactive"
-	s.errs["systemctl is-active routre-cli.service"] = errors.New("inactive")
-	s.outs["systemctl --user is-active routre-cli.service"] = "inactive"
-	s.errs["systemctl --user is-active routre-cli.service"] = errors.New("inactive")
+	s.outs["systemctl list-unit-files routre.service"] = ""
+	s.outs["systemctl is-active routre.service"] = "inactive"
+	s.errs["systemctl is-active routre.service"] = errors.New("inactive")
+	s.outs["systemctl --user is-active routre.service"] = "inactive"
+	s.errs["systemctl --user is-active routre.service"] = errors.New("inactive")
 
 	stopped, err := stopManaged("linux", false, testLogger())
 	if err != nil {

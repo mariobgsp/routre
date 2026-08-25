@@ -3,10 +3,12 @@
 *.log
 
 npm/dist
-npm/routre-cli/binary/
-npm/routre-cli-*/binary/
+npm/routre/binary/
+npm/routre-*/binary/
 npm/@*/*/binary/
+/routre
 /routre-cli
+/routre.exe
 /cmd/mock-upstream/mock-upstream
 
 # local-only design/plan documents (never committed)

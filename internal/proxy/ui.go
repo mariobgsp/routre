@@ -8,7 +8,7 @@ import (
 	"strings"
 	"time"
 
-	"routre-cli/internal/config"
+	"github.com/mariobgsp/routre/internal/config"
 )
 
 // isLoopbackHost reports whether r.Host is a loopback name.
@@ -31,7 +31,7 @@ var uiTmpl = template.Must(template.New("ui").Funcs(template.FuncMap{"join": str
 const uiHTML = `<!doctype html>
 <html lang="en"><head>
 <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<title>routre-cli — Local Settings</title>
+<title>routre — Local Settings</title>
 <style>
 :root{--bg:#0a0a0a;--fg:#fff;--ink2:rgb(255 255 255/56%);--ink3:rgb(255 255 255/40%);--acc:#ff3b30;--card:rgb(255 255 255/4%);--bd:rgb(255 255 255/11%);--hover:rgb(255 255 255/9%);--mono:ui-monospace,Menlo,Consolas,monospace;--sans:Inter,system-ui,sans-serif}
 *{box-sizing:border-box}html,body{margin:0;background:var(--bg);color:var(--fg);font-family:var(--sans)}
@@ -54,7 +54,7 @@ label{font-size:.85rem;color:var(--ink2)}input{width:100%;background:var(--card)
 </head><body>
 <nav class="nav"><div class="wrap" style="display:flex;justify-content:space-between;align-items:center">
 <div class="logo">routre<em>-cli</em> <span class="mono mut" style="font-weight:400;font-size:.8rem">local settings</span></div>
-<div style="display:flex;gap:8px"><a class="btn ghost mono" href="/">API</a><a class="btn ghost mono" href="https://github.com/mariobgsp/routre-cli">GitHub</a></div>
+<div style="display:flex;gap:8px"><a class="btn ghost mono" href="/">API</a><a class="btn ghost mono" href="https://github.com/mariobgsp/routre">GitHub</a></div>
 </div></nav>
 <main class="wrap" style="padding:20px 20px 40px">
 <p class="mut" style="font-size:.9rem">Runs on <span class="mono">{{.Listen}}</span> · only reachable from this machine (127.0.0.1). Changes save to <span class="mono">{{.ConfigPath}}</span> and take effect immediately.</p>
@@ -84,8 +84,8 @@ label{font-size:.85rem;color:var(--ink2)}input{width:100%;background:var(--card)
 <h2>Tips</h2>
 <ul class="mut" style="font-size:.9rem;line-height:1.6">
 <li>Point any agent at <span class="mono">http://{{.Listen}}</span> via <span class="mono">OPENAI_BASE_URL</span> / <span class="mono">ANTHROPIC_BASE_URL</span>.</li>
-<li>Run <span class="mono">routre-cli check</span> to validate keys, <span class="mono">routre-cli list</span> for the token ledger.</li>
-<li>RAM impact of this page: ~0 at idle, &lt;2 MiB after use — see <a href="https://github.com/mariobgsp/routre-cli#benchmarks">Benchmarks</a>.</li>
+<li>Run <span class="mono">routre check</span> to validate keys, <span class="mono">routre list</span> for the token ledger.</li>
+<li>RAM impact of this page: ~0 at idle, &lt;2 MiB after use — see <a href="https://github.com/mariobgsp/routre#benchmarks">Benchmarks</a>.</li>
 </ul>
 </main>
 <script>

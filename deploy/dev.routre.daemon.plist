@@ -2,18 +2,18 @@
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <!-- macOS launchd equivalent of the systemd unit: always-on, restart on
      failure, logs rotated by launchd. Install to
-     ~/Library/LaunchAgents/dev.routercli.daemon.plist and
-     `launchctl load -w ~/Library/LaunchAgents/dev.routercli.daemon.plist`. -->
+     ~/Library/LaunchAgents/dev.routre.daemon.plist and
+     `launchctl load -w ~/Library/LaunchAgents/dev.routre.daemon.plist`. -->
 <plist version="1.0">
 <dict>
   <key>Label</key>
-  <string>dev.routercli.daemon</string>
+  <string>dev.routre.daemon</string>
   <key>ProgramArguments</key>
   <array>
-    <string>/usr/local/bin/routre-cli</string>
+    <string>/usr/local/bin/routre</string>
     <string>serve</string>
     <string>-config</string>
-    <string>/usr/local/etc/routre-cli/config.json</string>
+    <string>/usr/local/etc/routre/config.json</string>
   </array>
   <key>RunAtLoad</key>
   <true/>
@@ -24,9 +24,9 @@
   <key>ProcessType</key>
   <string>Background</string>
   <key>StandardOutPath</key>
-  <string>/usr/local/var/log/routre-cli.out.log</string>
+  <string>/usr/local/var/log/routre.out.log</string>
   <key>StandardErrorPath</key>
-  <string>/usr/local/var/log/routre-cli.err.log</string>
+  <string>/usr/local/var/log/routre.err.log</string>
   <key>EnvironmentVariables</key>
   <dict>
     <key>LLM_ROUTER_DAEMON</key>

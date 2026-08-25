@@ -1,4 +1,4 @@
-// Package config defines the on-disk JSON configuration for routre-cli.
+// Package config defines the on-disk JSON configuration for routre.
 // It supports SIGHUP reload: Load once at startup, then Reload on SIGHUP,
 // and every subsystem receives the new config through the OnLoad callback.
 package config
@@ -73,7 +73,7 @@ type CacheConfig struct {
 // matching secret. Off by default (SecretEnv empty) — zero-config behavior
 // is unchanged.
 type AuthConfig struct {
-	// SecretEnv is the env var (from routre-cli.env or the environment)
+	// SecretEnv is the env var (from routre.env or the environment)
 	// holding the shared secret. Empty = auth disabled.
 	SecretEnv string `json:"secret_env,omitempty"`
 	// Header is the HTTP header carrying the secret. Defaults to
@@ -112,7 +112,7 @@ type Config struct {
 	// (the original 402-cascade guard).
 	ForwardUnknown bool `json:"forward_unknown"`
 	// Budgets: optional per-client daily USD caps, e.g. {"codex": 5.0}.
-	// When set, `routre-cli list` surfaces BUDGET HIT and the gateway
+	// When set, `routre list` surfaces BUDGET HIT and the gateway
 	// skips providers whose ledger exceeds the cap (cheap fallback).
 	// ponytail: warn-only in list; hard cooldown if hit rate proves useful.
 	Budgets map[string]float64 `json:"budgets,omitempty"`
@@ -218,7 +218,7 @@ func (s *Store) SetOnLoad(fn func(Config)) {
 }
 
 // Load reads the config file. Missing file: defaults, no error. Invalid
-// content: error, previous config retained. The sibling routre-cli.env key
+// content: error, previous config retained. The sibling routre.env key
 // file (if present) is loaded into the process environment first, so users
 // never need shell exports.
 func (s *Store) Load() error {

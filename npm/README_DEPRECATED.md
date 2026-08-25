@@ -1,12 +1,12 @@
-# npm distribution — deprecated
+# npm distribution — removed
 
-As of v0.4.0 this folder is **deprecated**. Install via curl:
+As of v0.1.0 this folder is **removed**. Install via curl:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/mariobgsp/routre-cli/main/install.sh | sh
+curl -fsSL https://raw.githubusercontent.com/mariobgsp/routre/main/install.sh | sh
 ```
 
-`npm install -g routre-cli` now prints the curl command and exits non-zero.
-Packages remain published for pinned dependents but receive no updates.
+`npm install -g routre` now prints the curl command and exits non-zero.
+Packages remain for historical pinned dependents but receive no updates.
 
-See `docs/SPEC.md` and `release.yml` for the current tag-driven release flow.
+See `release.yml` for the current tag-driven release flow.

@@ -16,8 +16,8 @@ import (
 // are enabled too.
 func TestStartSystemd(t *testing.T) {
 	s := newStubExec(t)
-	s.outs["systemctl list-unit-files routre-cli.service"] = ""
-	s.outs["systemctl --user list-unit-files routre-cli.service"] = "routre-cli.service enabled"
+	s.outs["systemctl list-unit-files routre.service"] = ""
+	s.outs["systemctl --user list-unit-files routre.service"] = "routre.service enabled"
 
 	handled, err := startManaged("linux", false, testLogger())
 	if err != nil {
@@ -26,18 +26,18 @@ func TestStartSystemd(t *testing.T) {
 	if !handled {
 		t.Fatal("expected the systemd manager to handle the start")
 	}
-	if !s.called("systemctl --user start routre-cli.service") {
+	if !s.called("systemctl --user start routre.service") {
 		t.Errorf("missing user-scope start; calls: %v", s.calls)
 	}
-	if s.called("systemctl --user enable routre-cli.service") {
+	if s.called("systemctl --user enable routre.service") {
 		t.Errorf("enable must not run without --autostart; calls: %v", s.calls)
 	}
 }
 
 func TestStartSystemdAutostart(t *testing.T) {
 	s := newStubExec(t)
-	s.outs["systemctl list-unit-files routre-cli.service"] = ""
-	s.outs["systemctl --user list-unit-files routre-cli.service"] = "routre-cli.service enabled"
+	s.outs["systemctl list-unit-files routre.service"] = ""
+	s.outs["systemctl --user list-unit-files routre.service"] = "routre.service enabled"
 
 	handled, err := startManaged("linux", true, testLogger())
 	if err != nil {
@@ -46,10 +46,10 @@ func TestStartSystemdAutostart(t *testing.T) {
 	if !handled {
 		t.Fatal("expected the systemd manager to handle the start")
 	}
-	if !s.called("systemctl --user start routre-cli.service") {
+	if !s.called("systemctl --user start routre.service") {
 		t.Errorf("missing user-scope start; calls: %v", s.calls)
 	}
-	if !s.called("systemctl --user enable routre-cli.service") {
+	if !s.called("systemctl --user enable routre.service") {
 		t.Errorf("missing user-scope enable (--autostart); calls: %v", s.calls)
 	}
 }
@@ -103,8 +103,8 @@ func TestStartLaunchd(t *testing.T) {
 // TestRestartSystemd: restart goes through `systemctl --user restart`.
 func TestRestartSystemd(t *testing.T) {
 	s := newStubExec(t)
-	s.outs["systemctl list-unit-files routre-cli.service"] = ""
-	s.outs["systemctl --user list-unit-files routre-cli.service"] = "routre-cli.service enabled"
+	s.outs["systemctl list-unit-files routre.service"] = ""
+	s.outs["systemctl --user list-unit-files routre.service"] = "routre.service enabled"
 
 	handled, err := restartManaged("linux", testLogger())
 	if err != nil {
@@ -113,7 +113,7 @@ func TestRestartSystemd(t *testing.T) {
 	if !handled {
 		t.Fatal("expected the systemd manager to handle the restart")
 	}
-	if !s.called("systemctl --user restart routre-cli.service") {
+	if !s.called("systemctl --user restart routre.service") {
 		t.Errorf("missing user-scope restart; calls: %v", s.calls)
 	}
 }
@@ -168,8 +168,8 @@ func TestRestartLaunchd(t *testing.T) {
 func TestStartFallbackSpawn(t *testing.T) {
 	s := newStubExec(t)
 	// Unit unknown in both scopes → detectManager returns "" → spawn.
-	s.outs["systemctl list-unit-files routre-cli.service"] = ""
-	s.outs["systemctl --user list-unit-files routre-cli.service"] = ""
+	s.outs["systemctl list-unit-files routre.service"] = ""
+	s.outs["systemctl --user list-unit-files routre.service"] = ""
 
 	// lsof: nothing listening first (spawn), then the daemon appears.
 	var lsofCalls int
@@ -208,8 +208,8 @@ func TestStartFallbackSpawn(t *testing.T) {
 // service; without one, cmdStart must refuse.
 func TestStartFallbackAutostartError(t *testing.T) {
 	s := newStubExec(t)
-	s.outs["systemctl list-unit-files routre-cli.service"] = ""
-	s.outs["systemctl --user list-unit-files routre-cli.service"] = ""
+	s.outs["systemctl list-unit-files routre.service"] = ""
+	s.outs["systemctl --user list-unit-files routre.service"] = ""
 
 	var spawned bool
 	oldSpawn := spawnDaemon
@@ -236,8 +236,8 @@ func TestStartFallbackAutostartError(t *testing.T) {
 // TestRestartFallbackSpawn: no manager → stop by port, then spawn.
 func TestRestartFallbackSpawn(t *testing.T) {
 	s := newStubExec(t)
-	s.outs["systemctl list-unit-files routre-cli.service"] = ""
-	s.outs["systemctl --user list-unit-files routre-cli.service"] = ""
+	s.outs["systemctl list-unit-files routre.service"] = ""
+	s.outs["systemctl --user list-unit-files routre.service"] = ""
 
 	var lsofCalls int
 	oldCmd := runCommand

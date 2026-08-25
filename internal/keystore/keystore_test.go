@@ -19,7 +19,7 @@ func TestSetAndGet(t *testing.T) {
 
 func TestRefreshDetectsRotation(t *testing.T) {
 	dir := t.TempDir()
-	envPath := filepath.Join(dir, "routre-cli.env")
+	envPath := filepath.Join(dir, "routre.env")
 	write := func(v string) {
 		if err := os.WriteFile(envPath, []byte("MY_KEY="+v+"\n"), 0o600); err != nil {
 			t.Fatal(err)
@@ -42,7 +42,7 @@ func TestRefreshDetectsRotation(t *testing.T) {
 
 func TestRefreshNoChange(t *testing.T) {
 	dir := t.TempDir()
-	envPath := filepath.Join(dir, "routre-cli.env")
+	envPath := filepath.Join(dir, "routre.env")
 	if err := os.WriteFile(envPath, []byte("K=same\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -55,7 +55,7 @@ func TestRefreshNoChange(t *testing.T) {
 
 func TestRefreshKeyMissingInFileKeepsValue(t *testing.T) {
 	dir := t.TempDir()
-	envPath := filepath.Join(dir, "routre-cli.env")
+	envPath := filepath.Join(dir, "routre.env")
 	if err := os.WriteFile(envPath, []byte("OTHER=x\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -72,7 +72,7 @@ func TestRefreshKeyMissingInFileKeepsValue(t *testing.T) {
 
 func TestRefreshNoEnvMutation(t *testing.T) {
 	dir := t.TempDir()
-	envPath := filepath.Join(dir, "routre-cli.env")
+	envPath := filepath.Join(dir, "routre.env")
 	if err := os.WriteFile(envPath, []byte("MUTATE_KEY=fileval\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}

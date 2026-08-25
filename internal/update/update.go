@@ -1,4 +1,4 @@
-// Package update implements routre-cli's self-update: it finds the latest
+// Package update implements routre's self-update: it finds the latest
 // GitHub release without touching api.github.com (rate limits), verifies the
 // download against the release's checksums.txt, and atomically replaces its
 // own binary. Zero external dependencies by design.
@@ -22,7 +22,7 @@ import (
 
 const (
 	Owner    = "mariobgsp"
-	Repo     = "routre-cli"
+	Repo     = "routre"
 	baseHost = "https://github.com"
 )
 
@@ -58,7 +58,7 @@ func newRequest(url string) (*http.Request, error) {
 	if err != nil {
 		return nil, err
 	}
-	req.Header.Set("User-Agent", "routre-cli-update")
+	req.Header.Set("User-Agent", "routre-update")
 	return req, nil
 }
 
@@ -77,7 +77,7 @@ func assetName() string {
 	if runtime.GOOS == "windows" {
 		ext = ".zip"
 	}
-	return fmt.Sprintf("routre-cli_%s_%s%s", runtime.GOOS, runtime.GOARCH, ext)
+	return fmt.Sprintf("routre_%s_%s%s", runtime.GOOS, runtime.GOARCH, ext)
 }
 
 // Latest resolves the newest release via the releases/latest 302 redirect
@@ -186,7 +186,7 @@ func (r *Release) Apply(currentPath string) error {
 	}
 
 	// Stream to temp file while hashing: one pass, bounded memory.
-	tmp, err := os.CreateTemp(filepath.Dir(currentPath), ".routre-cli-update-*.tar.gz")
+	tmp, err := os.CreateTemp(filepath.Dir(currentPath), ".routre-update-*.tar.gz")
 	if err != nil {
 		return err
 	}
@@ -205,7 +205,7 @@ func (r *Release) Apply(currentPath string) error {
 		return fmt.Errorf("checksum mismatch: want %s got %s (binary left untouched)", want, got)
 	}
 
-	// Extract the single root-level routre-cli entry from the tarball.
+	// Extract the single root-level routre entry from the tarball.
 	binBytes, err := extractBinary(tmpName)
 	if err != nil {
 		return err
@@ -232,7 +232,7 @@ func (r *Release) Apply(currentPath string) error {
 	return nil
 }
 
-// extractBinary pulls the routre-cli entry out of a .tar.gz archive.
+// extractBinary pulls the routre entry out of a .tar.gz archive.
 func extractBinary(tarGz string) ([]byte, error) {
 	f, err := os.Open(tarGz)
 	if err != nil {
@@ -248,13 +248,13 @@ func extractBinary(tarGz string) ([]byte, error) {
 	for {
 		hdr, err := tr.Next()
 		if err == io.EOF {
-			return nil, fmt.Errorf("no routre-cli entry in archive")
+			return nil, fmt.Errorf("no routre entry in archive")
 		}
 		if err != nil {
 			return nil, err
 		}
 		name := filepath.Base(hdr.Name)
-		if name == "routre-cli" || name == "routre-cli.exe" {
+		if name == "routre" || name == "routre.exe" {
 			return io.ReadAll(io.LimitReader(tr, 1<<30))
 		}
 	}

@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 // build.mjs — compiles the Go binary for all six platforms into
-// npm/routre-cli-<os>-<arch>/binary/, writes each platform package.json,
+// npm/routre-<os>-<arch>/binary/, writes each platform package.json,
 // and npm-packs everything into npm/dist.
 //
 // Prerequisites: Go toolchain on PATH, npm available.
@@ -31,48 +31,48 @@ function readJson(path) {
     process.exit(1);
   }
 }
-const version = readJson(join(npmDir, "routre-cli", "package.json")).version;
+const version = readJson(join(npmDir, "routre", "package.json")).version;
 
 const targets = [
   {
-    pkg: "routre-cli-linux-x64",
+    pkg: "routre-linux-x64",
     os: "linux",
     goos: "linux",
     arch: "amd64",
     ext: "",
   },
   {
-    pkg: "routre-cli-linux-arm64",
+    pkg: "routre-linux-arm64",
     os: "linux",
     goos: "linux",
     arch: "arm64",
     ext: "",
   },
   {
-    pkg: "routre-cli-darwin-x64",
+    pkg: "routre-darwin-x64",
     os: "darwin",
     goos: "darwin",
     arch: "amd64",
     ext: "",
   },
   {
-    pkg: "routre-cli-darwin-arm64",
+    pkg: "routre-darwin-arm64",
     os: "darwin",
     goos: "darwin",
     arch: "arm64",
     ext: "",
   },
   {
-    // Scoped: npm's spam detection rejects unscoped `routre-cli-win32-*`
+    // Scoped: npm's spam detection rejects unscoped `routre-win32-*`
     // names, so the Windows packages ship under the @mariobgsp scope.
-    pkg: "@mariobgsp/routre-cli-win32-x64",
+    pkg: "@mariobgsp/routre-win32-x64",
     os: "win32",
     goos: "windows",
     arch: "amd64",
     ext: ".exe",
   },
   {
-    pkg: "@mariobgsp/routre-cli-win32-arm64",
+    pkg: "@mariobgsp/routre-win32-arm64",
     os: "win32",
     goos: "windows",
     arch: "arm64",
@@ -81,9 +81,9 @@ const targets = [
 ];
 
 // Pin the launcher's optionalDependencies to the same version — stale pins
-// (e.g. after a version bump) silently make `npm install routre-cli` fetch
+// (e.g. after a version bump) silently make `npm install routre` fetch
 // OLD registry binaries.
-const launcherPkgPath = join(npmDir, "routre-cli", "package.json");
+const launcherPkgPath = join(npmDir, "routre", "package.json");
 const launcherPkg = readJson(launcherPkgPath);
 launcherPkg.optionalDependencies = Object.fromEntries(
   targets.map((t) => [t.pkg, version]),
@@ -119,7 +119,7 @@ for (const t of targets) {
   const binDir = join(dir, "binary");
   rmSync(binDir, { recursive: true, force: true });
   mkdirSync(binDir, { recursive: true });
-  const out = join(binDir, `routre-cli${t.ext}`);
+  const out = join(binDir, `routre${t.ext}`);
 
   console.log(`building ${t.pkg} (${t.goos}/${t.arch})...`);
   run(
@@ -132,7 +132,7 @@ for (const t of targets) {
   );
   if (t.os !== "win32") chmodSync(out, 0o755);
 
-  // Ship benchdata next to the binary so `routre-cli bench` works from any
+  // Ship benchdata next to the binary so `routre bench` works from any
   // cwd after a global install.
   const bdSrc = join(root, "benchdata");
   if (existsSync(bdSrc)) {
@@ -145,11 +145,11 @@ for (const t of targets) {
       {
         name: t.pkg,
         version,
-        description: `routre-cli binary for ${t.os}-${t.arch}`,
+        description: `routre binary for ${t.os}-${t.arch}`,
         license: "MIT",
         repository: {
           type: "git",
-          url: "https://github.com/mariobgsp/routre-cli",
+          url: "https://github.com/mariobgsp/routre",
         },
         os: [t.os],
         cpu: [t.arch === "amd64" ? "x64" : t.arch],
@@ -161,22 +161,22 @@ for (const t of targets) {
   );
 }
 
-// Host-platform binary also lands in npm/routre-cli/binary/ so the shim
+// Host-platform binary also lands in npm/routre/binary/ so the shim
 // works from a git checkout without npm install.
 if (hostTarget) {
-  const devDir = join(npmDir, "routre-cli", "binary");
+  const devDir = join(npmDir, "routre", "binary");
   mkdirSync(devDir, { recursive: true });
   const src = join(
     npmDir,
     hostTarget.pkg,
     "binary",
-    `routre-cli${hostTarget.ext}`,
+    `routre${hostTarget.ext}`,
   );
-  const dst = join(devDir, `routre-cli${hostTarget.ext}`);
+  const dst = join(devDir, `routre${hostTarget.ext}`);
   copyFileSync(src, dst);
   if (hostTarget.os !== "win32") chmodSync(dst, 0o755);
   console.log(
-    `host binary copied to npm/routre-cli/binary/ (${hostTarget.pkg})`,
+    `host binary copied to npm/routre/binary/ (${hostTarget.pkg})`,
   );
 }
 
@@ -188,16 +188,16 @@ for (const t of targets) {
     stdio: "inherit",
   });
 }
-console.log("packing routre-cli...");
+console.log("packing routre...");
 run("npm pack --pack-destination " + JSON.stringify(distDir), {
-  cwd: join(npmDir, "routre-cli"),
+  cwd: join(npmDir, "routre"),
   stdio: "inherit",
 });
 
 console.log("\nDone. Tarballs in npm/dist/:");
-for (const f of ["routre-cli", ...targets.map((t) => t.pkg)].sort()) {
+for (const f of ["routre", ...targets.map((t) => t.pkg)].sort()) {
   // Scoped packages (@mariobgsp/...) pack to a filename with the @ and /
-  // stripped (mariobgsp-routre-cli-win32-x64-...), so normalize before the check.
+  // stripped (mariobgsp-routre-win32-x64-...), so normalize before the check.
   const file = f.replace(/^@/, "").replace(/\//, "-");
   const p = join(distDir, `${file}-${version}.tgz`);
   console.log(`  ${existsSync(p) ? "✓" : "✗"} ${p}`);

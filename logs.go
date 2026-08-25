@@ -9,17 +9,17 @@ import (
 	"path/filepath"
 	"time"
 
-	"routre-cli/internal/config"
-	"routre-cli/internal/reqlog"
+	"github.com/mariobgsp/routre/internal/config"
+	"github.com/mariobgsp/routre/internal/reqlog"
 )
 
 // cmdLogs tails the per-request JSONL log for self-debugging:
 //
-//	routre-cli logs [-n N] [-f] [-config config.json]
+//	routre logs [-n N] [-f] [-config config.json]
 //
 // The log path is taken from the config's request_log field; when the
 // config has no such path (or does not exist), it falls back to
-// ~/.routre-cli/requests.jsonl.
+// ~/.routre/requests.jsonl.
 func cmdLogs(cfgPath string, args []string, logger *log.Logger) error {
 	fs := flag.NewFlagSet("logs", flag.ExitOnError)
 	n := fs.Int("n", 50, "number of most recent entries to print (0 = all)")
@@ -62,7 +62,7 @@ func defaultReqLogPath() string {
 	if err != nil {
 		return ""
 	}
-	return filepath.Join(home, ".routre-cli", "requests.jsonl")
+	return filepath.Join(home, ".routre", "requests.jsonl")
 }
 
 // printTail prints the last n lines of the log (n<=0: all lines).

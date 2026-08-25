@@ -1,6 +1,6 @@
-// routre-cli stop: stop the running gateway daemon.
+// routre stop: stop the running gateway daemon.
 //
-//	routre-cli stop [--autostart] [-config config.json]
+//	routre stop [--autostart] [-config config.json]
 //
 // When the daemon was installed as an OS service it is stopped through the
 // service manager (systemd unit in the system or --user scope, or launchd
@@ -25,13 +25,13 @@ import (
 	"syscall"
 	"time"
 
-	"routre-cli/internal/config"
+	"github.com/mariobgsp/routre/internal/config"
 )
 
 // Daemon service identifiers (mirror deploy/).
 const (
-	systemdUnit   = "routre-cli.service"
-	systemdSocket = "routre-cli.socket"
+	systemdUnit   = "routre.service"
+	systemdSocket = "routre.socket"
 	launchdLabel  = "dev.routercli.daemon"
 	defaultPort   = 20128
 )
@@ -301,7 +301,7 @@ func pidOnPort(goos string, port int) (int, error) {
 		return pid, nil
 	}
 	// No lsof: fall back to matching the serve process by command line.
-	out, err := runCommand(exec.Command("pgrep", "-f", "routre-cli serve"))
+	out, err := runCommand(exec.Command("pgrep", "-f", "routre serve"))
 	if err != nil || strings.TrimSpace(out) == "" {
 		return 0, nil
 	}

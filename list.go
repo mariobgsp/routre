@@ -11,8 +11,8 @@ import (
 	"strings"
 	"time"
 
-	"routre-cli/internal/config"
-	"routre-cli/internal/usage"
+	"github.com/mariobgsp/routre/internal/config"
+	"github.com/mariobgsp/routre/internal/usage"
 )
 
 // cmdList shows everything connected: configured providers (with key and
@@ -32,7 +32,7 @@ func cmdList(cfgPath, url string, asJSON bool, _ *log.Logger) error {
 
 	fmt.Println("== configured providers ==")
 	if len(cfg.Tiers) == 0 {
-		fmt.Println("  (none — run `routre-cli setup`)")
+		fmt.Println("  (none — run `routre setup`)")
 	}
 	for _, t := range cfg.Tiers {
 		for _, p := range t.Providers {
@@ -69,7 +69,7 @@ func cmdList(cfgPath, url string, asJSON bool, _ *log.Logger) error {
 		}
 	} else {
 		fmt.Println("\n== live gateway ==")
-		fmt.Printf("  not reachable at %s (start it with `routre-cli serve`)\n", url)
+		fmt.Printf("  not reachable at %s (start it with `routre serve`)\n", url)
 	}
 
 	// Usage: prefer live /v1/usage, else persisted file.

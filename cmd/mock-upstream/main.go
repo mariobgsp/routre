@@ -13,7 +13,7 @@ import (
 	"net/http"
 	"strconv"
 
-	"routre-cli/internal/mock"
+	"github.com/mariobgsp/routre/internal/mock"
 )
 
 func main() {

@@ -79,7 +79,7 @@ func TestUsageSnifferDrainCarryNoNewline(t *testing.T) {
 }
 
 // Provider prompt-cache hits (OpenAI cached_tokens / Anthropic
-// cache_read_input_tokens) must be captured so `routre-cli list` can show
+// cache_read_input_tokens) must be captured so `routre list` can show
 // real cache savings. Splitting the final usage chunk across Read
 // boundaries must still work.
 func TestUsageSnifferCacheRead(t *testing.T) {

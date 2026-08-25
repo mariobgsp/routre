@@ -7,9 +7,9 @@ import (
 	"os"
 	"path/filepath"
 
-	"routre-cli/internal/config"
-	"routre-cli/internal/rtk"
-	"routre-cli/internal/tokenize"
+	"github.com/mariobgsp/routre/internal/config"
+	"github.com/mariobgsp/routre/internal/rtk"
+	"github.com/mariobgsp/routre/internal/tokenize"
 )
 
 // cmdBench measures RTK token reduction over realistic tool-heavy request
@@ -39,7 +39,7 @@ func cmdBench(cfgPath string, targetPct float64, logger *log.Logger) error {
 		return err
 	}
 	if len(files) == 0 {
-		// Fall back to the directory next to the binary, so `routre-cli
+		// Fall back to the directory next to the binary, so `routre
 		// bench` works when installed globally (npm -g etc.).
 		if exe, exeErr := os.Executable(); exeErr == nil {
 			alt := filepath.Join(filepath.Dir(exe), "benchdata", "*.json")
@@ -89,7 +89,7 @@ func cmdBench(cfgPath string, targetPct float64, logger *log.Logger) error {
 		totalToolAfter += ta
 	}
 
-	fmt.Println("routre-cli bench — RTK token reduction")
+	fmt.Println("routre bench — RTK token reduction")
 	fmt.Println("metric: BPE token count (cl100k_base, embedded); see internal/tokenize")
 	fmt.Println()
 	fmt.Printf("%-28s %10s %10s %10s %10s %6s\n", "file", "payload→", "payload%", "tool→", "tool%", "touched")

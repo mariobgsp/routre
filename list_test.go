@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	"routre-cli/internal/usage"
+	"github.com/mariobgsp/routre/internal/usage"
 )
 
 func TestParseRow(t *testing.T) {

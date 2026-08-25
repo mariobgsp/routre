@@ -3,10 +3,10 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width,initial-scale=1" />
-    <title>routre-cli — The 9-MB gateway you forget is running</title>
+    <title>routre — The 9-MB gateway you forget is running</title>
     <meta
       name="description"
-      content="One static binary (6.7 MiB, 9 MiB RAM) — failover, bench-gated 90% RTK token compression, cache, per-agent ledger."
+      content="routre — one static binary (10 MiB, 10 MiB RAM) — failover, bench-gated 90% RTK token compression, cache, per-agent ledger."
     />
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
@@ -25,7 +25,8 @@
         --bd: rgb(255 255 255 / 11%);
         --hover: rgb(255 255 255 / 9%);
         --mono: ui-monospace, Menlo, Consolas, monospace;
-        --sans: Outfit, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+        --sans:
+          Outfit, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
       }
       * {
         box-sizing: border-box;
@@ -120,7 +121,8 @@
         font-family: var(--sans);
         border-bottom: none;
         border-radius: 999px;
-        transition: transform 0.35s cubic-bezier(0.22, 1, 0.36, 1),
+        transition:
+          transform 0.35s cubic-bezier(0.22, 1, 0.36, 1),
           background 0.2s ease;
       }
       .btn:hover {
@@ -205,8 +207,10 @@
         border-radius: 14px;
         padding: 20px;
         text-align: center;
-        transition: transform 0.6s cubic-bezier(0.22, 1, 0.36, 1),
-          border-color 0.3s ease, background 0.3s ease;
+        transition:
+          transform 0.6s cubic-bezier(0.22, 1, 0.36, 1),
+          border-color 0.3s ease,
+          background 0.3s ease;
       }
       .card:hover {
         transform: translateY(-4px);
@@ -377,16 +381,38 @@
         font-size: 0.85rem;
         border-top: 1px solid var(--bd);
       }
+      /* windows + ai prompt extras */
+      .pill {
+        display: inline-block;
+        font: 500 0.72rem var(--mono);
+        letter-spacing: 0.06em;
+        text-transform: uppercase;
+        color: var(--ink3);
+        border: 1px solid var(--bd);
+        border-radius: 999px;
+        padding: 4px 8px;
+        margin-bottom: 8px;
+      }
+      .cols {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 14px;
+      }
+      @media (max-width: 860px) {
+        .cols {
+          grid-template-columns: 1fr;
+        }
+      }
     </style>
   </head>
   <body>
     <nav class="nav">
       <div class="wrap">
         <div class="logo">
-          routre<em>-cli</em><span class="sub">9-MB gateway</span>
+          routre<span class="sub">9-MB gateway</span>
         </div>
         <div style="display: flex; gap: 8px">
-          <a class="btn ghost" href="https://github.com/mariobgsp/routre-cli"
+          <a class="btn ghost" href="https://github.com/mariobgsp/routre"
             >GitHub</a
           >
           <a class="btn" href="#install">Install</a>
@@ -403,15 +429,15 @@
           The 9-MB gateway<br />you <span class="acc">forget</span> is running.
         </h1>
         <p class="lead" id="lead">
-          6.7 MiB binary, ~9 MiB RAM idle. Gives every OpenAI/Anthropic CLI —
+          10 MiB binary, ~10 MiB RAM idle. Gives every OpenAI/Anthropic CLI —
           opencode, Claude Code, Codex, Cursor — automatic failover,
           <b>90% RTK token compression</b> (bench-gated), response cache &amp;
           per-agent ledger.
         </p>
         <pre class="code">
-curl -fsSL https://raw.githubusercontent.com/mariobgsp/routre-cli/main/install.sh | sh
-routre-cli setup --detect   # one-command hook
-routre-cli serve            # http://127.0.0.1:20128</pre>
+curl -fsSL https://raw.githubusercontent.com/mariobgsp/routre/main/install.sh | sh
+routre setup --detect   # one-command hook
+routre serve            # http://127.0.0.1:20128  ·  dashboard /ui</pre>
         <p class="mut mono" style="font-size: 0.8rem; margin-top: 10px">
           Not 80 MB + leak. Not Python/Postgres GBs. Just Go.
         </p>
@@ -440,11 +466,11 @@ routre-cli serve            # http://127.0.0.1:20128</pre>
         <div class="stats">
           <div class="card">
             <div class="lbl">RAM idle</div>
-            <div style="font-weight: 600">9 MiB</div>
+            <div style="font-weight: 600">10 MiB</div>
           </div>
           <div class="card">
             <div class="lbl">Binary</div>
-            <div style="font-weight: 600">6.7 MiB</div>
+            <div style="font-weight: 600">10.6 MiB</div>
           </div>
           <div class="card">
             <div class="lbl">Proxy overhead</div>
@@ -489,19 +515,128 @@ routre-cli serve            # http://127.0.0.1:20128</pre>
 
     <div class="wrap section" id="install">
       <h2 class="h2">Install</h2>
-      <pre class="code">
-curl -fsSL https://raw.githubusercontent.com/mariobgsp/routre-cli/main/install.sh | sh
-routre-cli version
-routre-cli setup --detect   # writes config.json + routre-cli.env (0600)
-routre-cli serve            # gateway on 127.0.0.1:20128
+      <div class="cols">
+        <div>
+          <div class="pill">macOS · Linux</div>
+          <pre class="code">
+curl -fsSL https://raw.githubusercontent.com/mariobgsp/routre/main/install.sh | sh
+routre version
+routre setup --detect   # writes config.json + routre.env (0600)
+routre serve            # gateway on 127.0.0.1:20128
 
 # point any agent at it:
 export OPENAI_BASE_URL=http://127.0.0.1:20128
 export ANTHROPIC_BASE_URL=http://127.0.0.1:20128</pre>
+        </div>
+        <div>
+          <div class="pill">Windows (PowerShell) — see details below</div>
+          <pre class="code">
+# download from Releases → unzip → add to PATH →
+routre setup --detect
+routre serve   # http://127.0.0.1:20128  ·  dashboard /ui</pre>
+          <p class="mut" style="font-size: 0.85rem; margin-top: 8px">
+            Full Windows steps in the next section. Or let your AI do it —
+            <a href="#ai-install">AI prompt</a> below.
+          </p>
+        </div>
+      </div>
       <p class="mut" style="font-size: 0.9rem; margin-top: 12px">
         Self-update built in:
-        <span class="mono">routre-cli update</span> verifies sha256 and
-        atomically replaces the binary. npm distribution is deprecated.
+        <span class="mono">routre update</span> verifies sha256 and
+        atomically replaces the binary. Old <span class="mono">routre-cli</span> installs still work (alias).
+        npm distribution is deprecated.
+      </p>
+    </div>
+
+    <div class="wrap section" id="windows">
+      <h2 class="h2">Windows</h2>
+      <p class="mut" style="font-size: 0.95rem; margin-top: -6px">
+        No installer, no admin rights. One zip, one folder, one PATH entry.
+      </p>
+      <div class="pill">Option A — manual (2 min)</div>
+      <pre class="code">
+# 1. Download the zip for your CPU from Releases:
+#    https://github.com/mariobgsp/routre/releases/latest
+#    routre_windows_amd64.zip  (Intel/AMD)  or  routre_windows_arm64.zip  (ARM)
+
+# 2. Unzip to a permanent folder:
+Expand-Archive .\routre_windows_amd64.zip -DestinationPath $HOME\routre
+
+# 3. Add to PATH for this user (no admin):
+$dir = "$HOME\routre"
+[Environment]::SetEnvironmentVariable("Path", $env:Path + ";$dir", "User")
+$env:Path += ";$dir"   # also for this shell
+
+# 4. Setup + run:
+routre version
+routre setup --detect   # writes config.json + routre.env (0600) next to the exe
+routre serve            # gateway + dashboard at http://127.0.0.1:20128/ui
+
+# Verify:
+curl http://127.0.0.1:20128/healthz   # → ok
+routre check            # validates config + keys
+routre list             # providers + savings + BUDGET HIT</pre>
+      <div class="pill" style="margin-top: 16px">Option B — PowerShell one-liner (auto PATH)</div>
+      <pre class="code">
+irm https://raw.githubusercontent.com/mariobgsp/routre/main/install.ps1 | iex
+# (falls back to manual zip if ps1 is not yet published — same 3 steps above)</pre>
+      <div class="cols" style="margin-top: 14px">
+        <div class="card" style="text-align: left">
+          <h3 style="font-size: 0.9rem">Notes</h3>
+          <p style="text-align: left">
+            SmartScreen may warn on first run — click <span class="mono">More info → Run anyway</span> (binary is unsigned, sha256-verified on update). Windows Defender: no Python/Postgres/Node, just one exe (~11 MiB, ~10 MiB RAM).
+          </p>
+        </div>
+        <div class="card" style="text-align: left">
+          <h3 style="font-size: 0.9rem">Run at startup</h3>
+          <p style="text-align: left">
+            <span class="mono">routre start --autostart</span> registers a Scheduled Task (logon trigger). <span class="mono">routre stop --autostart</span> removes it. No service install, no admin.
+          </p>
+        </div>
+      </div>
+      <p class="mut mono" style="font-size: 0.8rem; margin-top: 10px">
+        Alias: <span class="mono">routre.exe</span> still launches the same binary. Config lives next to the exe: <span class="mono">config.json</span> + <span class="mono">routre.env</span>.
+      </p>
+    </div>
+
+    <div class="wrap section" id="ai-install">
+      <h2 class="h2">Install with an AI prompt</h2>
+      <p class="mut" style="font-size: 0.95rem; margin-top: -6px">
+        Paste one prompt into Claude Code, Codex, Cursor, or opencode — the agent runs the same commands you would.
+      </p>
+      <div class="pill">Copy → paste into your agent</div>
+      <pre class="code">
+# Prompt for Claude Code / Codex / opencode / Cursor:
+Install routre (github.com/mariobgsp/routre) on this machine:
+
+1. Detect OS/CPU, fetch the latest release asset for this platform
+   (curl install.sh on macOS/Linux, zip from Releases on Windows), verify sha256, and put the binary on PATH as routre (keep routre-cli as alias).
+2. Run: routre setup --detect   (non-interactive if keys already in env)
+   If OPENCODE_GO_API_KEY / OPENROUTER_API_KEY / ANTHROPIC_API_KEY are missing, ask me once and write them to routre.env (0600).
+3. Start the gateway: routre serve (or routre start --autostart for boot).
+4. Point this agent at it:
+   export OPENAI_BASE_URL=http://127.0.0.1:20128
+   export ANTHROPIC_BASE_URL=http://127.0.0.1:20128
+5. Verify: curl http://127.0.0.1:20128/healthz  and  routre list
+6. Open the dashboard: http://127.0.0.1:20128/ui
+
+Keep it stdlib-only, ~10 MiB RAM. Do not install Python/Postgres/Node.</pre>
+      <div class="cols" style="margin-top: 14px">
+        <div>
+          <div class="pill">Non-interactive one-shot</div>
+          <pre class="code">
+# If your agent supports tool use, this single line is enough:
+curl -fsSL https://raw.githubusercontent.com/mariobgsp/routre/main/install.sh | sh && routre setup --detect && routre serve</pre>
+        </div>
+        <div>
+          <div class="pill">Windows prompt variant</div>
+          <pre class="code">
+Install routre on Windows (PowerShell):
+download routre_windows_amd64.zip from Releases, expand to $HOME\routre, add to user PATH, then run routre setup --detect and routre serve. Verify with curl http://127.0.0.1:20128/healthz.</pre>
+        </div>
+      </div>
+      <p class="mut" style="font-size: 0.85rem; margin-top: 12px">
+        Tip: after the AI finishes, open <span class="mono">http://127.0.0.1:20128/ui</span> to edit providers/keys without touching JSON — loopback-only, Host-checked, &lt;2 MiB after use.
       </p>
     </div>
 
@@ -516,9 +651,9 @@ export ANTHROPIC_BASE_URL=http://127.0.0.1:20128</pre>
             <th>90% claim</th>
           </tr>
           <tr>
-            <td>routre-cli</td>
-            <td>9 MiB</td>
-            <td>curl one-liner, 6 platforms</td>
+            <td>routre</td>
+            <td>10 MiB</td>
+            <td>curl one-liner / zip, 6 platforms · AI prompt</td>
             <td>bench-gated, build fails on regress</td>
           </tr>
           <tr>
@@ -540,16 +675,16 @@ export ANTHROPIC_BASE_URL=http://127.0.0.1:20128</pre>
     <div class="wrap section">
       <h2 class="h2">Quick start</h2>
       <pre class="code">
-routre-cli check              # validate config + keys
-routre-cli list               # providers + savings banner + BUDGET HIT
-routre-cli start --autostart  # systemd/launchd daemon
-routre-cli logs -f            # tail request log
+routre check              # validate config + keys
+routre list               # providers + savings banner + BUDGET HIT
+routre start --autostart  # systemd/launchd/Scheduled Task daemon
+routre logs -f            # tail request log
 go run . bench -target 90     # honest metric</pre>
       <p class="mut" style="font-size: 0.9rem; margin-top: 12px">
         Endpoints:
         <span class="mono"
           >/v1/chat/completions · /v1/responses · /v1/messages · /v1/models ·
-          /v1/status · /v1/usage · /healthz · /metrics</span
+          /v1/status · /v1/usage · /healthz · /metrics · /ui (dashboard)</span
         >
       </p>
     </div>
@@ -557,7 +692,7 @@ go run . bench -target 90     # honest metric</pre>
     <div class="cta">
       <div class="wrap">
         <h2>Stop paying<br />the token tax.</h2>
-        <a class="btn" href="#install">Install routre-cli</a>
+        <a class="btn" href="#install">Install routre</a>
       </div>
     </div>
 
@@ -565,17 +700,17 @@ go run . bench -target 90     # honest metric</pre>
       <div class="wrap foot">
         <div>
           MIT ·
-          <a href="https://github.com/mariobgsp/routre-cli"
-            >github.com/mariobgsp/routre-cli</a
+          <a href="https://github.com/mariobgsp/routre"
+            >github.com/mariobgsp/routre</a
           >
           ·
-          <a href="https://github.com/mariobgsp/routre-cli/releases"
+          <a href="https://github.com/mariobgsp/routre/releases"
             >Releases</a
           >
           · <a href="SPEC.md">SPEC</a>
         </div>
         <div class="mut" style="margin-top: 6px">
-          stdlib only · deletion over addition · shortest diff wins
+          routre · stdlib only · deletion over addition
         </div>
       </div>
     </footer>
@@ -595,11 +730,9 @@ go run . bench -target 90     # honest metric</pre>
       (function () {
         var mq = document.getElementById("mq");
         if (!mq) return;
-        Array.prototype.slice
-          .call(mq.children)
-          .forEach(function (n) {
-            mq.appendChild(n.cloneNode(true));
-          });
+        Array.prototype.slice.call(mq.children).forEach(function (n) {
+          mq.appendChild(n.cloneNode(true));
+        });
       })();
 
       (function () {
@@ -636,8 +769,13 @@ go run . bench -target 90     # honest metric</pre>
             opacity: 1,
             stagger: 0.05,
             ease: "none",
-            scrollTrigger: { trigger: lead, start: "top 85%", end: "top 40%", scrub: true },
-          }
+            scrollTrigger: {
+              trigger: lead,
+              start: "top 85%",
+              end: "top 40%",
+              scrub: true,
+            },
+          },
         );
 
         // cards + sections rise in
