@@ -96,9 +96,9 @@ func TestUISaveValidAndInvalid(t *testing.T) {
 	// valid save — add a tier
 	newCfg := config.Config{
 		Listen: "127.0.0.1:0",
-		Tiers: []config.Tier{{Name: "t1", Providers: []config.Provider{{Name: "p1", Kind: config.KindOpenAI, BaseURL: "https://example.com", APIKeyEnv: "K1", Models: []string{"m1"}}}}},
-		RTK:   config.RTKConfig{Enabled: true, MinBytes: 0, MaxBytes: 10485760},
-		Cache: config.CacheConfig{Enabled: true, MaxEntries: 512, TTLSeconds: 3600},
+		Tiers:  []config.Tier{{Name: "t1", Providers: []config.Provider{{Name: "p1", Kind: config.KindOpenAI, BaseURL: "https://example.com", APIKeyEnv: "K1", Models: []string{"m1"}}}}},
+		RTK:    config.RTKConfig{Enabled: true, MinBytes: 0, MaxBytes: 10485760},
+		Cache:  config.CacheConfig{Enabled: true, MaxEntries: 512, TTLSeconds: 3600},
 	}
 	b, _ := json.Marshal(newCfg)
 	resp, err := http.Post(base+"/ui/api/save", "application/json", bytes.NewReader(b))
