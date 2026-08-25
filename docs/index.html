@@ -1,107 +1,495 @@
 <!doctype html>
 <html lang="en">
-<head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width,initial-scale=1">
-<title>routre-cli — The 9-MB gateway you forget is running</title>
-<meta name="description" content="One static binary (6.7 MiB, 9 MiB RAM) — failover, bench-gated 90% RTK token compression, cache, per-agent ledger.">
-<style>
-:root{
-  --bg:#0A0A0A;
-  --fg:#fff;
-  --ink2:rgb(255 255 255 / 56%);
-  --ink3:rgb(255 255 255 / 40%);
-  --acc:#ff3b30;
-  --card:rgb(255 255 255 / 4%);
-  --bd:rgb(255 255 255 / 11%);
-  --hover:rgb(255 255 255 / 9%);
-  --mono:ui-monospace,Menlo,Consolas,monospace;
-  --sans:Inter,system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;
-}
-*{box-sizing:border-box}
-html,body{margin:0;background:var(--bg);color:var(--fg);font-family:var(--sans)}
-a{color:var(--fg);text-decoration:none;border-bottom:1px solid var(--bd)}
-a:hover{border-color:var(--ink2)}
-:focus-visible{outline:2px solid var(--fg);outline-offset:2px}
-.wrap{max-width:1080px;margin:0 auto;padding:0 20px}
-.nav{position:sticky;top:0;backdrop-filter:blur(8px);background:rgb(10 10 10 / 80%);border-bottom:1px solid var(--bd);z-index:10}
-.nav .wrap{display:flex;align-items:center;justify-content:space-between;padding:12px 20px}
-.logo{font-weight:600;letter-spacing:-.02em}
-.logo em{font-style:normal;color:var(--acc)}
-.logo .sub{color:var(--ink3);font-family:var(--mono);font-weight:400;font-size:.8rem;margin-left:6px}
-.btn{display:inline-block;border:1px solid transparent;background:var(--fg);color:var(--bg);padding:8px 14px;font-weight:500;font-size:.85rem;border-bottom:none;border-radius:6px}
-.btn:hover{background:rgb(255 255 255 / 88%)}
-.btn.ghost{background:transparent;color:var(--fg);border-color:var(--bd)}
-.btn.ghost:hover{background:var(--hover)}
-.hero{padding:56px 0 32px;display:grid;grid-template-columns:1.1fr .9fr;gap:28px;align-items:center}
-@media(max-width:860px){.hero{grid-template-columns:1fr}}
-.kicker{color:var(--ink3);font:500 .78rem/1.4 var(--mono)}
-.h1{font-weight:600;font-size:clamp(2rem,5vw,3rem);line-height:1.08;letter-spacing:-.03em;margin:.4em 0}
-.lead{color:var(--ink2);font-size:1.05rem;line-height:1.6;max-width:42em}
-.code{background:var(--card);border:1px solid var(--bd);padding:14px 16px;font:13px/1.7 var(--mono);overflow:auto;margin:0}
-.grid{display:grid;grid-template-columns:repeat(3,1fr);gap:14px;margin:26px 0}
-@media(max-width:860px){.grid{grid-template-columns:1fr}}
-.card{background:var(--card);border:1px solid var(--bd);padding:16px}
-.card h3{margin:0 0 6px;font-weight:500;font-size:.95rem}
-.card p{margin:0;color:var(--ink2);font-size:.9rem;line-height:1.55}
-.section{padding:36px 0;border-top:1px solid var(--bd)}
-.h2{font-weight:600;font-size:1.3rem;letter-spacing:-.02em;margin:0 0 14px}
-.mono{font-family:var(--mono)}
-.mut{color:var(--ink2)}
-.acc{color:var(--acc)}
-.table{width:100%;border-collapse:collapse;font-size:.88rem}
-.table th,.table td{border:1px solid var(--bd);padding:8px 10px;text-align:left}
-.table th{background:var(--card);font-weight:500}
-.stat{font-weight:600;font-size:2.1rem;letter-spacing:-.02em;margin:6px 0}
-.stats{display:flex;gap:12px;margin-top:12px}
-.stats .card{flex:1;display:flex;flex-direction:column;gap:2px}
-.lbl{color:var(--ink3);font-family:var(--mono);font-size:.75rem}
-.foot{padding:24px 0;color:var(--ink2);font-size:.85rem;border-top:1px solid var(--bd)}
-</style>
-</head>
-<body>
-<nav class="nav"><div class="wrap">
-  <div class="logo">routre<em>-cli</em><span class="sub">9-MB gateway</span></div>
-  <div style="display:flex;gap:8px">
-    <a class="btn ghost" href="https://github.com/mariobgsp/routre-cli">GitHub</a>
-    <a class="btn" href="#install">Install</a>
-  </div>
-</div></nav>
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <title>routre-cli — The 9-MB gateway you forget is running</title>
+    <meta
+      name="description"
+      content="One static binary (6.7 MiB, 9 MiB RAM) — failover, bench-gated 90% RTK token compression, cache, per-agent ledger."
+    />
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;500;600&display=swap"
+      rel="stylesheet"
+    />
+    <style>
+      :root {
+        --bg: #0a0a0a;
+        --fg: #fff;
+        --ink2: rgb(255 255 255 / 56%);
+        --ink3: rgb(255 255 255 / 40%);
+        --acc: #ff3b30;
+        --card: rgb(255 255 255 / 4%);
+        --bd: rgb(255 255 255 / 11%);
+        --hover: rgb(255 255 255 / 9%);
+        --mono: ui-monospace, Menlo, Consolas, monospace;
+        --sans: Outfit, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+      }
+      * {
+        box-sizing: border-box;
+      }
+      html,
+      body {
+        margin: 0;
+        background: var(--bg);
+        color: var(--fg);
+        font-family: var(--sans);
+        overflow-x: hidden;
+      }
+      /* ambient glow */
+      body::before {
+        content: "";
+        position: fixed;
+        inset: 0;
+        pointer-events: none;
+        z-index: 0;
+        background:
+          radial-gradient(
+            600px 400px at 75% -5%,
+            rgb(255 59 48 / 7%),
+            transparent 70%
+          ),
+          radial-gradient(
+            800px 500px at 10% 110%,
+            rgb(255 255 255 / 3%),
+            transparent 70%
+          );
+      }
+      nav,
+      main,
+      footer {
+        position: relative;
+        z-index: 1;
+      }
+      a {
+        color: var(--fg);
+        text-decoration: none;
+        border-bottom: 1px solid var(--bd);
+      }
+      a:hover {
+        border-color: var(--ink2);
+      }
+      :focus-visible {
+        outline: 2px solid var(--fg);
+        outline-offset: 2px;
+      }
+      .wrap {
+        max-width: 1080px;
+        margin: 0 auto;
+        padding: 0 20px;
+      }
+      .nav {
+        position: sticky;
+        top: 0;
+        backdrop-filter: blur(8px);
+        background: rgb(10 10 10 / 80%);
+        border-bottom: 1px solid var(--bd);
+        z-index: 10;
+      }
+      .nav .wrap {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        padding: 14px 20px;
+      }
+      .logo {
+        font-weight: 600;
+        letter-spacing: -0.02em;
+      }
+      .logo em {
+        font-style: normal;
+        color: var(--acc);
+      }
+      .logo .sub {
+        color: var(--ink3);
+        font-family: var(--mono);
+        font-weight: 400;
+        font-size: 0.8rem;
+        margin-left: 6px;
+      }
+      .btn {
+        display: inline-block;
+        border: 1px solid transparent;
+        background: var(--fg);
+        color: var(--bg);
+        padding: 9px 16px;
+        font-weight: 600;
+        font-size: 0.88rem;
+        font-family: var(--sans);
+        border-bottom: none;
+        border-radius: 999px;
+        transition: transform 0.35s cubic-bezier(0.22, 1, 0.36, 1),
+          background 0.2s ease;
+      }
+      .btn:hover {
+        background: rgb(255 255 255 / 88%);
+        transform: translateY(-1px);
+      }
+      .btn.ghost {
+        background: transparent;
+        color: var(--fg);
+        border-color: var(--bd);
+      }
+      .btn.ghost:hover {
+        background: var(--hover);
+        border-color: var(--ink2);
+      }
+      .hero {
+        padding: clamp(56px, 10vh, 120px) 0 48px;
+        display: grid;
+        grid-template-columns: 1.1fr 0.9fr;
+        gap: 32px;
+        align-items: center;
+      }
+      @media (max-width: 860px) {
+        .hero {
+          grid-template-columns: 1fr;
+          padding: 40px 0 28px;
+        }
+        .logo .sub {
+          display: none;
+        }
+      }
+      @media (max-width: 420px) {
+        .nav .btn {
+          padding: 7px 11px;
+        }
+      }
+      .kicker {
+        color: var(--ink3);
+        font: 500 0.78rem/1.4 var(--mono);
+      }
+      .h1 {
+        font-weight: 600;
+        font-size: clamp(2.2rem, 5vw, 3.4rem);
+        line-height: 1.05;
+        letter-spacing: -0.03em;
+        margin: 0.45em 0;
+      }
+      .lead {
+        color: var(--ink2);
+        font-size: 1.08rem;
+        font-weight: 300;
+        line-height: 1.65;
+        max-width: 42em;
+      }
+      .lead b {
+        color: var(--fg);
+        font-weight: 600;
+      }
+      .code {
+        background: var(--card);
+        border: 1px solid var(--bd);
+        border-radius: 10px;
+        padding: 16px 18px;
+        font: 13px/1.75 var(--mono);
+        overflow-x: auto;
+        margin: 0;
+      }
+      .grid {
+        display: grid;
+        grid-template-columns: repeat(3, 1fr);
+        gap: 14px;
+        margin: 26px 0;
+      }
+      @media (max-width: 860px) {
+        .grid {
+          grid-template-columns: 1fr;
+        }
+      }
+      .card {
+        background: var(--card);
+        border: 1px solid var(--bd);
+        border-radius: 14px;
+        padding: 20px;
+        text-align: center;
+        transition: transform 0.6s cubic-bezier(0.22, 1, 0.36, 1),
+          border-color 0.3s ease, background 0.3s ease;
+      }
+      .card:hover {
+        transform: translateY(-4px);
+        border-color: rgb(255 255 255 / 24%);
+        background: var(--hover);
+      }
+      .card.hot {
+        border-color: rgb(255 59 48 / 35%);
+      }
+      .card.hot:hover {
+        border-color: rgb(255 59 48 / 60%);
+      }
+      .card h3 {
+        margin: 0 0 8px;
+        font-weight: 600;
+        font-size: 1rem;
+        letter-spacing: -0.01em;
+      }
+      .card p {
+        margin: 0;
+        color: var(--ink2);
+        font-size: 0.9rem;
+        font-weight: 300;
+        line-height: 1.6;
+      }
+      .section {
+        padding: clamp(56px, 9vh, 112px) 0;
+        border-top: 1px solid var(--bd);
+      }
+      .h2 {
+        font-weight: 600;
+        font-size: clamp(1.5rem, 3vw, 2rem);
+        letter-spacing: -0.02em;
+        margin: 0 0 20px;
+      }
+      .mono {
+        font-family: var(--mono);
+      }
+      .mut {
+        color: var(--ink2);
+      }
+      .acc {
+        color: var(--acc);
+      }
+      /* marquee */
+      .marquee {
+        overflow: hidden;
+        border-top: 1px solid var(--bd);
+        border-bottom: 1px solid var(--bd);
+        padding: 18px 0;
+        mask-image: linear-gradient(
+          90deg,
+          transparent,
+          #000 12%,
+          #000 88%,
+          transparent
+        );
+      }
+      .marquee-track {
+        display: flex;
+        gap: 48px;
+        width: max-content;
+        animation: slide 30s linear infinite;
+      }
+      .marquee:hover .marquee-track {
+        animation-play-state: paused;
+      }
+      .marquee-track span {
+        color: var(--ink3);
+        font: 500 0.85rem var(--mono);
+        white-space: nowrap;
+      }
+      .marquee-track i {
+        font-style: normal;
+        color: var(--acc);
+      }
+      @keyframes slide {
+        to {
+          transform: translateX(-50%);
+        }
+      }
+      @media (prefers-reduced-motion: reduce) {
+        .marquee-track {
+          animation: none;
+        }
+        * {
+          transition: none !important;
+        }
+      }
+      .tablewrap {
+        overflow-x: auto;
+        border-radius: 10px;
+        border: 1px solid var(--bd);
+      }
+      .table {
+        width: 100%;
+        border-collapse: collapse;
+        font-size: 0.88rem;
+      }
+      .table th,
+      .table td {
+        border-bottom: 1px solid var(--bd);
+        padding: 12px 14px;
+        text-align: left;
+      }
+      .table tr:last-child td {
+        border-bottom: none;
+      }
+      .table th {
+        background: var(--card);
+        font-weight: 500;
+      }
+      .table tbody tr {
+        transition: background 0.25s ease;
+      }
+      .table tbody tr:hover {
+        background: var(--hover);
+      }
+      .stat {
+        font-weight: 600;
+        font-size: 2.4rem;
+        letter-spacing: -0.02em;
+        margin: 6px 0;
+        line-height: 1;
+      }
+      .stats {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 12px;
+        margin-top: 12px;
+      }
+      .stats .card {
+        min-width: 120px;
+        flex: 1;
+        display: flex;
+        flex-direction: column;
+        gap: 3px;
+        text-align: left;
+      }
+      .lbl {
+        color: var(--ink3);
+        font-family: var(--mono);
+        font-size: 0.72rem;
+        text-transform: uppercase;
+        letter-spacing: 0.06em;
+      }
+      /* giant CTA */
+      .cta {
+        text-align: center;
+        padding: clamp(72px, 12vh, 140px) 0;
+        border-top: 1px solid var(--bd);
+      }
+      .cta h2 {
+        font-weight: 600;
+        font-size: clamp(2rem, 6vw, 4rem);
+        letter-spacing: -0.03em;
+        line-height: 1.05;
+        margin: 0 0 28px;
+      }
+      .cta .btn {
+        font-size: 1rem;
+        padding: 13px 26px;
+      }
+      .foot {
+        padding: 32px 0 40px;
+        color: var(--ink2);
+        font-size: 0.85rem;
+        border-top: 1px solid var(--bd);
+      }
+    </style>
+  </head>
+  <body>
+    <nav class="nav">
+      <div class="wrap">
+        <div class="logo">
+          routre<em>-cli</em><span class="sub">9-MB gateway</span>
+        </div>
+        <div style="display: flex; gap: 8px">
+          <a class="btn ghost" href="https://github.com/mariobgsp/routre-cli"
+            >GitHub</a
+          >
+          <a class="btn" href="#install">Install</a>
+        </div>
+      </div>
+    </nav>
 
-<div class="wrap hero">
-  <div>
-    <div class="kicker">Single static binary · stdlib only · bench-gated</div>
-    <h1 class="h1">The 9-MB gateway<br>you <span class="acc">forget</span> is running.</h1>
-    <p class="lead">6.7 MiB binary, ~9 MiB RAM idle. Gives every OpenAI/Anthropic CLI — opencode, Claude Code, Codex, Cursor — automatic failover, <b>90% RTK token compression</b> (bench-gated), response cache &amp; per-agent ledger.</p>
-<pre class="code">curl -fsSL https://raw.githubusercontent.com/mariobgsp/routre-cli/main/install.sh | sh
+    <div class="wrap hero">
+      <div>
+        <div class="kicker">
+          Single static binary · stdlib only · bench-gated
+        </div>
+        <h1 class="h1">
+          The 9-MB gateway<br />you <span class="acc">forget</span> is running.
+        </h1>
+        <p class="lead" id="lead">
+          6.7 MiB binary, ~9 MiB RAM idle. Gives every OpenAI/Anthropic CLI —
+          opencode, Claude Code, Codex, Cursor — automatic failover,
+          <b>90% RTK token compression</b> (bench-gated), response cache &amp;
+          per-agent ledger.
+        </p>
+        <pre class="code">
+curl -fsSL https://raw.githubusercontent.com/mariobgsp/routre-cli/main/install.sh | sh
 routre-cli setup --detect   # one-command hook
 routre-cli serve            # http://127.0.0.1:20128</pre>
-    <p class="mut mono" style="font-size:.8rem;margin-top:8px">Not 80 MB + leak. Not Python/Postgres GBs. Just Go.</p>
-  </div>
-  <div>
-    <div class="card">
-      <div class="lbl">Bench — tool reduction</div>
-      <div class="stat">91.2% <span class="mut" style="font-size:1rem;font-weight:400">pass 90% gate</span></div>
-      <div class="mono" style="font-size:.8rem;line-height:1.7;color:var(--ink2)">build-output 90.8% · git-diff 90.3%<br>git-log 92.8% · grep 92.0% · tree-ls 90.3%</div>
-      <div class="mut" style="font-size:.8rem;margin-top:8px"><span class="mono">go run . bench -target 90</span> — fails build on regress</div>
+        <p class="mut mono" style="font-size: 0.8rem; margin-top: 10px">
+          Not 80 MB + leak. Not Python/Postgres GBs. Just Go.
+        </p>
+      </div>
+      <div>
+        <div class="card hot" style="text-align: left">
+          <div class="lbl">Bench — tool reduction</div>
+          <div class="stat">
+            <span id="gate">91.2</span>%
+            <span class="mut" style="font-size: 1rem; font-weight: 300"
+              >pass 90% gate</span
+            >
+          </div>
+          <div
+            class="mono"
+            style="font-size: 0.8rem; line-height: 1.7; color: var(--ink2)"
+          >
+            build-output 90.8% · git-diff 90.3%<br />git-log 92.8% · grep 92.0%
+            · tree-ls 90.3%
+          </div>
+          <div class="mut" style="font-size: 0.8rem; margin-top: 10px">
+            <span class="mono">go run . bench -target 90</span> — fails build on
+            regress
+          </div>
+        </div>
+        <div class="stats">
+          <div class="card">
+            <div class="lbl">RAM idle</div>
+            <div style="font-weight: 600">9 MiB</div>
+          </div>
+          <div class="card">
+            <div class="lbl">Binary</div>
+            <div style="font-weight: 600">6.7 MiB</div>
+          </div>
+          <div class="card">
+            <div class="lbl">Proxy overhead</div>
+            <div style="font-weight: 600">~11 ms</div>
+          </div>
+        </div>
+      </div>
     </div>
-    <div class="stats">
-      <div class="card"><div class="lbl">RAM idle</div><div style="font-weight:600">9 MiB</div></div>
-      <div class="card"><div class="lbl">Binary</div><div style="font-weight:600">6.7 MiB</div></div>
-      <div class="card"><div class="lbl">Proxy overhead</div><div style="font-weight:600">~11 ms</div></div>
+
+    <div class="marquee" aria-hidden="true">
+      <div class="marquee-track" id="mq">
+        <span>opencode</span><i>·</i><span>Claude Code</span><i>·</i
+        ><span>Codex</span><i>·</i><span>Cursor</span><i>·</i
+        ><span>any OpenAI CLI</span><i>·</i><span>any Anthropic CLI</span
+        ><i>·</i>
+      </div>
     </div>
-  </div>
-</div>
 
-<div class="wrap grid">
-  <div class="card"><h3>Automatic failover</h3><p>Tiered providers, exponential cooldown 2s→30m, retry only before first stream byte. No mid-SSE duplication.</p></div>
-  <div class="card"><h3>RTK 90% compression</h3><p>Heuristic tool_result filter (git-diff/log/grep/tree/build) — no LM, no DB. Fail-open, never grows.</p></div>
-  <div class="card"><h3>Cache + ledger</h3><p>Exact-match sha256 LRU with prefix ordering, per-agent token/cost ledger. <span class="mono">list</span> shows saved $.</p></div>
-</div>
+    <div class="wrap grid">
+      <div class="card">
+        <h3>Automatic failover</h3>
+        <p>
+          Tiered providers, exponential cooldown 2s→30m, retry only before first
+          stream byte. No mid-SSE duplication.
+        </p>
+      </div>
+      <div class="card hot">
+        <h3>RTK 90% compression</h3>
+        <p>
+          Heuristic tool_result filter (git-diff/log/grep/tree/build) — no LM,
+          no DB. Fail-open, never grows.
+        </p>
+      </div>
+      <div class="card">
+        <h3>Cache + ledger</h3>
+        <p>
+          Exact-match sha256 LRU with prefix ordering, per-agent token/cost
+          ledger. <span class="mono">list</span> shows saved $.
+        </p>
+      </div>
+    </div>
 
-<div class="wrap section" id="install">
-  <h2 class="h2">Install</h2>
-<pre class="code">curl -fsSL https://raw.githubusercontent.com/mariobgsp/routre-cli/main/install.sh | sh
+    <div class="wrap section" id="install">
+      <h2 class="h2">Install</h2>
+      <pre class="code">
+curl -fsSL https://raw.githubusercontent.com/mariobgsp/routre-cli/main/install.sh | sh
 routre-cli version
 routre-cli setup --detect   # writes config.json + routre-cli.env (0600)
 routre-cli serve            # gateway on 127.0.0.1:20128
@@ -109,32 +497,163 @@ routre-cli serve            # gateway on 127.0.0.1:20128
 # point any agent at it:
 export OPENAI_BASE_URL=http://127.0.0.1:20128
 export ANTHROPIC_BASE_URL=http://127.0.0.1:20128</pre>
-  <p class="mut" style="font-size:.9rem;margin-top:10px">Self-update built in: <span class="mono">routre-cli update</span> verifies sha256 and atomically replaces the binary. npm distribution is deprecated.</p>
-</div>
+      <p class="mut" style="font-size: 0.9rem; margin-top: 12px">
+        Self-update built in:
+        <span class="mono">routre-cli update</span> verifies sha256 and
+        atomically replaces the binary. npm distribution is deprecated.
+      </p>
+    </div>
 
-<div class="wrap section">
-  <h2 class="h2">Why not X?</h2>
-  <table class="table mono">
-    <tr><th></th><th>RAM idle</th><th>Install</th><th>90% claim</th></tr>
-    <tr><td>routre-cli</td><td>9 MiB</td><td>curl one-liner, 6 platforms</td><td>bench-gated, build fails on regress</td></tr>
-    <tr><td>9router</td><td>80 MiB, leak to 4.8 GB</td><td>Node/Next.js</td><td>unbenchmarked, walked back</td></tr>
-    <tr><td>LiteLLM / Portkey</td><td>GBs (Python/Postgres/Redis)</td><td>full stack</td><td>price discount / input-only</td></tr>
-  </table>
-</div>
+    <div class="wrap section">
+      <h2 class="h2">Why not X?</h2>
+      <div class="tablewrap">
+        <table class="table mono">
+          <tr>
+            <th></th>
+            <th>RAM idle</th>
+            <th>Install</th>
+            <th>90% claim</th>
+          </tr>
+          <tr>
+            <td>routre-cli</td>
+            <td>9 MiB</td>
+            <td>curl one-liner, 6 platforms</td>
+            <td>bench-gated, build fails on regress</td>
+          </tr>
+          <tr>
+            <td>9router</td>
+            <td>80 MiB, leak to 4.8 GB</td>
+            <td>Node/Next.js</td>
+            <td>unbenchmarked, walked back</td>
+          </tr>
+          <tr>
+            <td>LiteLLM / Portkey</td>
+            <td>GBs (Python/Postgres/Redis)</td>
+            <td>full stack</td>
+            <td>price discount / input-only</td>
+          </tr>
+        </table>
+      </div>
+    </div>
 
-<div class="wrap section">
-  <h2 class="h2">Quick start</h2>
-<pre class="code">routre-cli check              # validate config + keys
+    <div class="wrap section">
+      <h2 class="h2">Quick start</h2>
+      <pre class="code">
+routre-cli check              # validate config + keys
 routre-cli list               # providers + savings banner + BUDGET HIT
 routre-cli start --autostart  # systemd/launchd daemon
 routre-cli logs -f            # tail request log
 go run . bench -target 90     # honest metric</pre>
-  <p class="mut" style="font-size:.9rem;margin-top:10px">Endpoints: <span class="mono">/v1/chat/completions · /v1/responses · /v1/messages · /v1/models · /v1/status · /v1/usage · /healthz · /metrics</span></p>
-</div>
+      <p class="mut" style="font-size: 0.9rem; margin-top: 12px">
+        Endpoints:
+        <span class="mono"
+          >/v1/chat/completions · /v1/responses · /v1/messages · /v1/models ·
+          /v1/status · /v1/usage · /healthz · /metrics</span
+        >
+      </p>
+    </div>
 
-<div class="wrap foot">
-  <div>MIT · <a href="https://github.com/mariobgsp/routre-cli">github.com/mariobgsp/routre-cli</a> · <a href="https://github.com/mariobgsp/routre-cli/releases">Releases</a> · <a href="SPEC.md">SPEC</a></div>
-  <div class="mut" style="margin-top:6px">stdlib only · deletion over addition · shortest diff wins</div>
-</div>
-</body>
+    <div class="cta">
+      <div class="wrap">
+        <h2>Stop paying<br />the token tax.</h2>
+        <a class="btn" href="#install">Install routre-cli</a>
+      </div>
+    </div>
+
+    <footer>
+      <div class="wrap foot">
+        <div>
+          MIT ·
+          <a href="https://github.com/mariobgsp/routre-cli"
+            >github.com/mariobgsp/routre-cli</a
+          >
+          ·
+          <a href="https://github.com/mariobgsp/routre-cli/releases"
+            >Releases</a
+          >
+          · <a href="SPEC.md">SPEC</a>
+        </div>
+        <div class="mut" style="margin-top: 6px">
+          stdlib only · deletion over addition · shortest diff wins
+        </div>
+      </div>
+    </footer>
+
+    <script
+      src="https://cdn.jsdelivr.net/npm/gsap@3.12.5/dist/gsap.min.js"
+      integrity="sha256-KAM+RJox68w5blvosTtjFSvwMJQoj7WGcDQyGSe84Ic="
+      crossorigin="anonymous"
+    ></script>
+    <script
+      src="https://cdn.jsdelivr.net/npm/gsap@3.12.5/dist/ScrollTrigger.min.js"
+      integrity="sha256-rTPC35raimY8IUc1eCj5gNC3ynMe8z6zxuTzJ8OyzaU="
+      crossorigin="anonymous"
+    ></script>
+    <script>
+      (function () {
+        if (!window.gsap || !window.ScrollTrigger) return; // graceful: static page stays
+        gsap.registerPlugin(ScrollTrigger);
+
+        // scrubbing lead reveal — words fade 0.15 -> 1 as you scroll
+        var lead = document.getElementById("lead");
+        var frag = document.createDocumentFragment();
+        Array.prototype.slice.call(lead.childNodes).forEach(function (node) {
+          if (node.nodeType === 3) {
+            node.textContent.split(/(\s+)/).forEach(function (tok) {
+              if (!tok) return;
+              if (/^\s+$/.test(tok)) {
+                frag.appendChild(document.createTextNode(tok));
+              } else {
+                var s = document.createElement("span");
+                s.className = "w";
+                s.textContent = tok;
+                frag.appendChild(s);
+              }
+            });
+          } else {
+            frag.appendChild(node); // keep <b> intact
+          }
+        });
+        lead.textContent = "";
+        lead.appendChild(frag);
+        var words = lead.querySelectorAll(".w");
+        gsap.fromTo(
+          words,
+          { opacity: 0.15 },
+          {
+            opacity: 1,
+            stagger: 0.05,
+            ease: "none",
+            scrollTrigger: { trigger: lead, start: "top 85%", end: "top 40%", scrub: true },
+          }
+        );
+
+        // cards + sections rise in
+        gsap.utils
+          .toArray(".grid .card, .section, .cta h2, .cta .btn")
+          .forEach(function (el) {
+            gsap.from(el, {
+              y: 28,
+              autoAlpha: 0,
+              duration: 0.9,
+              ease: "power3.out",
+              scrollTrigger: { trigger: el, start: "top 88%", once: true },
+            });
+          });
+
+        // bench gate count-up
+        var gate = document.getElementById("gate");
+        var o = { v: 80 };
+        gsap.to(o, {
+          v: 91.2,
+          duration: 1.6,
+          ease: "power2.out",
+          onUpdate: function () {
+            gate.textContent = o.v.toFixed(1);
+          },
+          scrollTrigger: { trigger: gate, start: "top 90%", once: true },
+        });
+      })();
+    </script>
+  </body>
 </html>
