@@ -15,6 +15,12 @@
       rel="stylesheet"
     />
     <link rel="icon" type="image/jpeg" href="icon/routre-hamster-256.jpeg" />
+    <link
+      rel="preload"
+      as="image"
+      href="icon/routre-hamster-256.jpeg"
+      imagesrcset="icon/routre-hamster-256.jpeg 1x"
+    />
     <style>
       :root {
         --bg: #fdfdfc;
@@ -82,9 +88,9 @@
         outline-offset: 2px;
       }
       .wrap {
-        max-width: 1120px;
+        max-width: 1080px;
         margin: 0 auto;
-        padding: 0 32px;
+        padding: 0 20px;
       }
       .nav {
         position: sticky;
@@ -146,10 +152,10 @@
         border-color: var(--ink2);
       }
       .hero {
-        padding: clamp(72px, 12vh, 140px) 0 64px;
+        padding: clamp(48px, 8vh, 96px) 0 32px;
         display: grid;
         grid-template-columns: 1.1fr 0.9fr;
-        gap: 56px;
+        gap: 28px;
         align-items: center;
       }
       .hero > * {
@@ -229,8 +235,8 @@
       .grid {
         display: grid;
         grid-template-columns: repeat(3, 1fr);
-        gap: 22px;
-        margin: 44px auto;
+        gap: 14px;
+        margin: 26px auto;
       }
       @media (max-width: 860px) {
         .grid {
@@ -278,7 +284,7 @@
         line-height: 1.6;
       }
       .section {
-        padding: clamp(72px, 12vh, 140px) 0;
+        padding: 36px 0;
         border-top: 1px solid var(--bd);
       }
       .h2 {
@@ -301,7 +307,7 @@
         overflow: hidden;
         border-top: 1px solid var(--bd);
         border-bottom: 1px solid var(--bd);
-        padding: 24px 0;
+        padding: 14px 0;
         mask-image: linear-gradient(
           90deg,
           transparent,
@@ -355,7 +361,7 @@
       .table th,
       .table td {
         border-bottom: 1px solid var(--bd);
-        padding: 15px 18px;
+        padding: 8px 10px;
         text-align: left;
       }
       .table tr:last-child td {
@@ -402,7 +408,7 @@
       /* giant CTA */
       .cta {
         text-align: center;
-        padding: clamp(72px, 12vh, 140px) 0;
+        padding: 36px 0;
         border-top: 1px solid var(--bd);
       }
       .cta h2 {
@@ -437,7 +443,7 @@
       .cols {
         display: grid;
         grid-template-columns: 1fr 1fr;
-        gap: 22px;
+        gap: 14px;
       }
       @media (max-width: 860px) {
         .cols {
@@ -788,11 +794,13 @@ go run . bench -target 90     # honest metric</pre>
     </footer>
 
     <script
+      defer
       src="https://cdn.jsdelivr.net/npm/gsap@3.12.5/dist/gsap.min.js"
       integrity="sha256-KAM+RJox68w5blvosTtjFSvwMJQoj7WGcDQyGSe84Ic="
       crossorigin="anonymous"
     ></script>
     <script
+      defer
       src="https://cdn.jsdelivr.net/npm/gsap@3.12.5/dist/ScrollTrigger.min.js"
       integrity="sha256-rTPC35raimY8IUc1eCj5gNC3ynMe8z6zxuTzJ8OyzaU="
       crossorigin="anonymous"
