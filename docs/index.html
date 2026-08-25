@@ -270,6 +270,7 @@
         gap: 48px;
         width: max-content;
         animation: slide 30s linear infinite;
+        animation-delay: -15s; /* start mid-flow — no dead space at load */
       }
       .marquee:hover .marquee-track {
         animation-play-state: paused;
@@ -590,6 +591,17 @@ go run . bench -target 90     # honest metric</pre>
       crossorigin="anonymous"
     ></script>
     <script>
+      // duplicate marquee content for seamless -50% loop (no innerHTML)
+      (function () {
+        var mq = document.getElementById("mq");
+        if (!mq) return;
+        Array.prototype.slice
+          .call(mq.children)
+          .forEach(function (n) {
+            mq.appendChild(n.cloneNode(true));
+          });
+      })();
+
       (function () {
         if (!window.gsap || !window.ScrollTrigger) return; // graceful: static page stays
         gsap.registerPlugin(ScrollTrigger);
