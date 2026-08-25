@@ -14,3 +14,4 @@ npm/@*/*/binary/
 # local-only design/plan documents (never committed)
 docs/superpowers/
 dist-release/
+.pi/
