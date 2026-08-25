@@ -152,6 +152,9 @@
         gap: 56px;
         align-items: center;
       }
+      .hero > * {
+        min-width: 0; /* let grid columns shrink below nowrap content */
+      }
       @media (max-width: 860px) {
         .hero {
           grid-template-columns: 1fr;
@@ -176,6 +179,7 @@
         border: 1px solid rgb(37 99 235 / 40%);
         border-radius: 999px;
         padding: 13px 20px;
+        min-width: 0;
       }
       .install-pill::before {
         content: "$";
@@ -188,6 +192,7 @@
         overflow-x: auto;
         scrollbar-width: none;
         flex: 1;
+        min-width: 0;
       }
       .kicker {
         color: var(--ink3);
@@ -483,7 +488,9 @@
         </p>
         <div class="install-pill">
           <code
-            >curl -fsSL https://raw.githubusercontent.com/mariobgsp/routre/main/install.sh | sh &amp;&amp; routre setup --detect &amp;&amp; routre serve</code
+            >curl -fsSL
+            https://raw.githubusercontent.com/mariobgsp/routre/main/install.sh |
+            sh &amp;&amp; routre setup --detect &amp;&amp; routre serve</code
           >
         </div>
         <p class="mut mono" style="font-size: 0.78rem; margin-top: 10px">
