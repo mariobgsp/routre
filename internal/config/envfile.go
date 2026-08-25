@@ -65,6 +65,60 @@ func EnvFilePath(cfgPath string) string {
 	return filepath.Join(filepath.Dir(cfgPath), envFileName)
 }
 
+// SetEnvFileValue writes key=value into the env file at path, creating it if
+// needed. It preserves other keys and comments, writing atomically via a
+// temp file + rename with 0600 permissions.
+func SetEnvFileValue(path, key, value string) error {
+	if key == "" || strings.Contains(key, "\n") || strings.Contains(key, "=") {
+		return fmt.Errorf("env: invalid key %q", key)
+	}
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		return err
+	}
+	data, err := os.ReadFile(path)
+	if err != nil && !os.IsNotExist(err) {
+		return fmt.Errorf("env: read %s: %w", path, err)
+	}
+	lines := []string{}
+	found := false
+	if len(data) > 0 {
+		sc := bufio.NewScanner(strings.NewReader(string(data)))
+		for sc.Scan() {
+			raw := sc.Text()
+			trim := strings.TrimSpace(raw)
+			if trim == "" || strings.HasPrefix(trim, "#") {
+				lines = append(lines, raw)
+				continue
+			}
+			p := strings.TrimPrefix(trim, "export ")
+			eq := strings.Index(p, "=")
+			if eq <= 0 {
+				lines = append(lines, raw)
+				continue
+			}
+			k := strings.TrimSpace(p[:eq])
+			if k == key {
+				lines = append(lines, key+"="+value)
+				found = true
+			} else {
+				lines = append(lines, raw)
+			}
+		}
+		if err := sc.Err(); err != nil {
+			return err
+		}
+	}
+	if !found {
+		lines = append(lines, key+"="+value)
+	}
+	out := strings.Join(lines, "\n") + "\n"
+	tmp := path + ".tmp"
+	if err := os.WriteFile(tmp, []byte(out), 0o600); err != nil {
+		return err
+	}
+	return os.Rename(tmp, path)
+}
+
 // EnvFileValue reads a single key from the env file at path WITHOUT touching
 // the process environment (unlike LoadEnvFile). It returns the value and
 // whether the key is present. Missing file or key => ("" , false, nil).
