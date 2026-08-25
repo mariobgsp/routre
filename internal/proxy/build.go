@@ -1,8 +1,8 @@
 package proxy
 
 import (
-	"routre-cli/internal/config"
-	"routre-cli/internal/router"
+	"github.com/mariobgsp/routre/internal/config"
+	"github.com/mariobgsp/routre/internal/router"
 )
 
 // tiersFromConfig converts config tiers into router inputs.

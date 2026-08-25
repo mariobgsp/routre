@@ -1,7 +1,7 @@
 #!/bin/sh
-# routre-cli installer.
+# routre installer.
 #
-#   curl -fsSL https://raw.githubusercontent.com/mariobgsp/routre-cli/main/install.sh | sh
+#   curl -fsSL https://raw.githubusercontent.com/mariobgsp/routre/main/install.sh | sh
 #
 # Or download first, inspect, then run:
 #   sh install.sh
@@ -15,7 +15,7 @@
 
 set -eu
 
-REPO="${ROUTRE_REPO:-mariobgsp/routre-cli}"
+REPO="${ROUTRE_REPO:-mariobgsp/routre}"
 PREFIX="${ROUTRE_INSTALL_DIR:-$HOME/.local/bin}"
 BASE="https://github.com/${REPO}"
 
@@ -49,7 +49,7 @@ case "$os" in
     MINGW* | MSYS* | CYGWIN*)
         log "Windows detected: this installer covers macOS/Linux."
         log "Download manually instead:"
-        log "  ${BASE}/releases/latest/download/routre-cli_windows_amd64.zip"
+        log "  ${BASE}/releases/latest/download/routre_windows_amd64.zip"
         exit 1
         ;;
     *) die "unsupported operating system: $os" ;;
@@ -61,7 +61,7 @@ case "$arch" in
     *) die "unsupported architecture: $arch" ;;
 esac
 
-asset="routre-cli_${goos}_${goarch}.tar.gz"
+asset="routre_${goos}_${goarch}.tar.gz"
 
 # --- download ---------------------------------------------------------------
 TMP=$(mktemp -d)
@@ -91,11 +91,11 @@ tar xzf "${TMP}/${asset}" -C "$TMP"
 
 mkdir -p "$PREFIX"
 if [ -w "$PREFIX" ]; then
-    mv "$TMP/routre-cli" "${PREFIX}/routre-cli"
+    mv "$TMP/routre" "${PREFIX}/routre"
 else
     die "cannot write to ${PREFIX} (set ROUTRE_INSTALL_DIR elsewhere)"
 fi
-chmod 0755 "${PREFIX}/routre-cli"
+chmod 0755 "${PREFIX}/routre"
 
 case ":${PATH}:" in
     *":${PREFIX}:"*) ;;
@@ -106,7 +106,7 @@ case ":${PATH}:" in
         ;;
 esac
 
-installed_version=$("${PREFIX}/routre-cli" version 2>/dev/null || echo "(unknown)")
+installed_version=$("${PREFIX}/routre" version 2>/dev/null || echo "(unknown)")
 log
-log "installed: ${PREFIX}/routre-cli (${installed_version})"
-log "run 'routre-cli update' later to upgrade."
+log "installed: ${PREFIX}/routre (${installed_version})"
+log "run 'routre update' later to upgrade."

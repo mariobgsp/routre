@@ -7,7 +7,7 @@ import (
 	"strings"
 	"testing"
 
-	"routre-cli/internal/mock"
+	"github.com/mariobgsp/routre/internal/mock"
 )
 
 // buildAnthropicConfigWithMocks is buildConfigWithMocks but with anthropic

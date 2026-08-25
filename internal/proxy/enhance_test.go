@@ -10,12 +10,12 @@ import (
 	"testing"
 	"time"
 
-	"routre-cli/internal/cache"
-	"routre-cli/internal/config"
-	"routre-cli/internal/mock"
-	"routre-cli/internal/router"
-	"routre-cli/internal/rtk"
-	"routre-cli/internal/usage"
+	"github.com/mariobgsp/routre/internal/cache"
+	"github.com/mariobgsp/routre/internal/config"
+	"github.com/mariobgsp/routre/internal/mock"
+	"github.com/mariobgsp/routre/internal/router"
+	"github.com/mariobgsp/routre/internal/rtk"
+	"github.com/mariobgsp/routre/internal/usage"
 )
 
 // cfgOne builds a single-provider config JSON with the given kind and cache
@@ -86,7 +86,7 @@ func TestAuthRefreshRetry(t *testing.T) {
 	t.Setenv("ROT_KEY", "old-secret")
 	// Rotated key file next to the config.
 	cfgPath := writeConfigFile(t, cfgOne(a, "openai", "ROT_KEY", `"enabled":false`))
-	envPath := filepath.Join(filepath.Dir(cfgPath), "routre-cli.env")
+	envPath := filepath.Join(filepath.Dir(cfgPath), "routre.env")
 	if err := os.WriteFile(envPath, []byte("ROT_KEY=new-secret\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}

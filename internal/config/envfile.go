@@ -8,10 +8,10 @@ import (
 	"strings"
 )
 
-// envFileName is the key file routre-cli looks for next to the config file
-// (config.json + routre-cli.env in the same directory). It is loaded
+// envFileName is the key file routre looks for next to the config file
+// (config.json + routre.env in the same directory). It is loaded
 // automatically by Load/Reload so users never need shell exports.
-const envFileName = "routre-cli.env"
+const envFileName = "routre.env"
 
 // LoadEnvFile reads a simple KEY=VALUE file and sets each key in the process
 // environment — but only if it is not already set, so explicit shell exports

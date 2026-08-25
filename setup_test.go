@@ -7,7 +7,7 @@ import (
 	"strings"
 	"testing"
 
-	"routre-cli/internal/config"
+	"github.com/mariobgsp/routre/internal/config"
 )
 
 // TestMarshalConfigValidJSON ensures the config the wizard writes parses and
@@ -42,7 +42,7 @@ func TestMarshalConfigValidJSON(t *testing.T) {
 // TestFlushEnvFile0600 verifies the wizard's key file is written with 0600
 // perms and the KEY=VALUE format the loader expects.
 func TestFlushEnvFile0600(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "routre-cli.env")
+	path := filepath.Join(t.TempDir(), "routre.env")
 	envLines = envLines[:0]
 	appendEnvLine("A_KEY", "secret-value")
 	appendEnvLine("B_KEY", "other")

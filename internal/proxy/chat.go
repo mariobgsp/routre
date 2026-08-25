@@ -13,12 +13,12 @@ import (
 	"strings"
 	"time"
 
-	"routre-cli/internal/cache"
-	"routre-cli/internal/config"
-	"routre-cli/internal/reqlog"
-	"routre-cli/internal/router"
-	"routre-cli/internal/tokenize"
-	"routre-cli/internal/usage"
+	"github.com/mariobgsp/routre/internal/cache"
+	"github.com/mariobgsp/routre/internal/config"
+	"github.com/mariobgsp/routre/internal/reqlog"
+	"github.com/mariobgsp/routre/internal/router"
+	"github.com/mariobgsp/routre/internal/tokenize"
+	"github.com/mariobgsp/routre/internal/usage"
 )
 
 // attemptTimeout bounds a single non-streaming upstream attempt. Streaming
@@ -506,7 +506,7 @@ func (h *Handlers) tryCandidate(ctx context.Context, w http.ResponseWriter, r *h
 	}
 
 	// 401/403 auth failure: before failing over, attempt a credential
-	// refresh (the API key may have rotated in routre-cli.env). If the key
+	// refresh (the API key may have rotated in routre.env). If the key
 	// is stale and a fresh one changes the picture, retry this candidate
 	// once with the refreshed key. Only when refresh is a no-op or still
 	// rejects does it fail over like any other retryable failure.
@@ -628,7 +628,7 @@ func (h *Handlers) buildUpstreamRequest(ctx context.Context, baseURL, kind, path
 	// (many CLIs require one); it must never reach the upstream.
 	providerKey, missing := h.providerKey(apiKeyEnv)
 	if missing {
-		return nil, fmt.Errorf("provider key %s is not set (use `routre-cli setup` or export it)", apiKeyEnv)
+		return nil, fmt.Errorf("provider key %s is not set (use `routre setup` or export it)", apiKeyEnv)
 	}
 	if kind == "anthropic" {
 		req.Header.Set("X-Api-Key", providerKey)
@@ -957,7 +957,7 @@ func parseRetryAfter(s string) time.Duration {
 	return 0
 }
 
-// refreshCredentials re-reads the routre-cli.env key file and reports
+// refreshCredentials re-reads the routre.env key file and reports
 // whether the provider's API key actually changed as a result. The keystore
 // serializes concurrent refreshes under its own mutex and never mutates the
 // process environment.

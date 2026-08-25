@@ -1,8 +1,8 @@
-# systemd socket for routre-cli: the socket exists at boot, the daemon
+# systemd socket for routre: the socket exists at boot, the daemon
 # starts on first connection (idle footprint ~0 MB). Requires the service
 # unit's Sockets= line to be enabled.
 [Unit]
-Description=routre-cli listening socket
+Description=routre listening socket
 
 [Socket]
 ListenStream=127.0.0.1:20128

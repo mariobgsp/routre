@@ -5,9 +5,9 @@ import (
 	"net/http"
 	"strings"
 
-	"routre-cli/internal/config"
-	"routre-cli/internal/tokenize"
-	"routre-cli/internal/usage"
+	"github.com/mariobgsp/routre/internal/config"
+	"github.com/mariobgsp/routre/internal/tokenize"
+	"github.com/mariobgsp/routre/internal/usage"
 )
 
 // clientName attributes a request to the coding agent that sent it, by

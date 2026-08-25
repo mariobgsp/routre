@@ -12,12 +12,12 @@ import (
 	"testing"
 	"time"
 
-	"routre-cli/internal/cache"
-	"routre-cli/internal/config"
-	"routre-cli/internal/mock"
-	"routre-cli/internal/router"
-	"routre-cli/internal/rtk"
-	"routre-cli/internal/usage"
+	"github.com/mariobgsp/routre/internal/cache"
+	"github.com/mariobgsp/routre/internal/config"
+	"github.com/mariobgsp/routre/internal/mock"
+	"github.com/mariobgsp/routre/internal/router"
+	"github.com/mariobgsp/routre/internal/rtk"
+	"github.com/mariobgsp/routre/internal/usage"
 )
 
 // testEnv wires a full gateway against mock upstreams and returns its base

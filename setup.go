@@ -12,7 +12,7 @@ import (
 	"strings"
 	"time"
 
-	"routre-cli/internal/config"
+	"github.com/mariobgsp/routre/internal/config"
 )
 
 // cmdSetup runs the interactive wizard: it collects the listen address,
@@ -20,7 +20,7 @@ import (
 // optional prices, then writes:
 //
 //	config.json       — provider/URL/tier configuration (no secrets)
-//	routre-cli.env    — API keys, loaded automatically by serve/check/list
+//	routre.env    — API keys, loaded automatically by serve/check/list
 //
 // The env file is created with 0600 permissions on POSIX systems.
 func cmdSetup(cfgPath string, logger *log.Logger) error {
@@ -50,8 +50,8 @@ func cmdSetup(cfgPath string, logger *log.Logger) error {
 		return strings.HasPrefix(strings.ToLower(v), "y")
 	}
 
-	fmt.Println("routre-cli setup — interactive configuration")
-	fmt.Println("(API keys are written to routre-cli.env, never into the config)")
+	fmt.Println("routre setup — interactive configuration")
+	fmt.Println("(API keys are written to routre.env, never into the config)")
 	fmt.Println()
 
 	cfg := config.Default()
@@ -163,7 +163,7 @@ func cmdSetup(cfgPath string, logger *log.Logger) error {
 		return fmt.Errorf("write %s: %w", cfgPath, err)
 	}
 
-	// Write routre-cli.env next to the config (0600 on POSIX).
+	// Write routre.env next to the config (0600 on POSIX).
 	envPath := config.EnvFilePath(cfgPath)
 	if err := flushEnvFile(envPath); err != nil {
 		return err
@@ -171,8 +171,8 @@ func cmdSetup(cfgPath string, logger *log.Logger) error {
 
 	fmt.Println()
 	fmt.Printf("wrote %s and %s\n", cfgPath, envPath)
-	fmt.Println("next: `routre-cli serve -config " + cfgPath + "` then point your coding agent at http://127.0.0.1:20128")
-	fmt.Println("      `routre-cli check -config " + cfgPath + "` validates keys, `routre-cli list` shows usage")
+	fmt.Println("next: `routre serve -config " + cfgPath + "` then point your coding agent at http://127.0.0.1:20128")
+	fmt.Println("      `routre check -config " + cfgPath + "` validates keys, `routre list` shows usage")
 	// --detect: one-command hook for known agents (stdlib only, best-effort).
 	for _, a := range os.Args {
 		if a == "--detect" || a == "-detect" {

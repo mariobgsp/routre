@@ -1,0 +1,19 @@
+{
+  "name": "routre",
+  "version": "0.1.0",
+  "description": "Low-RAM LLM gateway for coding agents: auto provider failover, RTK token compression (-90%), cache, usage ledger. OpenAI/Anthropic-compatible localhost endpoint.",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/mariobgsp/routre"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "bin": {
+    "routre": "bin/routre.mjs"
+  },
+  "files": [
+    "bin"
+  ]
+}

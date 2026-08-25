@@ -8,14 +8,14 @@ import (
 	"os"
 	"time"
 
-	"routre-cli/internal/cache"
-	"routre-cli/internal/config"
-	"routre-cli/internal/keystore"
-	"routre-cli/internal/metrics"
-	"routre-cli/internal/reqlog"
-	"routre-cli/internal/router"
-	"routre-cli/internal/rtk"
-	"routre-cli/internal/usage"
+	"github.com/mariobgsp/routre/internal/cache"
+	"github.com/mariobgsp/routre/internal/config"
+	"github.com/mariobgsp/routre/internal/keystore"
+	"github.com/mariobgsp/routre/internal/metrics"
+	"github.com/mariobgsp/routre/internal/reqlog"
+	"github.com/mariobgsp/routre/internal/router"
+	"github.com/mariobgsp/routre/internal/rtk"
+	"github.com/mariobgsp/routre/internal/usage"
 )
 
 // Handlers bundles the gateway's dependencies. One instance, shared by the
@@ -68,7 +68,7 @@ func NewHandlers(st *config.Store, rtr *router.Router, cch *cache.Cache, tk *rtk
 		Keys:       keystore.New(),
 	}
 	// Seed the keystore from the process environment (which Load populated
-	// from routre-cli.env + shell exports). The keystore is the gateway's
+	// from routre.env + shell exports). The keystore is the gateway's
 	// source of truth for upstream keys thereafter.
 	for _, t := range st.Get().Tiers {
 		for _, p := range t.Providers {
@@ -169,7 +169,7 @@ func (h *Handlers) Status(w http.ResponseWriter, _ *http.Request) {
 	})
 }
 
-// UsageReport exposes the token/cost accumulator for `routre-cli list`.
+// UsageReport exposes the token/cost accumulator for `routre list`.
 func (h *Handlers) UsageReport(w http.ResponseWriter, _ *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"rows": h.Usage.Snapshot()})
 }

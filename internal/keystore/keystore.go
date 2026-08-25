@@ -1,5 +1,5 @@
 // Package keystore holds provider API keys (and later the optional gateway
-// auth secret) in memory, sourced from the routre-cli.env key file. It avoids
+// auth secret) in memory, sourced from the routre.env key file. It avoids
 // mutating the process environment (os.Setenv/os.Unsetenv), so concurrent
 // readers elsewhere never observe a torn key state during a rotation.
 package keystore
@@ -7,7 +7,7 @@ package keystore
 import (
 	"sync"
 
-	"routre-cli/internal/config"
+	"github.com/mariobgsp/routre/internal/config"
 )
 
 // Store is a concurrency-safe in-memory key registry.

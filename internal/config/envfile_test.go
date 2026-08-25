@@ -8,7 +8,7 @@ import (
 
 func TestLoadEnvFile(t *testing.T) {
 	dir := t.TempDir()
-	p := filepath.Join(dir, "routre-cli.env")
+	p := filepath.Join(dir, "routre.env")
 	content := `# comment line
 
 ANTHROPIC_API_KEY="sk-ant-123"
@@ -42,7 +42,7 @@ export QUOTED="a b c"
 
 func TestLoadEnvFileExistingWins(t *testing.T) {
 	dir := t.TempDir()
-	p := filepath.Join(dir, "routre-cli.env")
+	p := filepath.Join(dir, "routre.env")
 	if err := os.WriteFile(p, []byte("MY_KEY=from-file\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -63,7 +63,7 @@ func TestLoadEnvFileMissingIsNoError(t *testing.T) {
 
 func TestLoadEnvFileMalformed(t *testing.T) {
 	dir := t.TempDir()
-	p := filepath.Join(dir, "routre-cli.env")
+	p := filepath.Join(dir, "routre.env")
 	if err := os.WriteFile(p, []byte("NOEQUALS\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}

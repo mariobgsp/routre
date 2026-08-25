@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	"routre-cli/internal/mock"
+	"github.com/mariobgsp/routre/internal/mock"
 )
 
 // cfgFor builds a gateway config pointing at the given mocks with an
@@ -91,7 +91,7 @@ func TestStrictModeRejectsUnknownModel(t *testing.T) {
 }
 
 // The streaming path must carry provider-reported prompt-cache reads all
-// the way into the usage ledger (`routre-cli list` reads this endpoint).
+// the way into the usage ledger (`routre list` reads this endpoint).
 func TestStreamingCacheReadReachesLedger(t *testing.T) {
 	a, _ := mock.New("a")
 	defer a.Close()

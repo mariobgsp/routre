@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
-# publish.sh — publishes routre-cli to the npm public registry.
+# publish.sh — publishes routre to the npm public registry.
 #
 # Order matters: the six platform binary packages MUST be published before
-# the main "routre-cli" launcher (it references them via optionalDependencies).
+# the main "routre" launcher (it references them via optionalDependencies).
 #
 # Auth: you must be logged in first:
 #   npm login          # interactive; 2FA via TOTP
@@ -32,18 +32,18 @@ cd npm/dist
 # (npm's spam detection rejects unscoped win32 names, so those ship under
 # the @mariobgsp scope), then the launcher last.
 for pkg in \
-  routre-cli-linux-x64 routre-cli-linux-arm64 \
-  routre-cli-darwin-x64 routre-cli-darwin-arm64; do
+  routre-linux-x64 routre-linux-arm64 \
+  routre-darwin-x64 routre-darwin-arm64; do
   echo "==> publishing $pkg"
   npm publish "$pkg"-"$VERSION".tgz --access public
 done
 for pkg in \
-  mariobgsp-routre-cli-win32-x64 mariobgsp-routre-cli-win32-arm64; do
+  mariobgsp-routre-win32-x64 mariobgsp-routre-win32-arm64; do
   echo "==> publishing @$pkg"
   npm publish "$pkg"-"$VERSION".tgz --access public
 done
-echo "==> publishing routre-cli"
-npm publish routre-cli-"$VERSION".tgz --access public
+echo "==> publishing routre"
+npm publish routre-"$VERSION".tgz --access public
 
 echo
-echo "published. verify with: npm view routre-cli"
+echo "published. verify with: npm view routre"

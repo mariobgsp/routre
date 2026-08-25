@@ -1,14 +1,14 @@
-# routre-cli
+# routre
 
 The 9-MB gateway you forget is running. One static binary (~10 MiB, ~10 MiB RAM idle, bench-gated ≥90% tool-token savings) that gives every OpenAI/Anthropic-compatible CLI — opencode, Claude Code, Codex, Cursor, … — automatic provider failover, RTK token compression (≥90% on tool-heavy traffic), response caching, and a per-agent token/cost ledger. A localhost dashboard at `http://127.0.0.1:20128/ui` lets non-programmers configure it without editing JSON.
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/mariobgsp/routre-cli/main/install.sh | sh
+curl -fsSL https://raw.githubusercontent.com/mariobgsp/routre/main/install.sh | sh
                              # one command, no Go toolchain needed
-routre-cli setup              # wizard: provider URLs + API keys
-routre-cli serve              # gateway on 127.0.0.1:20128
-routre-cli start              # start the daemon (systemd/launchd or detached)
-routre-cli list               # connected providers + token/cost ledger
+routre setup              # wizard: provider URLs + API keys
+routre serve              # gateway on 127.0.0.1:20128
+routre start              # start the daemon (systemd/launchd or detached)
+routre list               # connected providers + token/cost ledger
 ```
 
 Point any agent at `http://127.0.0.1:20128` via `OPENAI_BASE_URL` /
@@ -53,7 +53,7 @@ decision record and roadmap):
   QPS at ~11 ms proxy overhead), cross-compiled for 6 platforms and shipped
   as GitHub Release assets (curl installer, no Node needed).
 - **Honest metrics** — the 90% claim is defined, gated, and reproducible:
-  `routre-cli bench` fails the build if it regresses.
+  `routre bench` fails the build if it regresses.
 
 ---
 
@@ -62,8 +62,8 @@ decision record and roadmap):
 ### curl (macOS / Linux) — recommended
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/mariobgsp/routre-cli/main/install.sh | sh
-routre-cli version
+curl -fsSL https://raw.githubusercontent.com/mariobgsp/routre/main/install.sh | sh
+routre version
 ```
 
 Downloads the latest GitHub release, verifies its sha256 checksum, and
@@ -73,25 +73,25 @@ prints a PATH line if that dir is not already on your PATH). Env overrides:
 - `ROUTRE_INSTALL_DIR=/usr/local/bin` — install somewhere else
 - `ROUTRE_VERSION=v0.4.0` — pin a specific release
 
-Upgrades are built in: `routre-cli update`. Windows: download the
-`routre-cli_windows_*.zip` asset from
-[Releases](https://github.com/mariobgsp/routre-cli/releases/latest) and unzip.
+Upgrades are built in: `routre update`. Windows: download the
+`routre_windows_*.zip` asset from
+[Releases](https://github.com/mariobgsp/routre/releases/latest) and unzip.
 
 ### npm (deprecated)
 
 ```bash
-npm install -g routre-cli   # deprecated — prints the curl command and exits
+npm install -g routre   # deprecated — prints the curl command and exits
 ```
 
 npm packages remain published for pinned dependents but are **deprecated**:
 the launcher no longer runs the binary. Uninstall with
-`npm uninstall -g routre-cli` and switch to the curl installer.
+`npm uninstall -g routre` and switch to the curl installer.
 
 ### From source (developers)
 
 ```bash
 make build          # needs Go ≥ 1.22
-./routre-cli version
+./routre version
 ```
 
 ### Releasing
@@ -103,7 +103,7 @@ tag v0.4.0 && git push origin v0.4.0   # release.yml builds 6 platforms and
 
 That's the whole pipeline: `release.yml` compiles every platform, stamps the
 version, generates `checksums.txt`, and publishes the release — which is
-exactly what `install.sh` and `routre-cli update` consume. Test locally with
+exactly what `install.sh` and `routre update` consume. Test locally with
 `make dist-release` first.
 
 ### Legacy npm distribution (deprecated)
@@ -121,19 +121,19 @@ for npm. See [Releasing](#releasing) for the current tag-driven pipeline.
 ## Quick start
 
 ```bash
-routre-cli setup        # interactive: listen addr, providers, URLs, keys, prices
-routre-cli check        # validate config + which API keys are set
-routre-cli serve        # gateway on 127.0.0.1:20128
-routre-cli start --autostart  # start daemon + enable boot/login auto-start
-routre-cli stop         # stop the daemon
-routre-cli list         # providers + token/cost ledger
-routre-cli update       # self-update to the latest release (-check to peek)
+routre setup        # interactive: listen addr, providers, URLs, keys, prices
+routre check        # validate config + which API keys are set
+routre serve        # gateway on 127.0.0.1:20128
+routre start --autostart  # start daemon + enable boot/login auto-start
+routre stop         # stop the daemon
+routre list         # providers + token/cost ledger
+routre update       # self-update to the latest release (-check to peek)
 ```
 
 `setup` writes two files next to `config.json`:
 
 - `config.json` — providers, tiers, base URLs, models (no secrets)
-- `routre-cli.env` — API keys, **0600 permissions**, auto-loaded by
+- `routre.env` — API keys, **0600 permissions**, auto-loaded by
   `serve` / `check` / `list` (no shell exports needed)
 
 ### Point a coding agent at it
@@ -154,10 +154,10 @@ client. It works with `OPENAI_BASE_URL` out of the box.
 
 ### Local dashboard for non-programmers
 
-Open `http://127.0.0.1:20128/ui` in a browser — no CLI needed. The page shows live status (RTK/cache/uptime, provider tiers, key presence), a form to set API keys (written to `routre-cli.env`, `0600`), and a validated JSON editor for the full config (`config.json`, atomic write + instant reload). Every change is validated before it is saved; bad JSON is rejected and the previous config is kept. The server binds `127.0.0.1` only, rejects non-loopback `Host`/`Origin` headers (DNS-rebinding/CSRF mitigation), and the dashboard adds ~0 MiB at idle and <2 MiB after use — binary grows from ~7 MiB to ~11 MiB.
+Open `http://127.0.0.1:20128/ui` in a browser — no CLI needed. The page shows live status (RTK/cache/uptime, provider tiers, key presence), a form to set API keys (written to `routre.env`, `0600`), and a validated JSON editor for the full config (`config.json`, atomic write + instant reload). Every change is validated before it is saved; bad JSON is rejected and the previous config is kept. The server binds `127.0.0.1` only, rejects non-loopback `Host`/`Origin` headers (DNS-rebinding/CSRF mitigation), and the dashboard adds ~0 MiB at idle and <2 MiB after use — binary grows from ~7 MiB to ~11 MiB.
 
 ```text
-routre-cli serve          # then open http://127.0.0.1:20128/ui
+routre serve          # then open http://127.0.0.1:20128/ui
 ```
 
 ### Connect everything (opencode-go, opencode zen, OpenRouter)
@@ -174,10 +174,10 @@ through one endpoint, verified live:
 
 ```bash
 cp config.all.json config.json
-# routre-cli.env:
+# routre.env:
 #   OPENCODE_GO_API_KEY=<from ~/.local/share/opencode/auth.json>
 #   OPENROUTER_API_KEY=<your key>
-routre-cli serve
+routre serve
 curl http://127.0.0.1:20128/v1/models          # 506 models
 # use any model as <provider>/<model>, e.g.:
 #   opencode-zen/claude-fable-5  opencode-go/hy3  openrouter/deepseek/deepseek-chat
@@ -202,13 +202,18 @@ fails over automatically.
 ```bash
 ./cmd/mock-upstream/mock-upstream -addr 127.0.0.1:19999   # mock provider
 # config with base_url "http://127.0.0.1:19999/v1"
-MOCK_KEY=x ./routre-cli serve -config config-mock.json
+MOCK_KEY=x ./routre serve -config config-mock.json
 opencode run --model <provider>/<model> "hello"
 ```
 
 ---
 
 ## How it works
+
+![routre architecture — how it works & how efficient it is](docs/architecture.png)
+
+> **How it works:** every CLI (`opencode`, `Claude Code`, `Codex`, `Cursor`) hits `routre` on `127.0.0.1:20128` → **RTK 90% filter** (12 heuristic filters, no LM) → **sha256 LRU cache** → **tiered router** (subscription → cheap → free, 2s→30m cooldown, `Retry-After` honored) → upstream. **Efficiency:** 91.5% tool-token reduction (90.3% worst payload), 10 MiB RAM idle (+0.2 MiB for `/ui`), 10.6 MiB binary, ~11 ms overhead. See `benchdata/` and `scripts/measure-ram.sh`.
+> Source: [`docs/architecture.puml`](docs/architecture.puml) (PlantUML, rendered via `kroki.io` / `plantuml.com`).
 
 ### Automatic failover
 
@@ -222,7 +227,7 @@ opencode run --model <provider>/<model> "hello"
   once on the same provider (500 ms delay) before failover — an hour-long
   upstream 503 no longer burns every fallback in the same window.
 - **Auth rotation is recovered**: on a 401/403 the gateway re-reads the
-  `routre-cli.env` key file and, if the API key changed, retries the same
+  `routre.env` key file and, if the API key changed, retries the same
   provider once with the fresh key before failing over.
 - **Upstream `Retry-After` is honored**: a 429/5xx carrying a `Retry-After`
   header sets that provider's cooldown to at least the mandated delay
@@ -246,7 +251,7 @@ opencode run --model <provider>/<model> "hello"
   it, the last rejection is surfaced. Set `forward_unknown: false` to restore
   strict whitelist behavior (unknown models return `model_not_found`).
 - The gateway **holds the provider API keys** (from `api_key_env` /
-  `routre-cli.env`) and injects them upstream — a client's `Authorization`
+  `routre.env`) and injects them upstream — a client's `Authorization`
   header is a placeholder and is never forwarded.
 
 ### RTK token compression (≥90% on tool-heavy traffic)
@@ -320,14 +325,14 @@ cross-kind tool loops.
 Per coding agent (by User-Agent): requests, tokens in/out, RTK savings,
 cache savings, and estimated cost.
 
-- Persisted to `~/.routre-cli/usage.json` — survives restarts, **autosaved
+- Persisted to `~/.routre/usage.json` — survives restarts, **autosaved
   every 60 s and on SIGHUP**, so a crash loses at most one minute of
   ledger. Works offline from the persisted file when the gateway is down.
 - Costs come from provider-reported usage (OpenRouter reports real
   `usage.cost`) or from `price_in` / `price_out` in the config (USD per 1M
   tokens).
-- Tail per-request detail with `routre-cli logs`, see the ledger with
-  `routre-cli list`.
+- Tail per-request detail with `routre logs`, see the ledger with
+  `routre list`.
 
 ### Observability
 
@@ -337,20 +342,20 @@ client/provider/model/outcome class, upstream failover totals by
 provider/class, cache hits/misses and the hit ratio, RTK compression applied
 count and saved tokens, and provider-reported prompt-cache read tokens. The
 per-request JSONL log (`request_log` in config, tailed with
-`routre-cli logs`) and the `/v1/status` + `/v1/usage` JSON endpoints cover
+`routre logs`) and the `/v1/status` + `/v1/usage` JSON endpoints cover
 the structured detail.
 
 ### Always-on daemon
 
-- `deploy/routre-cli.service` + `deploy/routre-cli.socket` (systemd;
+- `deploy/routre.service` + `deploy/routre.socket` (systemd;
   socket activation → ~0 MB idle) and `deploy/dev.routrecli.daemon.plist`
   (launchd for macOS). `MemoryMax` guard included.
 - **SIGHUP reloads config + env** without dropping connections (SIGINT /
   SIGTERM = graceful shutdown, ledger saved first).
-- `routre-cli start [--autostart]`, `stop [--autostart]`, and `restart`
+- `routre start [--autostart]`, `stop [--autostart]`, and `restart`
   manage the daemon through systemd (system or `--user` scope) or launchd;
   without an installed service they fall back to a detached background
-  process logging to `~/.routre-cli/daemon.log`.
+  process logging to `~/.routre/daemon.log`.
 
 ### Security (optional gateway auth)
 
@@ -367,11 +372,11 @@ With `auth.secret_env` set, every `/v1/*` request must carry the matching
 secret in the configured header (or `Authorization: Bearer <secret>`);
 mismatches get a `401 invalid_api_key` with no upstream call. `/healthz`
 and `/metrics` stay open for probes/scrapers. The secret lives in
-`routre-cli.env` (0600), never in the config.
+`routre.env` (0600), never in the config.
 
-`routre-cli setup` offers to enable this and generates a random secret.
-When enabled, `routre-cli serve` also mints a one-time **process token**
-(`~/.routre-cli/auth.tok`, 0600, regenerated each start) so the local
+`routre setup` offers to enable this and generates a random secret.
+When enabled, `routre serve` also mints a one-time **process token**
+(`~/.routre/auth.tok`, 0600, regenerated each start) so the local
 `list`/`check`/`logs` commands keep working without you pasting the secret
 into flags.
 
@@ -399,7 +404,7 @@ into flags.
 | Field | Meaning |
 | --- | --- |
 | `kind` | `openai` or `anthropic` (dialect translation for cross-kind fallback) |
-| `api_key_env` | env var holding the key — loaded from `routre-cli.env` or shell |
+| `api_key_env` | env var holding the key — loaded from `routre.env` or shell |
 | `price_in` / `price_out` | USD per 1M tokens for cost reporting (optional) |
 | `tiers` order | fallback order; keep subscription/cheap/free |
 
@@ -412,18 +417,18 @@ minimal template is `config.example.json` (also in `examples/`).
 
 | Command | Purpose |
 | --- | --- |
-| `routre-cli setup [-config f]` | interactive wizard (providers, URLs, API keys) |
-| `routre-cli serve [-config f] [-port :p]` | run the gateway in the foreground |
-| `routre-cli start [-config f] [--autostart]` | start the daemon (systemd/launchd, or detached process) |
-| `routre-cli stop [-config f] [--autostart]` | stop the daemon (+ disable auto-start) |
-| `routre-cli restart [-config f]` | restart the daemon (keeps auto-start state) |
-| `routre-cli check [-config f]` | validate config + API keys |
-| `routre-cli list [-config f] [-url http://127.0.0.1:20128]` | connected providers + token/cost ledger |
-| `routre-cli logs [-n 50] [-f] [-config f]` | tail the per-request log |
-| `routre-cli bench [-config f] [-target 90]` | RTK token-reduction benchmark (gated) |
-| `routre-cli update [-check]` | self-update: download + verify + atomically replace this binary (refuses npm-managed copies) |
+| `routre setup [-config f]` | interactive wizard (providers, URLs, API keys) |
+| `routre serve [-config f] [-port :p]` | run the gateway in the foreground |
+| `routre start [-config f] [--autostart]` | start the daemon (systemd/launchd, or detached process) |
+| `routre stop [-config f] [--autostart]` | stop the daemon (+ disable auto-start) |
+| `routre restart [-config f]` | restart the daemon (keeps auto-start state) |
+| `routre check [-config f]` | validate config + API keys |
+| `routre list [-config f] [-url http://127.0.0.1:20128]` | connected providers + token/cost ledger |
+| `routre logs [-n 50] [-f] [-config f]` | tail the per-request log |
+| `routre bench [-config f] [-target 90]` | RTK token-reduction benchmark (gated) |
+| `routre update [-check]` | self-update: download + verify + atomically replace this binary (refuses npm-managed copies) |
 | `http://127.0.0.1:20128/ui` | local dashboard: status, providers, keys, full config editor — loopback-only, `~0` idle RAM |
-| `routre-cli version` | print version |
+| `routre version` | print version |
 
 ### `list` — everything connected, per agent, with totals
 
@@ -482,7 +487,7 @@ Reproduce:
 
 ```bash
 make build test bench        # bench gates 90% (fails on regression)
-./scripts/measure-ram.sh ./routre-cli ./config.example.json 30
+./scripts/measure-ram.sh ./routre ./config.example.json 30
 ```
 
 ---
@@ -499,12 +504,12 @@ list.go                  providers + per-agent token/cost ledger
 update.go                `update` subcommand (self-update driver)
 install.sh               curl installer (latest release → ~/.local/bin)
 internal/update/         release discovery, checksums, atomic replace
-internal/config/         JSON config + routre-cli.env + SIGHUP reload
+internal/config/         JSON config + routre.env + SIGHUP reload
 internal/router/         tiers, failover, cooldowns (exponential backoff)
 internal/rtk/            token compression (12 filters + autodetect)
 internal/cache/          exact-match LRU + prefix ordering
 internal/proxy/          HTTP gateway, SSE relay, key injection, translation, loopback-only /ui dashboard
-internal/usage/          token/cost ledger (persisted to ~/.routre-cli/)
+internal/usage/          token/cost ledger (persisted to ~/.routre/)
 internal/tokenize/       token estimator (benchmark instrument)
 internal/mock/           mock upstream (tests + keyless e2e)
 benchdata/               tool-heavy request bodies for the bench gate
@@ -526,11 +531,11 @@ npm/                     DEPRECATED npm distribution (kept for pinned dependents
   instrument, not billing-grade (tiktoken integration is planned).
 - 90% is measured on tool-result tokens; output tokens are never
   compressed, so real-session savings depend on the tool-traffic mix
-  (this is exactly what `routre-cli list` shows you).
+  (this is exactly what `routre list` shows you).
 - 401/403 **token refresh** is implemented (re-reads the env key file and
   retries once on rotation); cooldown + failover still apply when the key is
   unchanged or still rejected.
-- **Windows self-update is deferred**: `routre-cli update` on Windows prints
+- **Windows self-update is deferred**: `routre update` on Windows prints
   a re-install hint instead of replacing the running .exe (rename-swap
   support tracked for a later release); win32 binaries are still shipped on
   every release for manual install.

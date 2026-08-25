@@ -216,14 +216,14 @@ func contentToText(raw json.RawMessage) string {
 			case "text":
 				b.WriteString(blk.Text)
 			case "image_url":
-				b.WriteString("[image omitted by routre-cli]")
+				b.WriteString("[image omitted by routre]")
 			default:
-				b.WriteString("[content block omitted by routre-cli]")
+				b.WriteString("[content block omitted by routre]")
 			}
 		}
 		return b.String()
 	}
-	return "[content omitted by routre-cli]"
+	return "[content omitted by routre]"
 }
 
 func mustRaw(v any) []byte {

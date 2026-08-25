@@ -3,7 +3,7 @@ package router
 import (
 	"testing"
 
-	"routre-cli/internal/mock"
+	"github.com/mariobgsp/routre/internal/mock"
 )
 
 // TestDiscoverPopulatesEmptyProvider: discovery fills a provider's candidate

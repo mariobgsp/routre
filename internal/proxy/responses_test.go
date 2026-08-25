@@ -5,7 +5,7 @@ import (
 	"strings"
 	"testing"
 
-	"routre-cli/internal/mock"
+	"github.com/mariobgsp/routre/internal/mock"
 )
 
 // newResponsesEnv builds a gateway against a single openai-kind mock.

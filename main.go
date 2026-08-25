@@ -1,4 +1,4 @@
-// routre-cli: a low-RAM CLI gateway for LLM coding agents.
+// routre: a low-RAM CLI gateway for LLM coding agents.
 //
 // It exposes an OpenAI-compatible /v1 endpoint on localhost, applies RTK
 // token compression and an exact-match cache, and routes requests across
@@ -6,14 +6,14 @@
 //
 // Usage:
 //
-//	routre-cli serve  [-config config.json] [-port :20128]
-//	routre-cli check  [-config config.json]        # validate config + keys
-//	routre-cli start  [--autostart] [-config config.json]   # start daemon (+ enable auto-start)
-//	routre-cli stop   [--autostart] [-config config.json]   # stop daemon (+ disable auto-start)
-//	routre-cli restart [-config config.json]       # restart the daemon
-//	routre-cli bench  [-config config.json] [-target 90]  # token-reduction benchmark
-//	routre-cli logs   [-n 50] [-f] [-config config.json]   # tail the request log
-//	routre-cli version
+//	routre serve  [-config config.json] [-port :20128]
+//	routre check  [-config config.json]        # validate config + keys
+//	routre start  [--autostart] [-config config.json]   # start daemon (+ enable auto-start)
+//	routre stop   [--autostart] [-config config.json]   # stop daemon (+ disable auto-start)
+//	routre restart [-config config.json]       # restart the daemon
+//	routre bench  [-config config.json] [-target 90]  # token-reduction benchmark
+//	routre logs   [-n 50] [-f] [-config config.json]   # tail the request log
+//	routre version
 package main
 
 import (
@@ -29,13 +29,13 @@ import (
 	"syscall"
 	"time"
 
-	"routre-cli/internal/cache"
-	"routre-cli/internal/config"
-	"routre-cli/internal/proxy"
-	"routre-cli/internal/reqlog"
-	"routre-cli/internal/router"
-	"routre-cli/internal/rtk"
-	"routre-cli/internal/usage"
+	"github.com/mariobgsp/routre/internal/cache"
+	"github.com/mariobgsp/routre/internal/config"
+	"github.com/mariobgsp/routre/internal/proxy"
+	"github.com/mariobgsp/routre/internal/reqlog"
+	"github.com/mariobgsp/routre/internal/router"
+	"github.com/mariobgsp/routre/internal/rtk"
+	"github.com/mariobgsp/routre/internal/usage"
 )
 
 // version is the release version, injected at build time via
@@ -43,7 +43,7 @@ import (
 var version = "dev"
 
 func main() {
-	logger := log.New(os.Stderr, "[routre-cli] ", log.LstdFlags)
+	logger := log.New(os.Stderr, "[routre] ", log.LstdFlags)
 	if err := run(os.Args[1:], logger); err != nil {
 		logger.Printf("fatal: %v", err)
 		os.Exit(1)
@@ -76,7 +76,7 @@ func run(args []string, logger *log.Logger) error {
 
 	switch sub {
 	case "version":
-		fmt.Printf("routre-cli %s\n", version)
+		fmt.Printf("routre %s\n", version)
 		return nil
 
 	case "setup":
@@ -127,7 +127,7 @@ func cmdServe(cfgPath, port string, logger *log.Logger) error {
 	}
 	logger.Printf("config %s loaded (%d tiers)", cfgPath, len(cfg.Tiers))
 
-	// Usage store persisted under the data dir so `routre-cli list` shows
+	// Usage store persisted under the data dir so `routre list` shows
 	// history across restarts. Autosave keeps the ledger fresh on crash/
 	// restart (SIGKILL, OOM, power loss) — a shutdown-only save was losing
 	// up to hours of token history.
@@ -304,7 +304,7 @@ func totalProviders(c config.Config) int {
 }
 
 // usageFilePath returns the persisted usage location (ROUTRE_CLI_DATA_DIR
-// override, else ~/.routre-cli/usage.json).
+// override, else ~/.routre/usage.json).
 func usageFilePath() string {
 	if dir := os.Getenv("ROUTRE_CLI_DATA_DIR"); dir != "" {
 		return filepath.Join(dir, "usage.json")
@@ -313,7 +313,7 @@ func usageFilePath() string {
 	if err != nil {
 		home = "."
 	}
-	return filepath.Join(home, ".routre-cli", "usage.json")
+	return filepath.Join(home, ".routre", "usage.json")
 }
 
 // authTokenPath returns the per-process CLI token location (used when
@@ -327,7 +327,7 @@ func authTokenPath() string {
 	if err != nil {
 		home = "."
 	}
-	return filepath.Join(home, ".routre-cli", "auth.tok")
+	return filepath.Join(home, ".routre", "auth.tok")
 }
 
 // mintProcessToken generates a random 32-byte token, writes it to auth.tok

@@ -9,11 +9,11 @@ import (
 	"path/filepath"
 	"testing"
 
-	"routre-cli/internal/cache"
-	"routre-cli/internal/config"
-	"routre-cli/internal/router"
-	"routre-cli/internal/rtk"
-	"routre-cli/internal/usage"
+	"github.com/mariobgsp/routre/internal/cache"
+	"github.com/mariobgsp/routre/internal/config"
+	"github.com/mariobgsp/routre/internal/router"
+	"github.com/mariobgsp/routre/internal/rtk"
+	"github.com/mariobgsp/routre/internal/usage"
 	"log"
 )
 
@@ -196,7 +196,7 @@ func TestConfigSaveAtomic(t *testing.T) {
 
 func TestSetEnvFileValue(t *testing.T) {
 	dir := t.TempDir()
-	path := filepath.Join(dir, "routre-cli.env")
+	path := filepath.Join(dir, "routre.env")
 	if err := config.SetEnvFileValue(path, "A", "1"); err != nil {
 		t.Fatal(err)
 	}

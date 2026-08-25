@@ -15,14 +15,14 @@ import (
 	"testing"
 )
 
-// makeTarGz builds a .tar.gz containing one entry "routre-cli" with payload.
+// makeTarGz builds a .tar.gz containing one entry "routre" with payload.
 func makeTarGz(t *testing.T, payload []byte) []byte {
 	t.Helper()
 	var buf bytes.Buffer
 	gz := gzip.NewWriter(&buf)
 	tw := tar.NewWriter(gz)
 	if err := tw.WriteHeader(&tar.Header{
-		Name: "routre-cli", Mode: 0o755, Size: int64(len(payload)),
+		Name: "routre", Mode: 0o755, Size: int64(len(payload)),
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -70,7 +70,7 @@ func TestApplyReplacesBinaryAtomically(t *testing.T) {
 	srv := serveAssets(t, asset, tarball, false)
 
 	dir := t.TempDir()
-	current := filepath.Join(dir, "routre-cli")
+	current := filepath.Join(dir, "routre")
 	if err := os.WriteFile(current, []byte("old"), 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -104,7 +104,7 @@ func TestApplyReplacesBinaryAtomically(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, e := range entries {
-		if e.Name() != "routre-cli" {
+		if e.Name() != "routre" {
 			t.Fatalf("leftover artifact from update: %s", e.Name())
 		}
 	}
@@ -118,7 +118,7 @@ func TestApplyAbortsOnChecksumMismatch(t *testing.T) {
 	srv := serveAssets(t, asset, payload, true)
 
 	dir := t.TempDir()
-	current := filepath.Join(dir, "routre-cli")
+	current := filepath.Join(dir, "routre")
 	oldContent := []byte("old-binary-content")
 	if err := os.WriteFile(current, oldContent, 0o755); err != nil {
 		t.Fatal(err)
@@ -137,7 +137,7 @@ func TestApplyAbortsOnChecksumMismatch(t *testing.T) {
 	}
 	entries, _ := os.ReadDir(dir)
 	for _, e := range entries {
-		if e.Name() != "routre-cli" {
+		if e.Name() != "routre" {
 			t.Fatalf("failed update left artifacts behind: %s", e.Name())
 		}
 	}
@@ -158,14 +158,14 @@ func TestExtractBinaryMissingEntry(t *testing.T) {
 	os.WriteFile(p, buf.Bytes(), 0o644)
 
 	if _, err := extractBinary(p); err == nil {
-		t.Fatal("expected error when archive has no routre-cli entry")
+		t.Fatal("expected error when archive has no routre entry")
 	}
 }
 
 func TestTagFromLocation(t *testing.T) {
 	cases := map[string]string{
 		"https://github.com/o/r/releases/tag/v1.2.3":                              "v1.2.3",
-		"https://github.com/o/r/releases/download/v1.2.3/routre-cli_linux.tar.gz": "v1.2.3",
+		"https://github.com/o/r/releases/download/v1.2.3/routre_linux.tar.gz": "v1.2.3",
 		"https://github.com/o/r/releases/download/0.4.0/x.zip":                    "0.4.0",
 		"https://github.com/o/r/other":                                            "",
 	}
