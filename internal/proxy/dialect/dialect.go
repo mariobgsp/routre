@@ -58,5 +58,7 @@ func OpenAIToResponses(body []byte, model string) ([]byte, error) {
 	return openAIToResponses(body, model)
 }
 func GeminiToOpenAI(body []byte, model string) ([]byte, error) { return geminiToOpenAI(body, model) }
-func GeminiToAnthropic(body []byte, model string) ([]byte, error) { return geminiToAnthropic(body, model) }
-func OpenAIToGemini(body []byte) ([]byte, error)               { return openAIToGemini(body) }
+func GeminiToAnthropic(body []byte, model string) ([]byte, error) {
+	return geminiToAnthropic(body, model)
+}
+func OpenAIToGemini(body []byte) ([]byte, error) { return openAIToGemini(body) }

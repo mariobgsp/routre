@@ -82,9 +82,9 @@ func (st *streamTranslator) translate(evt sseEvent) (string, error) {
 }
 
 // finishTail emits any dialect-mandated termination sequence when the
-	// upstream hits EOF without an explicit end marker (e.g. a Gemini stream
-	// closing without finishReason, or an OpenAI stream without [DONE]).
-	// Idempotent per state machine.
+// upstream hits EOF without an explicit end marker (e.g. a Gemini stream
+// closing without finishReason, or an OpenAI stream without [DONE]).
+// Idempotent per state machine.
 func (st *streamTranslator) finishTail() string {
 	switch {
 	case st.from == FormatAnthropic && st.to == FormatOpenAI:

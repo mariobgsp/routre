@@ -35,9 +35,9 @@ func TestAnthropicToGeminiRequest(t *testing.T) {
 		Contents []struct {
 			Role  string `json:"role"`
 			Parts []struct {
-				Text             string          `json:"text"`
-				FunctionCall     map[string]any  `json:"functionCall,omitempty"`
-				FunctionResponse map[string]any  `json:"functionResponse,omitempty"`
+				Text             string         `json:"text"`
+				FunctionCall     map[string]any `json:"functionCall,omitempty"`
+				FunctionResponse map[string]any `json:"functionResponse,omitempty"`
 			} `json:"parts"`
 		} `json:"contents"`
 		Tools []struct {
