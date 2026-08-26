@@ -12,6 +12,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 > (2026-08-25). Sections marked `legacy` use the pre-rebrand
 > routre-cli numbering and are kept for history only.
 
+## [0.2.2] — 2026-08-26
+
+### Fixed
+
+- **Same-kind Anthropic/Gemini streaming was buffered at 32 KiB.**
+  The generic same-kind streaming loop only flushed after `32 << 10` bytes
+  accumulated, so Claude Code / Gemini streams smaller than one buffer burst
+  at the end instead of trickling per-token. Now flushes per chunk (same
+  as cross-kind and OpenAI paths). No change for OpenAI-dialect clients.
+
 ## [0.2.1] — 2026-08-26
 
 ### Added
