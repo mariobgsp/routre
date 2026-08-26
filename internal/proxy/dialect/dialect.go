@@ -20,6 +20,8 @@ func (d *Dialect) Request(from, to Format, body []byte) ([]byte, error) {
 		return anthropicToOpenAI(body)
 	case from == FormatOpenAI && to == FormatGemini:
 		return openAIToGemini(body)
+	case from == FormatAnthropic && to == FormatGemini:
+		return anthropicToGemini(body)
 	case from == FormatResponses && to == FormatOpenAI:
 		return responsesToOpenAI(body)
 	default:
@@ -46,6 +48,7 @@ func (d *Dialect) Supported() []Pair {
 		{From: FormatOpenAI, To: FormatAnthropic},
 		{From: FormatAnthropic, To: FormatOpenAI},
 		{From: FormatOpenAI, To: FormatGemini},
+		{From: FormatAnthropic, To: FormatGemini},
 		{From: FormatResponses, To: FormatOpenAI},
 	}
 }
@@ -55,4 +58,5 @@ func OpenAIToResponses(body []byte, model string) ([]byte, error) {
 	return openAIToResponses(body, model)
 }
 func GeminiToOpenAI(body []byte, model string) ([]byte, error) { return geminiToOpenAI(body, model) }
+func GeminiToAnthropic(body []byte, model string) ([]byte, error) { return geminiToAnthropic(body, model) }
 func OpenAIToGemini(body []byte) ([]byte, error)               { return openAIToGemini(body) }

@@ -48,9 +48,9 @@ func TestRequestSupportedPairs(t *testing.T) {
 
 func TestRequestUnsupported(t *testing.T) {
 	d := New()
-	_, err := d.Request(FormatAnthropic, FormatGemini, []byte(`{}`))
+	_, err := d.Request(FormatOpenAI, FormatResponses, []byte(`{}`))
 	if err == nil {
-		t.Fatal("want ErrUnsupported for Anthropic->Gemini")
+		t.Fatal("want ErrUnsupported for OpenAI->Responses")
 	}
 	if !strings.Contains(err.Error(), "unsupported") {
 		t.Fatalf("want unsupported error, got %v", err)
@@ -59,9 +59,9 @@ func TestRequestUnsupported(t *testing.T) {
 
 func TestStreamUnsupported(t *testing.T) {
 	d := New()
-	err := d.Stream(FormatAnthropic, FormatGemini, strings.NewReader("data: {}\n\n"), &strings.Builder{}, nil)
+	err := d.Stream(FormatOpenAI, FormatResponses, strings.NewReader("data: {}\n\n"), &strings.Builder{}, nil)
 	if err == nil {
-		t.Fatal("want ErrUnsupported for Stream Anthropic->Gemini")
+		t.Fatal("want ErrUnsupported for Stream OpenAI->Responses")
 	}
 }
 

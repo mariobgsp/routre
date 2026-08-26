@@ -523,10 +523,10 @@ npm/                     DEPRECATED npm distribution (kept for pinned dependents
 
 ## Known gaps (full detail in docs/SPEC.md)
 
-- Gemini is a streaming dialect for **OpenAI↔Gemini** (request + non-streaming
-  response + in-flight SSE translation with `[DONE]` termination); the
-  **Anthropic↔Gemini** pair is not yet implemented (a gemini-kind provider
-  served to an Anthropic-dialect client is rejected, not mis-answered).
+- Gemini is a streaming dialect for **OpenAI↔Gemini** and
+  **Anthropic↔Gemini** (request + non-streaming response + in-flight SSE
+  translation with guaranteed termination); a gemini-kind provider can now
+  serve both OpenAI- and Anthropic-dialect clients.
 - Token estimates are an approximation (≈4 bytes/token) — a benchmark
   instrument, not billing-grade (tiktoken integration is planned).
 - 90% is measured on tool-result tokens; output tokens are never

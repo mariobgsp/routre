@@ -107,3 +107,62 @@ func TestGeminiStreamingRelay(t *testing.T) {
 		t.Fatalf("missing [DONE]:\n%s", s)
 	}
 }
+
+func TestGeminiViaAnthropicClientNonStreaming(t *testing.T) {
+	base, _ := geminiEnv(t, false)
+	body := `{"model":"gemini-pro","max_tokens":64,"messages":[{"role":"user","content":"hi"}]}`
+	resp, data := post(t, base, "/v1/messages", []byte(body))
+	if resp.StatusCode != 200 {
+		t.Fatalf("status %d: %s", resp.StatusCode, data)
+	}
+	var doc map[string]any
+	if err := json.Unmarshal(data, &doc); err != nil {
+		t.Fatal(err)
+	}
+	if doc["type"] != "message" || doc["role"] != "assistant" {
+		t.Fatalf("envelope = %v/%v", doc["type"], doc["role"])
+	}
+	content := doc["content"].([]any)
+	blk := content[0].(map[string]any)
+	if blk["type"] != "text" || !strings.Contains(blk["text"].(string), "gemini response") {
+		t.Fatalf("content block = %v", blk)
+	}
+	if doc["stop_reason"] != "end_turn" {
+		t.Fatalf("stop_reason = %v", doc["stop_reason"])
+	}
+	if usage, ok := doc["usage"].(map[string]any); !ok || usage["input_tokens"] != float64(10) || usage["output_tokens"] != float64(5) {
+		t.Fatalf("usage = %v", doc["usage"])
+	}
+}
+
+func TestGeminiViaAnthropicClientStreaming(t *testing.T) {
+	base, _ := geminiEnv(t, true)
+	body := `{"model":"gemini-pro","max_tokens":64,"stream":true,"messages":[{"role":"user","content":"hi"}]}`
+	req, err := http.NewRequest("POST", base+"/v1/messages", bytes.NewBufferString(body))
+	if err != nil {
+		t.Fatal(err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != 200 {
+		t.Fatalf("status %d", resp.StatusCode)
+	}
+	raw, _ := io.ReadAll(resp.Body)
+	s := string(raw)
+	for _, want := range []string{
+		`"type":"message_start"`,
+		`"type":"content_block_start"`,
+		`"type":"text_delta","text":"from-g"`,
+		`"type":"content_block_stop"`,
+		`"stop_reason":"end_turn"`,
+		`"type":"message_stop"`,
+	} {
+		if !strings.Contains(s, want) {
+			t.Fatalf("missing %s in:\n%s", want, s)
+		}
+	}
+}

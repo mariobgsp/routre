@@ -45,6 +45,9 @@ type streamTranslator struct {
 	// g2o holds Gemini->OpenAI state when to==gemini (OpenAI client, Gemini
 	// upstream).
 	g2o g2oState
+	// g2a holds Gemini->Anthropic state when to==gemini (Anthropic client,
+	// Gemini upstream).
+	g2a g2aState
 }
 
 func newStreamTranslator(from, to Format) *streamTranslator {
@@ -54,6 +57,7 @@ func newStreamTranslator(from, to Format) *streamTranslator {
 	// block/tool starts.
 	st.o2a.openBlockIdx = -1
 	st.o2a.curToolIdx = -1
+	st.g2a.openBlockIdx = -1
 	return st
 }
 
@@ -70,8 +74,25 @@ func (st *streamTranslator) translate(evt sseEvent) (string, error) {
 		return st.r2o.translate(evt)
 	case st.from == FormatOpenAI && st.to == FormatGemini:
 		return st.g2o.translate(evt)
+	case st.from == FormatAnthropic && st.to == FormatGemini:
+		return st.g2a.translate(evt)
 	default:
 		return "", fmt.Errorf("unsupported stream translation %v -> %v", st.from, st.to)
+	}
+}
+
+// finishTail emits any dialect-mandated termination sequence when the
+	// upstream hits EOF without an explicit end marker (e.g. a Gemini stream
+	// closing without finishReason, or an OpenAI stream without [DONE]).
+	// Idempotent per state machine.
+func (st *streamTranslator) finishTail() string {
+	switch {
+	case st.from == FormatAnthropic && st.to == FormatOpenAI:
+		return st.o2a.finish()
+	case st.from == FormatAnthropic && st.to == FormatGemini:
+		return st.g2a.finish()
+	default:
+		return ""
 	}
 }
 
@@ -92,7 +113,14 @@ func translateStream(w io.Writer, upstream io.Reader, from, to Format, flush fun
 		}
 		if ferr != nil {
 			if ferr == io.EOF {
-				return nil // clean end of stream
+				// Clean end of stream: emit any dialect-mandated termination
+				// the upstream never sent (e.g. no [DONE], no finishReason).
+				if tail := st.finishTail(); tail != "" {
+					if _, werr := io.WriteString(w, tail); werr == nil && flush != nil {
+						flush()
+					}
+				}
+				return nil
 			}
 			// Upstream read failure after first byte: not retryable.
 			if st.emitted {

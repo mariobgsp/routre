@@ -6,16 +6,15 @@ import (
 	"strings"
 )
 
-// Gemini dialect support for OpenAI-dialect clients.
+// Gemini dialect support.
 //
 // The gateway's clients speak OpenAI/Anthropic/Responses; Gemini is
 // upstream-only. This file translates an OpenAI chat.completions request to
 // a Gemini generateContent request, a Gemini generateContent response back
 // to OpenAI chat.completions (non-streaming), and a Gemini
 // streamGenerateContent SSE stream back to OpenAI chat.completion.chunk SSE
-// (streaming). The reverse directions (OpenAI upstream -> Gemini client,
-// Anthropic <-> Gemini) are not implemented — Anthropic-bound Gemini is
-// rejected rather than silently mis-answered. See the pair matrix in SPEC.
+// (streaming). The Anthropic-client ↔ Gemini-upstream directions live in
+// translate_gemini_anthropic.go. See the pair matrix in SPEC.
 
 // openAIToGemini maps an OpenAI chat request to Gemini generateContent.
 // Known losses (documented): tool_choice/parallel_tool_calls are not mapped;
