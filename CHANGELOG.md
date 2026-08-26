@@ -1,14 +1,14 @@
 # Changelog
 
 All notable changes to routre-cli are documented here, newest first.
-Releases are version-tagged (`v*`) and built for npm locally via
-`make dist-npm`; publishing to the registry is a manual step.
-CI (`.github/workflows/ci.yml`) runs tests on every push and PR.
+Releases are version-tagged (`v*`); the release workflow attaches
+per-platform binaries to the GitHub Release. CI
+(`.github/workflows/ci.yml`) runs tests on every push and PR.
 
 The format loosely follows [Keep a Changelog](https://keepachangelog.com/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
-## [Unreleased]
+## [0.4.0] — 2026-08-26
 
 ### Added
 
@@ -32,6 +32,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   command and exits non-zero; all published npm versions carry an
   `npm deprecate` notice. Registry packages remain installed for pinned
   dependents.
+- **Architecture deepening (#51).** Translation scatter moved behind the
+  `internal/proxy/dialect` seam (`Request`/`Stream`/`Supported`/
+  `DetectFormat`, `ErrUnsupported`); the 7-step request orchestration
+  (RTK → cache → routing → translation → retry) collapsed into
+  `pipeline.Process/Stream`; router returns ready-to-send candidate
+  payloads with failover decisions; token extraction unified behind one
+  extractor; SIGHUP reload wiring replaced by a `Reconfigurable`
+  registry; config/key/gateway plumbing behind a gateway client.
+  No behavior change except the fixes below.
+
+### Fixed
+
+- Cached Responses-API replies were re-served wrapped/unwrapped
+  incorrectly (raw vs envelope mismatch) — cache now stores and returns
+  the client-dialect shape.
+- `max_tokens` is re-clamped after cross-kind translation, so an
+  upstream limit can no longer be exceeded by a translated body.
+- Anthropic non-streaming responses carrying `tool_use` blocks are
+  translated correctly instead of dropping the tool call.
 
 ## [0.3.2] — 2026-08-22
 
