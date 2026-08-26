@@ -8,7 +8,11 @@ per-platform binaries to the GitHub Release. CI
 The format loosely follows [Keep a Changelog](https://keepachangelog.com/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
-## [0.4.0] — 2026-08-26
+> Versioning restarted at v0.1.0 for the **routre** rebrand
+> (2026-08-25). Sections marked `legacy` use the pre-rebrand
+> routre-cli numbering and are kept for history only.
+
+## [0.2.0] — 2026-08-26
 
 ### Added
 
@@ -52,7 +56,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 - Anthropic non-streaming responses carrying `tool_use` blocks are
   translated correctly instead of dropping the tool call.
 
-## [0.3.2] — 2026-08-22
+## [legacy 0.3.2] — 2026-08-22
 
 ### Added
 
@@ -76,7 +80,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 - Streaming responses previously recorded zero cache-read tokens; they now
   feed the same ledger as non-streaming responses.
 
-## [0.3.1] — 2026-08-21
+## [legacy 0.3.1] — 2026-08-21
 
 ### Fixed
 
@@ -90,7 +94,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 - **`stealth/ox-alpha` and `stealth/ox-alpha:free`** added to the OpenRouter
   provider in `config.all.json`, matching the gateway's served models list.
 
-## [0.3.0] — 2026-08-20
+## [legacy 0.3.0] — 2026-08-20
 
 ### Added
 
@@ -129,7 +133,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   `setup` wizard offers to enable it and generates the secret into
   `routre-cli.env`.
 
-## [0.2.0] — 2026-08-20
+## [legacy 0.2.0] — 2026-08-20
 
 ### Added
 
@@ -156,7 +160,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 - `config.Load`/`Reload` and the `relay`/`relayStream` upstream request
   construction were deduplicated behind shared helpers (no behavior change).
 
-## [0.1.9] — 2026-08-20
+## [legacy 0.1.9] — 2026-08-20
 
 ### Added
 
@@ -170,7 +174,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   a Responses request; an anthropic upstream is rejected rather than silently
   mis-answered. Covered by `responses_test.go` / `responses_stream_test.go`.
 
-## [0.1.8] — 2026-08-19
+## [legacy 0.1.8] — 2026-08-19
 
 ### Added
 
@@ -200,7 +204,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   strings now live in one place each and are aligned on the tag. (This also
   re-fixes the 0.1.4 regression.)
 
-## [0.1.7] — 2026-08-18
+## [legacy 0.1.7] — 2026-08-18
 
 ### Added
 
@@ -223,7 +227,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   passed through with zero re-encoding (previous fast path preserved).
   Byte-for-byte behavior, cache keys, and fail-open semantics unchanged.
 
-## [0.1.6] — 2026-08-18
+## [legacy 0.1.6] — 2026-08-18
 
 ### Fixed
 
@@ -237,7 +241,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   passthrough when the upstream behaves correctly; the Anthropic path is
   unchanged.
 
-## [0.1.5] — 2026-08-18
+## [legacy 0.1.5] — 2026-08-18
 
 ### Fixed
 
@@ -259,7 +263,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
     original prefixed model string; the candidate's upstream model is applied
     after translation.
 
-## [0.1.4] — 2026-08-17
+## [legacy 0.1.4] — 2026-08-17
 
 ### Changed
 
@@ -267,7 +271,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   matches the installed npm version (0.1.3's published binary reported
   0.1.2). No functional change.
 
-## [0.1.3] — 2026-08-17
+## [legacy 0.1.3] — 2026-08-17
 
 ### Fixed
 
@@ -276,20 +280,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 - Usage ledger autosave; transient 5xx retried once before failover; cache
   hits report upstream token usage.
 
-## [0.1.2] — 2026-08-17
+## [legacy 0.1.2] — 2026-08-17
 
 ### Changed
 
 - Scoped Windows packages to `@mariobgsp/*` (npm rejects unscoped `win32`
   names); publish rules updated.
 
-## [0.1.1] — 2026-08-17
+## [legacy 0.1.1] — 2026-08-17
 
 ### Fixed
 
 - Daemon start/stop/restart lifecycle; gateway 503 fixes.
 
-## [0.1.0] — 2026-08-17
+## [legacy 0.1.0] — 2026-08-17
 
 Initial release: single Go binary (no runtime deps) providing an
 OpenAI/Anthropic-compatible localhost gateway with provider failover, RTK
