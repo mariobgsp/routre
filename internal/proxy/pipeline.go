@@ -143,7 +143,7 @@ func (p *Pipeline) Stream(ctx context.Context, req Request, w http.ResponseWrite
 func (p *Pipeline) streamCandidate(ctx context.Context, w http.ResponseWriter, header http.Header, api apiFormat, cand router.Candidate, requested string, body []byte, processed []byte, client string, rtkSaved int, clientFmt apiFormat) (bool, error, router.ErrClass) {
 	kind := cand.Provider.Provider.Kind
 	payload := cand.Payload(processed, requested)
-	crossKind := (api == fmtOpenAI && kind == "anthropic") || (api == fmtAnthropic && kind == "openai") || (api == fmtOpenAI && kind == "gemini")
+	crossKind := crossKindRequest(api, kind)
 	if clientFmt == fmtResponses && (kind == "anthropic" || kind == "gemini") {
 		p.router.ReportFailure(cand.Provider, router.ErrClient)
 		return false, fmt.Errorf("provider %s cannot serve Responses", cand.Provider.Provider.Name), router.ErrClient
@@ -308,12 +308,19 @@ func (p *Pipeline) processInternal(ctx context.Context, req Request) (Response, 
 	return Response{}, fmt.Errorf("streaming request: use Stream")
 }
 
+// crossKindRequest reports whether an inbound request of dialect `api`
+// targets an upstream provider of `kind` speaking a different dialect.
+// Responses requests are handled separately (OpenAI-upstream only).
+func crossKindRequest(api apiFormat, kind string) bool {
+	return api != fmtResponses && api != kindOf(kind)
+}
+
 func (p *Pipeline) tryCandidate(ctx context.Context, req Request, api apiFormat, cand router.Candidate, requested string, body, processed []byte, streaming bool, client string, rtkSaved int, clientFmt apiFormat) (Response, bool, error, router.ErrClass) {
 	ph := req.Header
 	dummyReq := &http.Request{Header: ph}
 	payload := cand.Payload(processed, requested)
 	kind := cand.Provider.Provider.Kind
-	crossKind := (api == fmtOpenAI && kind == "anthropic") || (api == fmtAnthropic && kind == "openai") || (api == fmtOpenAI && kind == "gemini")
+	crossKind := crossKindRequest(api, kind)
 	if clientFmt == fmtResponses && (kind == "anthropic" || kind == "gemini") {
 		p.router.ReportFailure(cand.Provider, router.ErrClient)
 		return Response{}, false, fmt.Errorf("provider %s (kind=%s) cannot serve a Responses API request", cand.Provider.Provider.Name, kind), router.ErrClient
@@ -357,8 +364,13 @@ func (p *Pipeline) tryCandidate(ctx context.Context, req Request, api apiFormat,
 			ct = "application/json"
 		}
 		sendBody := respBody
-		if kind == "gemini" {
-			if gb, gerr := dialect.GeminiToOpenAI(respBody, modelFromBody(body)); gerr == nil {
+		if kind == "gemini" && clientFmt != fmtResponses {
+			if clientFmt == fmtAnthropic {
+				if ab, aerr := dialect.GeminiToAnthropic(respBody, modelFromBody(body)); aerr == nil {
+					respBody = ab
+					sendBody = ab
+				}
+			} else if gb, gerr := dialect.GeminiToOpenAI(respBody, modelFromBody(body)); gerr == nil {
 				respBody = gb
 				sendBody = gb
 			}

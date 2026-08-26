@@ -12,6 +12,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 > (2026-08-25). Sections marked `legacy` use the pre-rebrand
 > routre-cli numbering and are kept for history only.
 
+## [0.2.1] — 2026-08-26
+
+### Added
+
+- **Anthropic↔Gemini dialect pair.** A `gemini`-kind provider can now serve
+  Anthropic-dialect clients (`/v1/messages`, e.g. Claude Code pointed at
+  the gateway): `anthropicToGemini` request translation (system →
+  `systemInstruction`, `tool_use`/`tool_result` blocks →
+  `functionCall`/`functionResponse` with id→name re-linking, tools →
+  `functionDeclarations`), `geminiToAnthropic` non-streaming response
+  translation (content blocks, `stop_reason`, `usageMetadata`), and an
+  in-flight `g2a` SSE state machine emitting the full Anthropic event
+  sequence (`message_start` … `message_stop`) with deterministic
+  `toolu_<name>` ids and guaranteed termination — including a new EOF tail
+  that closes any stream whose upstream vanished without a terminal frame
+  (also hardens the OpenAI→Anthropic path against missing `[DONE]`).
+  Covered by golden tests at the Dialect interface and non-streaming/
+  streaming e2e relay tests via the Gemini mock.
+
 ## [0.2.0] — 2026-08-26
 
 ### Added

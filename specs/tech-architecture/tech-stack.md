@@ -25,7 +25,7 @@
 
 ## Seams & Modules (deep)
 
-- **`Dialect`** (`internal/proxy/dialect`): deep module, interface `Request(from,to,body)` + `Stream(from,to,upstream,w)` + `DetectFormat` + `IsStreaming`, `ErrUnsupported`. Adapters: one per pair (`openai↔anthropic`, `openai↔gemini`, `responses→openai`) + streaming state machines. In-process deps, no ports. Tests at `Dialect` interface (golden SSE/request fixtures), not per-adapter.
+- **`Dialect`** (`internal/proxy/dialect`): deep module, interface `Request(from,to,body)` + `Stream(from,to,upstream,w)` + `DetectFormat` + `IsStreaming`, `ErrUnsupported`. Adapters: one per pair (`openai↔anthropic`, `openai↔gemini`, `anthropic↔gemini`, `responses→openai`) + streaming state machines. In-process deps, no ports. Tests at `Dialect` interface (golden SSE/request fixtures), not per-adapter.
 - **`Cache`** (`internal/cache`): deep, `Get/Put/Key/OrderPrompt`, LRU+TTL, already deep.
 - **`RTK`** (`internal/rtk`): deep, `Apply([]byte)([]byte,bool)`, 12 filters, already deep.
 - **`Router`** (`internal/router`): shallow today (score 2) — leaks `Candidate{IsWildcard,IsFree,Upstream}`; candidate for deepening (see PLAN #3).
