@@ -3,6 +3,7 @@ package dialect
 import (
 	"bufio"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"strconv"
@@ -96,6 +97,11 @@ func (st *streamTranslator) finishTail() string {
 	}
 }
 
+// ErrAborted reports an upstream stream that died mid-flight after bytes had
+// already been translated and written to the client. The relay maps it to the
+// gateway's stream-abort contract (no failover, never cache).
+var ErrAborted = errors.New("dialect: upstream stream aborted")
+
 // translateStream translates an upstream SSE stream into the client's dialect,
 // writing to w. flush, if non-nil, is called after every frame to push SSE
 // chunks to the client in real time (streaming must not buffer until EOF). It
@@ -122,10 +128,10 @@ func translateStream(w io.Writer, upstream io.Reader, from, to Format, flush fun
 				}
 				return nil
 			}
-			// Upstream read failure after first byte: not retryable.
+			// Upstream read failure after first byte: not retryable, but
+			// signal the truncation so callers never cache the result.
 			if st.emitted {
-				// Client already received data; cannot fail over.
-				return nil
+				return ErrAborted
 			}
 			return ferr
 		}
@@ -134,7 +140,7 @@ func translateStream(w io.Writer, upstream io.Reader, from, to Format, flush fun
 			if !st.emitted {
 				return perr // retryable: fail over to next candidate
 			}
-			return nil // mid-stream: can't fail over
+			return ErrAborted // mid-stream: can't fail over, must not cache
 		}
 		if len(out) > 0 {
 			if _, werr := io.WriteString(w, out); werr != nil {

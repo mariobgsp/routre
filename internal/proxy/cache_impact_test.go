@@ -95,54 +95,89 @@ func BenchmarkCacheHit(b *testing.B) {
 	}
 }
 
-// TestStreamingNeverCaches documents today's gap: identical streaming
-// requests always re-hit the upstream because the response cache is
-// non-streaming only.
-func TestStreamingNeverCaches(t *testing.T) {
-	base, m := func() (string, *mock.Server) {
-		t.Helper()
-		t.Setenv("TEST_KEY_A", "test-key-a")
-		m, err := mock.New("a")
-		if err != nil {
-			t.Fatal(err)
-		}
-		t.Cleanup(m.Close)
-		tiers := `{"name":"t","providers":[{"name":"a","kind":"openai","base_url":"` + m.URL() + `/v1","api_key_env":"TEST_KEY_A","models":["m"]}]}`
-		cfgJSON := `{"listen":"127.0.0.1:0","rtk":{"enabled":false},"cache":{"enabled":true,"max_entries":64,"ttl_seconds":3600},"tiers":[` + tiers + `]}`
-		cfgPath := t.TempDir() + "/cfg.json"
-		if err := os.WriteFile(cfgPath, []byte(cfgJSON), 0o644); err != nil {
-			t.Fatal(err)
-		}
-		st := config.NewStore(cfgPath)
-		if err := st.Load(); err != nil {
-			t.Fatalf("config load: %v", err)
-		}
-		cfg := st.Get()
-		rtr := router.New(tiersFromConfig(cfg), router.DefaultCooldownPolicy())
-		rtr.SetForwardUnknown(cfg.ForwardUnknown)
-		cch := cache.New(cache.Config{Enabled: true, MaxEntries: 64, TTLSeconds: 3600})
-		tk := rtk.New(rtk.Config{Enabled: false})
-		logger := log.New(io.Discard, "", 0)
-		h := NewHandlers(st, rtr, cch, tk, logger, usage.New(""))
-		srv := New(h, logger)
-		ln, err := srv.Listen("127.0.0.1:0")
-		if err != nil {
-			t.Fatal(err)
-		}
-		go func() { _ = srv.Serve(ln) }()
-		t.Cleanup(func() { _ = srv.Shutdown(2 * time.Second) })
-		return "http://" + ln.Addr().String(), m
-	}()
+// streamCacheEnv wires a gateway with one openai-kind mock and cache
+// enabled, for streaming-replay-cache tests.
+func streamCacheEnv(t *testing.T, abortMid bool) (string, *mock.Server) {
+	t.Helper()
+	t.Setenv("TEST_KEY_A", "test-key-a")
+	m, err := mock.New("a")
+	if err != nil {
+		t.Fatal(err)
+	}
+	m.SetAbortMid(abortMid)
+	t.Cleanup(m.Close)
+	tiers := `{"name":"t","providers":[{"name":"a","kind":"openai","base_url":"` + m.URL() + `/v1","api_key_env":"TEST_KEY_A","models":["m"]}]}`
+	cfgJSON := `{"listen":"127.0.0.1:0","rtk":{"enabled":false},"cache":{"enabled":true,"max_entries":64,"ttl_seconds":3600},"tiers":[` + tiers + `]}`
+	cfgPath := t.TempDir() + "/cfg.json"
+	if err := os.WriteFile(cfgPath, []byte(cfgJSON), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	st := config.NewStore(cfgPath)
+	if err := st.Load(); err != nil {
+		t.Fatalf("config load: %v", err)
+	}
+	cfg := st.Get()
+	rtr := router.New(tiersFromConfig(cfg), router.DefaultCooldownPolicy())
+	rtr.SetForwardUnknown(cfg.ForwardUnknown)
+	cch := cache.New(cache.Config{Enabled: true, MaxEntries: 64, TTLSeconds: 3600})
+	tk := rtk.New(rtk.Config{Enabled: false})
+	logger := log.New(io.Discard, "", 0)
+	h := NewHandlers(st, rtr, cch, tk, logger, usage.New(""))
+	srv := New(h, logger)
+	ln, err := srv.Listen("127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	go func() { _ = srv.Serve(ln) }()
+	t.Cleanup(func() { _ = srv.Shutdown(2 * time.Second) })
+	return "http://" + ln.Addr().String(), m
+}
 
+// TestStreamingCacheReplay: the second identical streaming request is
+// replayed byte-for-byte from the gateway's cache; upstream called once.
+func TestStreamingCacheReplay(t *testing.T) {
+	base, m := streamCacheEnv(t, false)
 	body := chatBody(true, "")
-	for i := 0; i < 2; i++ {
-		resp, data := post(t, base, "/v1/chat/completions", body)
-		if resp.StatusCode != 200 {
-			t.Fatalf("status %d: %s", resp.StatusCode, data)
-		}
+	resp1, data1 := post(t, base, "/v1/chat/completions", body)
+	if resp1.StatusCode != 200 {
+		t.Fatalf("status %d: %s", resp1.StatusCode, data1)
+	}
+	if resp1.Header.Get("X-Llrouter-Cache") == "hit" {
+		t.Fatal("first streaming request must reach upstream")
+	}
+	resp2, data2 := post(t, base, "/v1/chat/completions", body)
+	if resp2.StatusCode != 200 {
+		t.Fatalf("status %d: %s", resp2.StatusCode, data2)
+	}
+	if resp2.Header.Get("X-Llrouter-Cache") != "hit" {
+		t.Fatalf("second identical streaming request must be a replay hit; headers: %v\nbody:\n%s", resp2.Header, data2)
+	}
+	if string(data1) != string(data2) {
+		t.Fatal("replayed stream must be byte-identical")
+	}
+	if got := m.Requests(); got != 1 {
+		t.Fatalf("upstream must be called exactly once, got %d", got)
+	}
+}
+
+// TestStreamingAbortNotCached: a mid-stream abort yields a truncated client
+// stream that must never populate the replay cache.
+func TestStreamingAbortNotCached(t *testing.T) {
+	base, m := streamCacheEnv(t, true)
+	body := chatBody(true, "")
+	resp1, data1 := post(t, base, "/v1/chat/completions", body)
+	if resp1.StatusCode != 200 || !strings.Contains(string(data1), "from-a") {
+		t.Fatalf("expected partial stream from a, got %d: %s", resp1.StatusCode, data1)
+	}
+	resp2, _ := post(t, base, "/v1/chat/completions", body)
+	if resp2.StatusCode != 200 {
+		t.Fatalf("status %d", resp2.StatusCode)
+	}
+	if resp2.Header.Get("X-Llrouter-Cache") == "hit" {
+		t.Fatal("aborted stream must not be cached")
 	}
 	if got := m.Requests(); got != 2 {
-		t.Fatalf("streaming requests must each reach upstream; got %d calls, want 2 (proves streaming bypasses cache)", got)
+		t.Fatalf("upstream must serve both requests after abort, got %d", got)
 	}
 }
 

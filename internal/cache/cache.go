@@ -22,6 +22,12 @@ type Entry struct {
 	ContentType      string
 	PromptTokens     int64
 	CompletionTokens int64
+	// SSE marks an entry captured from a streaming relay (client-dialect SSE
+	// frames). Only SSE-marked entries are replayed on the streaming path,
+	// and JSON entries are never served to streaming clients — the same key
+	// can legitimately hold either shape depending on how the first request
+	// arrived.
+	SSE bool
 }
 
 // Config controls the cache. Zero value disables nothing by default;
