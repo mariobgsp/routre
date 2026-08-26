@@ -16,6 +16,10 @@ type streamUsage struct {
 	// discounted cache-read rate. Zero when the provider does not report
 	// them or the prefix was not cached.
 	cacheRead int64
+	// captured holds the exact client-dialect SSE bytes written to the
+	// client on a cleanly completed stream, for the streaming replay cache.
+	// Nil when capture was skipped or the client went away.
+	captured []byte
 }
 
 // usageSniffer is a pass-through io.Reader that sits in front of an upstream

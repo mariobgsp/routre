@@ -106,6 +106,29 @@ func (p *Pipeline) Stream(ctx context.Context, req Request, w http.ResponseWrite
 	if cfg := p.cfg.Get(); cfg.Cache.PrefixOrder {
 		processed = orderPrompt(processed)
 	}
+	// Streaming replay cache: serve an identical earlier stream from memory.
+	// Entries are byte-identical client-dialect SSE captures, so tool-call
+	// ids, finish_reason and [DONE] stay self-consistent by construction.
+	if e, ok := p.cache.Get(cacheKey(processed)); ok && e.SSE {
+		cacheSaved := e.PromptTokens
+		if cacheSaved == 0 {
+			cacheSaved = int64(tokenize.Count(string(processed), tokenize.KindOpenAI))
+		}
+		if cacheSaved > 0 {
+			p.usage.Record(client, requested, 0, 0, 0, cacheSaved, usage.Prices{}, 0)
+		}
+		p.metrics.CacheHit()
+		w.Header().Set("Content-Type", e.ContentType)
+		w.Header().Set("X-Llrouter-Cache", "hit")
+		w.Header().Set("X-Llrouter-Streaming", "true")
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write(e.Body)
+		if f, ok := w.(http.Flusher); ok {
+			f.Flush()
+		}
+		return nil
+	}
+	p.metrics.CacheMiss()
 	cands := p.router.CandidatesWithFallbacks(requested, p.cfg.Get().Fallbacks)
 	if len(cands) == 0 {
 		return fmt.Errorf("no candidates")
@@ -195,6 +218,15 @@ func (p *Pipeline) streamCandidate(ctx context.Context, w http.ResponseWriter, h
 		p.usage.RecordFull(client, modelFromBody(body), prompt, susage.completion, int64(rtkSaved), 0, susage.cacheRead, pricesOf(p.cfg.Get(), cand.Provider.Provider.Name), 0)
 		p.metrics.CacheRead(susage.cacheRead)
 		p.metrics.Request(client, cand.Provider.Provider.Name, requested, "ok")
+		// Streaming replay cache: store the exact client-dialect SSE bytes so
+		// an identical later request replays without an upstream call.
+		if len(susage.captured) > 0 {
+			p.cache.Put(cacheKey(processed), cache.Entry{
+				Body: susage.captured, ContentType: "text/event-stream",
+				PromptTokens: susage.prompt, CompletionTokens: susage.completion,
+				SSE: true,
+			})
+		}
 		return true, nil, 0
 	}
 	class := router.ClassifyStatusBody(status, nil)
@@ -244,7 +276,7 @@ func (p *Pipeline) processInternal(ctx context.Context, req Request) (Response, 
 	}
 	key := cacheKey(processed)
 	if !streaming {
-		if e, ok := p.cache.Get(key); ok {
+		if e, ok := p.cache.Get(key); ok && !e.SSE {
 			cacheSaved := e.PromptTokens
 			if cacheSaved == 0 {
 				cacheSaved = int64(tokenize.Count(string(processed), tokenize.KindOpenAI))

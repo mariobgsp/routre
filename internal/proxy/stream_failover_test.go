@@ -5,6 +5,8 @@ import (
 	"io"
 	"strings"
 	"testing"
+
+	"github.com/mariobgsp/routre/internal/proxy/dialect"
 )
 
 // errReader returns n bytes then err.
@@ -64,15 +66,16 @@ func TestTranslateStreamErrBeforeFirstByte(t *testing.T) {
 	}
 }
 
-// 2. Upstream read error AFTER the first frame was emitted -> nil (must NOT
-// fail over; the client already received bytes).
+// 2. Upstream read error AFTER the first frame was emitted -> ErrAborted
+// (must NOT fail over; the client already received bytes; relay maps this to
+// the stream-abort contract so the truncated stream is never cached).
 func TestTranslateStreamErrAfterFirstByteNoFailover(t *testing.T) {
 	src := a2oRoleFrame // emits a role chunk -> st.emitted = true
 	r := &errReader{src: src, n: len(src), err: errUpstreamRead}
 	w := &strings.Builder{}
 	err := readAllStream(w, r, fmtAnthropic, fmtOpenAI)
-	if err != nil {
-		t.Fatalf("expected nil (no failover) after first byte, got %v", err)
+	if !errors.Is(err, dialect.ErrAborted) {
+		t.Fatalf("expected dialect.ErrAborted after first-byte upstream failure, got %v", err)
 	}
 	if w.Len() == 0 {
 		t.Fatalf("expected the role chunk to have been emitted before the error")
@@ -93,14 +96,14 @@ func TestTranslateStreamTranslateErrBeforeFirstByte(t *testing.T) {
 	}
 }
 
-// 4. Translation error AFTER first byte -> nil (no failover).
+// 4. Translation error AFTER first byte -> ErrAborted (no failover).
 func TestTranslateStreamTranslateErrAfterFirstByte(t *testing.T) {
 	src := a2oRoleFrame + a2oBadFrame
 	r := &errReader{src: src, n: len(src), err: io.EOF}
 	w := &strings.Builder{}
 	err := readAllStream(w, r, fmtAnthropic, fmtOpenAI)
-	if err != nil {
-		t.Fatalf("expected nil (no failover) after first byte, got %v", err)
+	if !errors.Is(err, dialect.ErrAborted) {
+		t.Fatalf("expected dialect.ErrAborted after first-byte translate failure, got %v", err)
 	}
 	if w.Len() == 0 {
 		t.Fatalf("expected role chunk emitted, got %q", w.String())

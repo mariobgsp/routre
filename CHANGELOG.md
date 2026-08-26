@@ -30,6 +30,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   (also hardens the OpenAI→Anthropic path against missing `[DONE]`).
   Covered by golden tests at the Dialect interface and non-streaming/
   streaming e2e relay tests via the Gemini mock.
+- **Streaming replay cache.** The response cache no longer skips streams:
+  successful streaming responses are captured as exact client-dialect SSE
+  bytes (bounded by the existing 8 MiB per-entry limit) and identical later
+  requests replay byte-for-byte with zero upstream calls
+  (`X-Llrouter-Cache: hit`, saved tokens credited to the ledger).
+  Hardening that came with it: an upstream dying mid-stream after the first
+  byte now surfaces as a stream abort end-to-end (`dialect.ErrAborted` →
+  gateway abort contract) instead of looking like a clean end — so truncated
+  streams can never be cached or mistaken for success on any path (the
+  OpenAI guarantee-finish relay included). Streaming and JSON entries share
+  keys but never cross shapes.
 
 ## [0.2.0] — 2026-08-26
 

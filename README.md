@@ -279,7 +279,17 @@ command measures reduction on 5 realistic tool-heavy payloads and gates
 - Exact-match LRU keyed by SHA-256 of the **processed** body (post-RTK).
   Defaults: 512 entries / 1 h TTL / 8 MiB max entry; the shipped
   `config.all.json` uses 4096 entries / 24 h TTL / 64 MiB budget.
-- Non-streaming responses only; streamed responses are never cached.
+- **Streaming replay cache.** Successful streaming responses are captured as
+  client-dialect SSE bytes (same 8 MiB per-entry cap) and an identical later
+  streaming request is replayed byte-for-byte from memory — no upstream call,
+  `X-Llrouter-Cache: hit`, saved tokens credited to the ledger exactly like
+  non-streaming hits. Replay is byte-identical, so tool-call ids,
+  `finish_reason` and `[DONE]` stay self-consistent by construction.
+  Mid-stream aborts (upstream died after first byte) are never cached —
+  they surface as stream aborts and the next request goes upstream again.
+  Streaming and non-streaming entries share one key space but never cross:
+  a JSON entry is only served to non-streaming requests and an SSE entry
+  only to streaming requests.
 - Optional `prefix_order` moves system messages first for stable keys and
   stable upstream prompt-cache prefixes.
 - Optional `prompt_cache` (Anthropic outbound only) injects

@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -335,6 +336,13 @@ func (h *Handlers) relayStream(ctx context.Context, w http.ResponseWriter, baseU
 // first-byte success the error is wrapped as a stream abort (failover must
 // not retry).
 func (h *Handlers) streamRelay(w http.ResponseWriter, resp *http.Response, from, to apiFormat) (streamUsage, error) {
+	// Capture client-dialect bytes for the streaming replay cache while
+	// relaying. The wrapper tees every successful Write; on any write
+	// failure (client went away) capture is abandoned so a truncated stream
+	// can never be cached.
+	cap := &captureWriter{ResponseWriter: w, max: 8 << 20}
+	w = cap
+
 	// Copy headers from upstream.
 	for k, vv := range resp.Header {
 		for _, v := range vv {
@@ -357,9 +365,14 @@ func (h *Handlers) streamRelay(w http.ResponseWriter, resp *http.Response, from,
 		sniffer.drainCarry()
 		if err != nil {
 			// Failed before any byte reached the client: retryable.
+			// ErrAborted means bytes already reached the client: surface as
+			// the gateway's stream-abort contract (no failover, no caching).
+			if errors.Is(err, dialect.ErrAborted) {
+				return streamUsage{}, router.StreamAborted()
+			}
 			return streamUsage{}, err
 		}
-		return sniffer.usage(), nil
+		return sniffer.usage().withCaptured(cap), nil
 	}
 
 	// Same-kind OpenAI: guarantee the client always receives a terminal
@@ -378,7 +391,7 @@ func (h *Handlers) streamRelay(w http.ResponseWriter, resp *http.Response, from,
 		if err != nil {
 			return streamUsage{}, err
 		}
-		return sniffer.usage(), nil
+		return sniffer.usage().withCaptured(cap), nil
 	}
 
 	buf := make([]byte, 32*1024)
@@ -403,7 +416,7 @@ func (h *Handlers) streamRelay(w http.ResponseWriter, resp *http.Response, from,
 		if rerr != nil {
 			if rerr == io.EOF {
 				sniffer.drainCarry()
-				return sniffer.usage(), nil
+				return sniffer.usage().withCaptured(cap), nil
 			}
 			if firstByte {
 				// Failed before any byte reached the client: retryable.
@@ -418,6 +431,46 @@ func (h *Handlers) streamRelay(w http.ResponseWriter, resp *http.Response, from,
 // carries finish_reason ("stop"); injected when the upstream ended the stream
 // without sending one.
 var syntheticFinishChunk = []byte(`data: {"object":"chat.completion.chunk","choices":[{"index":0,"delta":{},"finish_reason":"stop"}]}` + "\n\n")
+
+// captureWriter tees bytes written to the client into a bounded buffer for
+// the streaming replay cache. Implements http.Flusher unconditionally so the
+// relay's flusher lookup keeps working through the wrapper.
+type captureWriter struct {
+	http.ResponseWriter
+	buf    []byte
+	max    int
+	failed bool
+}
+
+func (c *captureWriter) Write(p []byte) (int, error) {
+	n, err := c.ResponseWriter.Write(p)
+	if err != nil {
+		c.failed = true // client gone: never cache a truncated stream
+		return n, err
+	}
+	if !c.failed && len(c.buf) < c.max {
+		room := c.max - len(c.buf)
+		if len(p) > room {
+			p = p[:room]
+		}
+		c.buf = append(c.buf, p...)
+	}
+	return n, nil
+}
+
+func (c *captureWriter) Flush() {
+	if f, ok := c.ResponseWriter.(http.Flusher); ok {
+		f.Flush()
+	}
+}
+
+// withCaptured attaches the captured bytes to a successful stream usage.
+func (u streamUsage) withCaptured(c *captureWriter) streamUsage {
+	if !c.failed && len(c.buf) > 0 {
+		u.captured = c.buf
+	}
+	return u
+}
 
 // relayOpenAIGuaranteeFinish reads the upstream SSE stream and writes it to
 // the client frame-by-frame, guaranteeing that a chunk carrying finish_reason
@@ -454,7 +507,11 @@ func relayOpenAIGuaranteeFinish(w io.Writer, upstream io.Reader, flush func()) e
 				}
 				return nil
 			}
-			return nil // upstream read error after bytes were already relayed
+			// Upstream died mid-stream after bytes were relayed: not
+			// retryable (client has partial data), but must NOT be treated
+			// as a clean end — otherwise the truncated stream would be
+			// cached as a replay entry.
+			return router.StreamAborted()
 		}
 	}
 }
