@@ -395,7 +395,6 @@ func (h *Handlers) streamRelay(w http.ResponseWriter, resp *http.Response, from,
 	}
 
 	buf := make([]byte, 32*1024)
-	written := int64(0)
 	firstByte := true
 	for {
 		n, rerr := sniffer.Read(buf)
@@ -404,13 +403,11 @@ func (h *Handlers) streamRelay(w http.ResponseWriter, resp *http.Response, from,
 				// Client went away mid-stream: not an upstream failure.
 				return streamUsage{}, nil
 			}
-			written += int64(n)
 			if firstByte {
 				firstByte = false
 			}
-			if flusher != nil && written >= flushInterval {
+			if flusher != nil {
 				flusher.Flush()
-				written = 0
 			}
 		}
 		if rerr != nil {
