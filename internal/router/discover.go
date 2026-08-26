@@ -32,9 +32,9 @@ type modelsResponse struct {
 func discoveryHTTPClient() *http.Client {
 	transport := &http.Transport{
 		Proxy:                 http.ProxyFromEnvironment,
-		DialContext:           (&net.Dialer{Timeout: 10 * time.Second, KeepAlive: 30 * time.Second}).DialContext,
-		TLSHandshakeTimeout:   10 * time.Second,
-		ResponseHeaderTimeout: 60 * time.Second,
+		DialContext:           (&net.Dialer{Timeout: 5 * time.Second, KeepAlive: 30 * time.Second}).DialContext,
+		TLSHandshakeTimeout:   5 * time.Second,
+		ResponseHeaderTimeout: 20 * time.Second,
 		MaxIdleConns:          32,
 		MaxIdleConnsPerHost:   8,
 		IdleConnTimeout:       90 * time.Second,
