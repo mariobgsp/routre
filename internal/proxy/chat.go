@@ -25,7 +25,7 @@ import (
 // attemptTimeout bounds a single non-streaming upstream attempt. Streaming
 // relays are exempt (they can legitimately run for minutes; the transport
 // already bounds dial + response headers).
-const attemptTimeout = 120 * time.Second
+const attemptTimeout = 30 * time.Second
 
 // retryTransientAttempts: how many times a candidate is retried on a
 // transient failure (network error or 5xx) before failover moves on.

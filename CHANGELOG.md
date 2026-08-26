@@ -12,6 +12,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 > (2026-08-25). Sections marked `legacy` use the pre-rebrand
 > routre-cli numbering and are kept for history only.
 
+## [0.2.3] — 2026-08-26
+
+### Fixed
+
+- **Slow `all_failed` failover (`28-73s` → `~3s`).** Transport `ResponseHeaderTimeout` `60s→20s`, `Dial`/`TLS` `10s→5s`, per-attempt `120s→30s` (streaming exempt). 5-provider cascade now completes quickly instead of stacking timeouts. Root cause of the reported “slow through routre”.
+
 ## [0.2.2] — 2026-08-26
 
 ### Fixed
