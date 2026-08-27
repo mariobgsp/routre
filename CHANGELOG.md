@@ -12,6 +12,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 > (2026-08-25). Sections marked `legacy` use the pre-rebrand
 > routre-cli numbering and are kept for history only.
 
+## [0.3.3] — 2026-08-28
+
+### Changed
+
+- **README rewritten** — new "Latest (v0.3.2)" callout block summarises enriched 503, doctor, per-phase observability, latency hardening, candidateRunner, double-retry, and debug trace. Architecture section updated to describe the full pipeline (format detect → RTK → cache → router → runner → dialect → relay) and the new observability surface. Project layout adds `internal/proxy/dialect`, `internal/proxy/failures`, and the `candidateRunner` deep module. Observability section documents the new `dial_ms` / `headers_ms` / `ttfb_ms` / `total_ms` JSONL fields.
+- **Architecture diagram** — `docs/architecture.puml` rewritten with white background, larger landscape layout, and comprehensive detail (full request pipeline, observability, persistence, providers, and per-component notes). Re-rendered PNG at 4022×1551.
+
 ## [0.3.2] — 2026-08-28
 
 ### Changed
