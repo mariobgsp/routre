@@ -113,6 +113,21 @@ func (h *Handlers) route(w http.ResponseWriter, r *http.Request, api apiFormat) 
 	// Request-log + metrics emission on every exit path.
 	logReq := func(e reqlog.Entry) {
 		e.LatencyMS = time.Since(start).Milliseconds()
+		// Per-phase observability foundation (latency survey #4).
+		// Only the successful upstream attempt's phases are
+		// populated; cache-served requests and pre-pipeline errors
+		// leave these zero. TotalMS is the upstream-call wall
+		// time (dial + headers + first body + body, depending on
+		// streaming shape). Future httptrace work will split
+		// this into DialMS/HeadersMS/TTFBMS.
+		if h.pipeline != nil {
+			if ph := h.pipeline.LastPhases(); ph != nil {
+				e.DialMS = ph.DialMS
+				e.HeadersMS = ph.HeadersMS
+				e.TTFBMS = ph.TTFBMS
+				e.TotalMS = ph.TotalMS
+			}
+		}
 		reqlog.Write(e)
 	}
 

@@ -8,18 +8,7 @@ import (
 	"github.com/mariobgsp/routre/internal/router"
 )
 
-// Phases records the wall-clock checkpoints for one upstream attempt.
-// Latency survey #4: per-phase observability is the foundation for
-// diagnosing TTFB regressions. The fields are populated by eval, not
-// by the runner; the runner just passes them through. Streaming
-// eval populates all three; non-streaming eval sets Total only
-// (dial + headers + first body all complete before returning).
-type Phases struct {
-	DialMS    int64 // time from start to first byte of HTTP request on the wire
-	HeadersMS int64 // time to receive response headers (Do returns)
-	TTFBMS    int64 // time to first body byte (streaming only)
-	TotalMS   int64 // time for the whole attempt (success or failure)
-}
+// Phases moved to phases.go (shared with pipeline).
 
 // evalResult is the per-attempt outcome returned by an eval callback to the
 // candidateRunner. The runner only needs to know: did this attempt succeed?

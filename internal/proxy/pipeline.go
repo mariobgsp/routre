@@ -26,10 +26,6 @@ import (
 
 // Pipeline is the deep module that hides the 7-step request pipeline
 // Deep: small interface, large hidden behavior. Inject deps, don't reach into Handlers.
-type Phases struct {
-	TotalMS int64 `json:"total_ms"`
-}
-
 type Pipeline struct {
 	handlers   *Handlers
 	cfg        *config.Store
