@@ -12,6 +12,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 > (2026-08-25). Sections marked `legacy` use the pre-rebrand
 > routre-cli numbering and are kept for history only.
 
+## [0.3.2] — 2026-08-28
+
+### Changed
+
+- **Plans moved to vault** — `docs/PLAN.md`, `docs/SPEC.md`, `specs/PLAN-*.md`, `specs/tech-architecture/tech-stack.md` moved to `~/Projects/brain/plans/routre/`. `.gitignore` updated to keep plans out of the repo. `specs/tech-architecture/` and `specs/PLAN-*.md` are no longer tracked.
+- **Unused imports removed** — `io`, `strings`, `reqlog` dropped from `internal/proxy/pipeline.go`; leftover `var _ =` placeholder lines removed.
+
 ## [0.3.1] — 2026-08-27
 
 ### Fixed

@@ -5,9 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"io"
 	"net/http"
-	"strings"
 	"time"
 
 	"github.com/mariobgsp/routre/internal/cache"
@@ -16,7 +14,6 @@ import (
 	"github.com/mariobgsp/routre/internal/metrics"
 	"github.com/mariobgsp/routre/internal/proxy/dialect"
 	"github.com/mariobgsp/routre/internal/proxy/failures"
-	"github.com/mariobgsp/routre/internal/reqlog"
 	"github.com/mariobgsp/routre/internal/router"
 	"github.com/mariobgsp/routre/internal/rtk"
 	"github.com/mariobgsp/routre/internal/tokenize"
@@ -642,6 +639,3 @@ func (r *responseRecorder) Write(b []byte) (int, error) { return r.body.Write(b)
 func (r *responseRecorder) WriteHeader(statusCode int)  { r.status = statusCode }
 
 var _ = json.Marshal
-var _ = strings.Contains
-var _ = io.Copy
-var _ = reqlog.Write

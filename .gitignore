@@ -15,3 +15,9 @@ npm/@*/*/binary/
 docs/superpowers/
 dist-release/
 .pi/
+# PLANs and design docs live in the knowledge vault, not in the repo
+docs/PLAN.md
+docs/SPEC.md
+specs/PLAN-*.md
+specs/SPEC-*.md
+specs/tech-architecture/
