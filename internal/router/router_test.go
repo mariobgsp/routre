@@ -380,6 +380,7 @@ func TestClassifyStatusBodyOverloaded(t *testing.T) {
 		{429, `{"error":{"type":"rate_limit_reached","message":"rate limit reached"}}`, ErrOverloaded, "429 with rate_limit text"},
 		{503, `{"error":{"type":"server_error","message":"internal"}}`, ErrServer, "plain 5xx stays ErrServer"},
 		{529, `{"error":{"type":"api_error","message":"gateway timeout"}}`, ErrServer, "529 without overloaded text stays ErrServer"},
+		{529, ``, ErrOverloaded, "529 with empty body (streaming) is overloaded"},
 		{400, `{"error":{"message":"overloaded"}}`, ErrClient, "400 stays ErrClient even with overloaded text"},
 	}
 	for _, c := range cases {

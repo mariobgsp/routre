@@ -222,7 +222,7 @@ func (p *Pipeline) streamCandidate(ctx context.Context, w http.ResponseWriter, h
 	// for minutes); the transport bounds dial + response headers.
 	streamCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
-	status, _, _, retryAfter, susage, rerr := p.handlers.relay(streamCtx, w, cand.Provider.Provider.BaseURL, dummyReq, payload, true, kind, cand.Provider.Provider.APIKeyEnv, api, clientFmt)
+	status, errBody, _, retryAfter, susage, rerr := p.handlers.relay(streamCtx, w, cand.Provider.Provider.BaseURL, dummyReq, payload, true, kind, cand.Provider.Provider.APIKeyEnv, api, clientFmt)
 	if rerr != nil {
 		if router.IsStreamAborted(rerr) {
 			// Client already received bytes; failover would duplicate output.
@@ -258,7 +258,7 @@ func (p *Pipeline) streamCandidate(ctx context.Context, w http.ResponseWriter, h
 		}
 		return true, nil, 0
 	}
-	class := router.ClassifyStatusBody(status, nil)
+	class := router.ClassifyStatusBody(status, errBody)
 	if class == router.ErrAuth {
 		if refreshed := p.handlers.refreshCredentials(cand.Provider.Provider.APIKeyEnv); refreshed {
 			if ok, rerr, c := p.streamCandidate(ctx, w, header, api, cand, requested, body, processed, client, rtkSaved, clientFmt); ok || rerr != nil {

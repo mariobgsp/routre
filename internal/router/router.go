@@ -138,6 +138,9 @@ func ClassifyStatusBody(status int, body []byte) ErrClass {
 	if c == ErrAuth && bodyHasCredits(body) {
 		return ErrCredits
 	}
+	if status == 529 && len(body) == 0 {
+		return ErrOverloaded
+	}
 	if (c == ErrServer || c == ErrRateLimit) && bodyHasOverloaded(body) {
 		return ErrOverloaded
 	}
