@@ -94,6 +94,12 @@ type Config struct {
 	Auth AuthConfig `json:"auth"`
 	// RequestLog: path of the per-request JSONL log ("" = disabled).
 	RequestLog string `json:"request_log"`
+	// HealthCheck: optional periodic per-provider probe so cooldown /
+	// availability changes are visible between real requests. Disabled
+	// by default (a noisy provider that flaps is worse than a silent
+	// one). IntervalSeconds=0 disables. ProbeModel is the model used to
+	// exercise each provider; "" = first listed model.
+	HealthCheck HealthCheckConfig `json:"health_check"`
 	// PreferredModel: the user's default model (their preferred provider).
 	// Informational for routing — clients request it explicitly — but used
 	// by `setup` to seed the config and by `check` to display the default.
@@ -118,6 +124,15 @@ type Config struct {
 	Budgets map[string]float64 `json:"budgets,omitempty"`
 }
 
+// HealthCheckConfig controls the optional per-provider periodic probe.
+type HealthCheckConfig struct {
+	Enabled         bool `json:"enabled"`
+	IntervalSeconds int  `json:"interval_seconds"`
+	// ProbeModel overrides the model used for probes. When empty, the
+	// first listed model on each provider is used.
+	ProbeModel string `json:"probe_model,omitempty"`
+}
+
 // Default returns the built-in defaults (3-tier shape must come from the
 // user config; defaults apply to optional fields).
 func Default() Config {
@@ -130,6 +145,9 @@ func Default() Config {
 		// Zero-config model handling: unknown/future models forward to all
 		// providers and fail over, instead of requiring a whitelist edit.
 		ForwardUnknown: true,
+		// Periodic health probes: off by default. Turn on to surface
+		// provider outages between real requests.
+		HealthCheck: HealthCheckConfig{Enabled: false, IntervalSeconds: 30},
 	}
 }
 

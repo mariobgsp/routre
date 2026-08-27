@@ -15,6 +15,7 @@ import (
 	"github.com/mariobgsp/routre/internal/keystore"
 	"github.com/mariobgsp/routre/internal/metrics"
 	"github.com/mariobgsp/routre/internal/proxy/dialect"
+	"github.com/mariobgsp/routre/internal/proxy/failures"
 	"github.com/mariobgsp/routre/internal/reqlog"
 	"github.com/mariobgsp/routre/internal/router"
 	"github.com/mariobgsp/routre/internal/rtk"
@@ -131,10 +132,25 @@ func (p *Pipeline) Stream(ctx context.Context, req Request, w http.ResponseWrite
 	p.metrics.CacheMiss()
 	cands := p.router.CandidatesWithFallbacks(requested, p.cfg.Get().Fallbacks)
 	if len(cands) == 0 {
-		return fmt.Errorf("no candidates")
+		// No candidate was even eligible (model unlisted or every serving
+		// provider is in cooldown). Surface the reason on the wire so the
+		// user can see it without a separate status call.
+		if retryAfter, served := p.router.MinCooldownForModel(requested, p.cfg.Get().ForwardUnknown); served {
+			failures.Render(w, failures.KindProvidersUnavailable, requested,
+				[]failures.Outcome{{Provider: "*", Cooldown: retryAfter}}, retryAfter)
+			return nil
+		}
+		failures.Render(w, failures.KindModelNotFound, requested, nil, 0)
+		return nil
 	}
+	// Per-cand retry + auth refresh + tryLog accumulation stay inline
+	// in this Stream path. The candidateRunner (internal/proxy/runner.go)
+	// is a private struct that captures this exact policy; the eval
+	// wiring is queued for a follow-up PR once the runner has its own
+	// unit tests asserting the retry/refresh/Emitted contract.
 	var lastErr error
 	var lastClass router.ErrClass
+	var tryLog []failures.Outcome
 	for _, cand := range cands {
 		attempts := 1 + retryTransientAttempts
 		for attempt := 0; attempt < attempts; attempt++ {
@@ -156,11 +172,24 @@ func (p *Pipeline) Stream(ctx context.Context, req Request, w http.ResponseWrite
 				}
 			}
 		}
+		entry := failures.Outcome{
+			Provider: cand.Provider.Provider.Name,
+			Kind:     cand.Provider.Provider.Kind,
+			Class:    lastClass.String(),
+		}
+		if lastErr != nil {
+			entry.Err = lastErr.Error()
+		}
+		if cd := p.router.CooldownRemaining(cand.Provider); cd > 0 {
+			entry.Cooldown = cd
+		}
+		tryLog = append(tryLog, entry)
 	}
-	if lastErr != nil {
-		return lastErr
-	}
-	return fmt.Errorf("all providers failed")
+	// Every candidate failed pre-first-byte (streamCandidate never wrote
+	// anything to w in that case). Render the per-provider breakdown so
+	// the user sees the reasons, not a generic "all providers failed".
+	failures.Render(w, failures.KindAllFailed, requested, tryLog, 5*time.Second)
+	return nil
 }
 
 func (p *Pipeline) streamCandidate(ctx context.Context, w http.ResponseWriter, header http.Header, api apiFormat, cand router.Candidate, requested string, body []byte, processed []byte, client string, rtkSaved int, clientFmt apiFormat) (bool, error, router.ErrClass) {
@@ -303,13 +332,17 @@ func (p *Pipeline) processInternal(ctx context.Context, req Request) (Response, 
 			if retryAfter < time.Second {
 				retryAfter = time.Second
 			}
-			return Response{StatusCode: 503, Body: []byte(fmt.Sprintf(`{"error":{"message":"all providers that serve model %q are cooling down (retry in %s)","type":"providers_unavailable"}}`, requested, retryAfter.Round(time.Second))), Header: http.Header{"Retry-After": []string{fmt.Sprintf("%d", int(retryAfter.Seconds()))}}}, nil
+			body, hdr := failures.RenderBody(failures.KindProvidersUnavailable, requested,
+				[]failures.Outcome{{Provider: "*", Cooldown: retryAfter}}, retryAfter)
+			return Response{StatusCode: 503, Body: body, Header: hdr}, nil
 		}
-		return Response{StatusCode: 503, Body: []byte(fmt.Sprintf(`{"error":{"message":"no configured provider serves model %q (check config tiers/models)","type":"model_not_found"}}`, requested))}, nil
+		body, _ := failures.RenderBody(failures.KindModelNotFound, requested, nil, 0)
+		return Response{StatusCode: 503, Body: body}, nil
 	}
 	if !streaming {
 		var lastErr error
 		var lastClass router.ErrClass
+		var tryLog []failures.Outcome
 		for _, cand := range cands {
 			attempts := 1 + retryTransientAttempts
 			for attempt := 0; attempt < attempts; attempt++ {
@@ -330,14 +363,70 @@ func (p *Pipeline) processInternal(ctx context.Context, req Request) (Response, 
 				lastErr = err
 				lastClass = class
 			}
+			entry := failures.Outcome{
+				Provider: cand.Provider.Provider.Name,
+				Kind:     cand.Provider.Provider.Kind,
+				Class:    lastClass.String(),
+			}
+			if lastErr != nil {
+				entry.Err = lastErr.Error()
+			}
+			if cd := p.router.CooldownRemaining(cand.Provider); cd > 0 {
+				entry.Cooldown = cd
+			}
+			tryLog = append(tryLog, entry)
 		}
-		msg := "all providers unavailable"
-		if lastErr != nil {
-			msg = lastErr.Error()
+		// Re-shape the 503 into a more honest status when the failure
+		// pattern is uniform. If every candidate returned 4xx (the
+		// provider doesn't serve this model), the user should see a
+		// 404 model_not_found, not a 503 outage. If every candidate
+		// returned 401/403, the user should see a 502 (their keys are
+		// bad for this model), not a 503. Only the mixed / server-side
+		// case stays as 503.
+		allClient, allAuth := true, true
+		for _, e := range tryLog {
+			if e.Class != router.ErrClient.String() {
+				allClient = false
+			}
+			if e.Class != router.ErrAuth.String() {
+				allAuth = false
+			}
 		}
-		return Response{StatusCode: 503, Body: []byte(fmt.Sprintf(`{"error":{"message":%q,"type":"all_providers_failed"}}`, msg)), Header: http.Header{"Retry-After": []string{"5"}}}, nil
+		switch {
+		case allClient && len(tryLog) > 0:
+			// Every provider rejected the model (400/404/422). This
+			// is a model-not-found, not a service outage.
+			body, _ := failures.RenderBody(failures.KindModelNotFound, requested, tryLog, 0)
+			return Response{StatusCode: 404, Body: body, Header: http.Header{"Content-Type": []string{"application/json"}}, Provider: tryLog[0].Provider}, nil
+		case allAuth && len(tryLog) > 0:
+			// Every provider returned 401/403: the configured keys
+			// don't authorize this model. Surface as 502 (bad
+			// gateway) so the user knows the gateway is fine, the
+			// auth is wrong.
+			body := []byte(fmt.Sprintf(`{"error":{"message":"all configured providers rejected the request (auth). check API keys and model access.","type":"all_providers_unauthorized","model":%q,"attempts":%s}}`,
+				requested, mustJSON(tryLog)))
+			return Response{StatusCode: 502, Body: body, Header: http.Header{"Content-Type": []string{"application/json"}}, Provider: tryLog[0].Provider}, nil
+		}
+		// Mixed classes (some 5xx, some 4xx, some auth) — genuine
+		// outage. Surface as 503 with the per-provider breakdown.
+		prov := ""
+		if len(tryLog) > 0 {
+			prov = tryLog[0].Provider
+		}
+		body, hdr := failures.RenderBody(failures.KindAllFailed, requested, tryLog, 5*time.Second)
+		return Response{StatusCode: 503, Body: body, Header: hdr, Provider: prov}, nil
 	}
 	return Response{}, fmt.Errorf("streaming request: use Stream")
+}
+
+// mustJSON marshals v or returns a literal null. Used for the
+// all-auth response body where failures.Outcome[] must serialize.
+func mustJSON(v any) string {
+	b, err := json.Marshal(v)
+	if err != nil {
+		return "null"
+	}
+	return string(b)
 }
 
 // crossKindRequest reports whether an inbound request of dialect `api`

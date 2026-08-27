@@ -12,7 +12,7 @@ import (
 
 // Store is a concurrency-safe in-memory key registry.
 type Store struct {
-	mu   sync.Mutex
+	mu   sync.RWMutex
 	keys map[string]string
 }
 
@@ -23,8 +23,8 @@ func New() *Store {
 
 // Get returns the value and presence for envName.
 func (s *Store) Get(envName string) (string, bool) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
+	s.mu.RLock()
+	defer s.mu.RUnlock()
 	v, ok := s.keys[envName]
 	return v, ok
 }
@@ -34,6 +34,18 @@ func (s *Store) Set(envName, value string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.keys[envName] = value
+}
+
+// Keys returns a snapshot of every stored env name. Order is
+// unspecified; intended for diagnostics.
+func (s *Store) Keys() []string {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	out := make([]string, 0, len(s.keys))
+	for k := range s.keys {
+		out = append(out, k)
+	}
+	return out
 }
 
 // Refresh re-reads the env file and, if envName's value rotated there,

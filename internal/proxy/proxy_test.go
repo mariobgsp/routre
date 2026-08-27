@@ -462,6 +462,119 @@ func TestStreamingUpstream429Surfaces(t *testing.T) {
 	}
 }
 
+// TestStreamingAllProvidersFailedIncludesReasons: when every candidate
+// fails before the first byte, the 503 body must list the per-provider
+// reason (class + message + cooldown remaining) so the user can see why
+// without a separate `routre status` call.
+func TestStreamingAllProvidersFailedIncludesReasons(t *testing.T) {
+	a, _ := mock.New("a")
+	defer a.Close()
+	b, _ := mock.New("b")
+	defer b.Close()
+	base, _ := testEnv(t, buildConfigWithMocks(t, map[string]*mock.Server{"a": a, "b": b}))
+
+	a.SetFail(503)
+	b.SetFail(503)
+	resp, data := post(t, base, "/v1/chat/completions", chatBody(true, ""))
+	if resp.StatusCode != 503 {
+		t.Fatalf("expected 503, got %d: %s", resp.StatusCode, data)
+	}
+	if !strings.Contains(string(data), "all_providers_failed") {
+		t.Fatalf("expected all_providers_failed, got: %s", data)
+	}
+	// Per-provider breakdown must name both providers and the failure class.
+	if !strings.Contains(string(data), `"provider":"a"`) || !strings.Contains(string(data), `"provider":"b"`) {
+		t.Fatalf("expected both providers in attempts[], got: %s", data)
+	}
+	if !strings.Contains(string(data), `"class":"server"`) {
+		t.Fatalf("expected server class for 503, got: %s", data)
+	}
+	if !strings.Contains(string(data), `"model":"m"`) {
+		t.Fatalf("expected requested model in body, got: %s", data)
+	}
+}
+
+// TestNonStreamingAllProvidersFailedIncludesReasons: same shape for the
+// non-streaming path.
+func TestNonStreamingAllProvidersFailedIncludesReasons(t *testing.T) {
+	a, _ := mock.New("a")
+	defer a.Close()
+	b, _ := mock.New("b")
+	defer b.Close()
+	base, _ := testEnv(t, buildConfigWithMocks(t, map[string]*mock.Server{"a": a, "b": b}))
+
+	a.SetFail(503)
+	b.SetFail(503)
+	resp, data := post(t, base, "/v1/chat/completions", chatBody(false, ""))
+	if resp.StatusCode != 503 {
+		t.Fatalf("expected 503, got %d: %s", resp.StatusCode, data)
+	}
+	if !strings.Contains(string(data), `"provider":"a"`) || !strings.Contains(string(data), `"provider":"b"`) {
+		t.Fatalf("expected both providers in attempts[], got: %s", data)
+	}
+	if !strings.Contains(string(data), `"class":"server"`) {
+		t.Fatalf("expected server class for 503, got: %s", data)
+	}
+}
+
+// TestProvidersUnavailableIncludesModelAndCooldown: the cooldown-driven
+// 503 (cands==0 but a serving provider is in cooldown) must include the
+// model name and cooldown_seconds, not just a free-form message.
+func TestProvidersUnavailableIncludesModelAndCooldown(t *testing.T) {
+	a, _ := mock.New("a")
+	defer a.Close()
+	b, _ := mock.New("b")
+	defer b.Close()
+	base, _ := testEnv(t, buildConfigWithMocks(t, map[string]*mock.Server{"a": a, "b": b}))
+
+	// Drive both providers into cooldown: keep them failing so every
+	// request escalates the failure count.
+	a.SetFail(503)
+	b.SetFail(503)
+	for i := 0; i < 4; i++ {
+		_, _ = post(t, base, "/v1/chat/completions", chatBody(false, ""))
+	}
+	// Now every provider is in cooldown; the next request must surface it
+	// with model + cooldown_seconds.
+	resp, data := post(t, base, "/v1/chat/completions", chatBody(false, ""))
+	if resp.StatusCode != 503 {
+		t.Fatalf("expected 503 providers_unavailable, got %d: %s", resp.StatusCode, data)
+	}
+	if !strings.Contains(string(data), "providers_unavailable") {
+		t.Fatalf("expected providers_unavailable, got: %s", data)
+	}
+	if !strings.Contains(string(data), `"model":"m"`) {
+		t.Fatalf("expected model in body, got: %s", data)
+	}
+	if !strings.Contains(string(data), `"cooldown_seconds":`) {
+		t.Fatalf("expected cooldown_seconds in body, got: %s", data)
+	}
+	if ra := resp.Header.Get("Retry-After"); ra == "" {
+		t.Fatalf("expected Retry-After header, got none")
+	}
+}
+
+// TestModelNotFoundIncludesModel: a model no provider lists must surface
+// the model name in the 503 body so the user can see what was rejected.
+func TestModelNotFoundIncludesModel(t *testing.T) {
+	a, _ := mock.New("a")
+	defer a.Close()
+	cfg := strings.Replace(buildConfigWithMocks(t, map[string]*mock.Server{"a": a}),
+		`"tiers":[`, `"forward_unknown":false,"tiers":[`, 1)
+	base, _ := testEnv(t, cfg)
+	body := bytes.Replace(chatBody(false, ""), []byte(`"m"`), []byte(`"no-such-model"`), 1)
+	resp, data := post(t, base, "/v1/chat/completions", body)
+	if resp.StatusCode != 503 {
+		t.Fatalf("expected 503, got %d: %s", resp.StatusCode, data)
+	}
+	if !strings.Contains(string(data), "model_not_found") {
+		t.Fatalf("expected model_not_found, got: %s", data)
+	}
+	if !strings.Contains(string(data), `"model":"no-such-model"`) {
+		t.Fatalf("expected model name in body, got: %s", data)
+	}
+}
+
 // TestModelNotConfiguredVsCooldown: a model no provider lists must 503
 // with model_not_found; a model every serving provider is cooling down on
 // must 503 with providers_unavailable + Retry-After (never the misleading

@@ -84,24 +84,13 @@ func NewHandlers(st *config.Store, rtr *router.Router, cch *cache.Cache, tk *rtk
 			}
 		}
 	}
+	// Router Reset needs tier translation (config.Tier -> router.TierInput),
+	// so it lives in the OnLoad closure alongside the log line.
+	// Cache / RTK / reqlog are fully covered by Register above — OnLoad
+	// does not duplicate them. See candidate #2 in PLAN.
 	st.SetOnLoad(func(c config.Config) {
-		// Rebuild router (provider lists may have changed). Cooldowns reset.
 		rtr.Reset(tiersFromConfig(c), rtrPolicy(rtr))
-		// Reset preserves forwardUnknown; re-apply so config EDITS to it take
-		// effect on reload without a restart.
 		rtr.SetForwardUnknown(c.ForwardUnknown)
-		cch.Update(cache.Config{
-			Enabled:     c.Cache.Enabled,
-			MaxEntries:  c.Cache.MaxEntries,
-			TTLSeconds:  c.Cache.TTLSeconds,
-			PrefixOrder: c.Cache.PrefixOrder,
-		})
-		tk.Update(rtk.Config{
-			Enabled:  c.RTK.Enabled,
-			MinBytes: c.RTK.MinBytes,
-			MaxBytes: c.RTK.MaxBytes,
-		})
-		reqlog.SetPath(c.RequestLog)
 		logger.Printf("config reloaded: %d tiers, %d providers", len(c.Tiers), rtr.Len())
 	})
 	return h

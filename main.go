@@ -8,6 +8,7 @@
 //
 //	routre serve  [-config config.json] [-port :20128]
 //	routre check  [-config config.json]        # validate config + keys
+//	routre doctor [-config config.json]        # probe every provider for 503s
 //	routre start  [--autostart] [-config config.json]   # start daemon (+ enable auto-start)
 //	routre stop   [--autostart] [-config config.json]   # stop daemon (+ disable auto-start)
 //	routre restart [-config config.json]       # restart the daemon
@@ -22,6 +23,7 @@ import (
 	"flag"
 	"fmt"
 	"log"
+	"net/http"
 	"os"
 	"os/signal"
 	"path/filepath"
@@ -31,6 +33,8 @@ import (
 
 	"github.com/mariobgsp/routre/internal/cache"
 	"github.com/mariobgsp/routre/internal/config"
+	"github.com/mariobgsp/routre/internal/keystore"
+	"github.com/mariobgsp/routre/internal/probe"
 	"github.com/mariobgsp/routre/internal/proxy"
 	"github.com/mariobgsp/routre/internal/reqlog"
 	"github.com/mariobgsp/routre/internal/router"
@@ -89,6 +93,9 @@ func run(args []string, logger *log.Logger) error {
 	case "check":
 		return cmdCheck(*cfgPath, logger)
 
+	case "doctor":
+		return cmdDoctor(*cfgPath, logger)
+
 	case "start":
 		return cmdStart(*cfgPath, *autostart, logger)
 
@@ -111,7 +118,7 @@ func run(args []string, logger *log.Logger) error {
 		return cmdBench(*cfgPath, *target, logger)
 
 	default:
-		return fmt.Errorf("unknown subcommand %q (want setup, serve, check, start, stop, restart, list, logs, bench, version)", sub)
+		return fmt.Errorf("unknown subcommand %q (want setup, serve, check, doctor, start, stop, restart, list, logs, bench, version)", sub)
 	}
 }
 
@@ -186,6 +193,22 @@ func cmdServe(cfgPath, port string, logger *log.Logger) error {
 	reqlog.SetPath(cfg.RequestLog)
 	srv := proxy.New(h, logger)
 
+	// Optional periodic health probe. Stateless Probe + ticker Loop.
+	// Probes never touch router cooldown, cache, usage, or metrics — they
+	// only write reqlog lines with client="probe". Off by default; enable
+	// via `health_check.enabled` in config.
+	var probeRunner *probe.Runner
+	if cfg.HealthCheck.Enabled && cfg.HealthCheck.IntervalSeconds > 0 {
+		probeRunner = probe.NewWithStore(probe.Config{
+			Logger:     logger,
+			HTTPClient: h.HTTPClient,
+			Keys:       h.Keys,
+			ProbeModel: cfg.HealthCheck.ProbeModel,
+		}, st)
+		probeRunner.Start(time.Duration(cfg.HealthCheck.IntervalSeconds) * time.Second)
+		logger.Printf("health probe: enabled (interval=%ds, model=%q)", cfg.HealthCheck.IntervalSeconds, cfg.HealthCheck.ProbeModel)
+	}
+
 	// When gateway auth is enabled, seed the shared secret into the keystore
 	// and mint a per-process CLI token so `list`/`check`/`logs` keep working.
 	if cfg.Auth.SecretEnv != "" {
@@ -237,6 +260,9 @@ func cmdServe(cfgPath, port string, logger *log.Logger) error {
 				if err := use.Save(); err != nil {
 					logger.Printf("usage save failed: %v", err)
 				}
+				if probeRunner != nil {
+					probeRunner.Stop()
+				}
 				ctxTimeout := 5 * time.Second
 				_ = srv.Shutdown(ctxTimeout)
 				<-done
@@ -246,6 +272,65 @@ func cmdServe(cfgPath, port string, logger *log.Logger) error {
 			return nil
 		}
 	}
+}
+
+func cmdDoctor(cfgPath string, logger *log.Logger) error {
+	st := config.NewStore(cfgPath)
+	if err := st.Load(); err != nil {
+		return err
+	}
+	cfg := st.Get()
+	if len(cfg.Tiers) == 0 {
+		return fmt.Errorf("no tiers configured")
+	}
+	keys := keystore.New()
+	for _, t := range cfg.Tiers {
+		for _, p := range t.Providers {
+			if v, ok := os.LookupEnv(p.APIKeyEnv); ok {
+				keys.Set(p.APIKeyEnv, v)
+			}
+		}
+	}
+	model := cfg.HealthCheck.ProbeModel
+	prb := probe.NewProbe(probe.Config{Logger: logger, HTTPClient: newDoctorHTTPClient(), Keys: keys, ProbeModel: model})
+	var results []probe.Result
+	for _, t := range cfg.Tiers {
+		for _, p := range t.Providers {
+			if _, ok := keys.Get(p.APIKeyEnv); !ok {
+				results = append(results, probe.Result{Provider: p.Name, Kind: string(p.Kind), Class: "auth", Err: fmt.Errorf("key %s not set", p.APIKeyEnv)})
+				continue
+			}
+			results = append(results, prb.Do(p, model))
+		}
+	}
+	healthy, unhealthy := 0, 0
+	for _, r := range results {
+		status := "OK"
+		if r.Class != "ok" {
+			status = r.Class
+			unhealthy++
+		} else {
+			healthy++
+		}
+		if r.Class == "ok" {
+			logger.Printf("  %-18s %-9s %s (%dms)", r.Provider, r.Kind, status, r.Latency.Milliseconds())
+		} else {
+			logger.Printf("  %-18s %-9s %s status=%d %v", r.Provider, r.Kind, status, r.Status, r.Err)
+		}
+	}
+	logger.Printf("doctor: %d healthy, %d unhealthy (of %d providers)", healthy, unhealthy, len(results))
+	if unhealthy > 0 {
+		return fmt.Errorf("%d unhealthy providers", unhealthy)
+	}
+	return nil
+}
+
+// newDoctorHTTPClient is a dedicated short-timeout client for `routre
+// doctor`. The main daemon's transport is reused for the periodic
+// probe (to share keep-alive) but the one-shot CLI probe gets its own
+// short client so a stuck provider cannot delay other tools.
+func newDoctorHTTPClient() *http.Client {
+	return &http.Client{Timeout: 8 * time.Second}
 }
 
 func cmdCheck(cfgPath string, logger *log.Logger) error {

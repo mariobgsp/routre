@@ -364,6 +364,32 @@ func TestClassifyStatusBodyCredits(t *testing.T) {
 	}
 }
 
+// TestClassifyStatusBodyOverloaded: 5xx/429 with an overloaded-shaped
+// body must classify as ErrOverloaded so the cooldown policy doesn't
+// lock the provider out for minutes on a single blip. Plain 5xx
+// without the body shape stays ErrServer.
+func TestClassifyStatusBodyOverloaded(t *testing.T) {
+	cases := []struct {
+		status int
+		body   string
+		want   ErrClass
+		desc   string
+	}{
+		{529, `{"type":"error","error":{"type":"overloaded_error","message":"Upstream model provider is temporarily unavailable. Please try again in a moment."}}`, ErrOverloaded, "Anthropic 529 with overloaded_error"},
+		{503, `{"error":{"message":"model is currently overloaded, please try again later"}}`, ErrOverloaded, "OpenAI 503 with overloaded text"},
+		{429, `{"error":{"type":"rate_limit_reached","message":"rate limit reached"}}`, ErrOverloaded, "429 with rate_limit text"},
+		{503, `{"error":{"type":"server_error","message":"internal"}}`, ErrServer, "plain 5xx stays ErrServer"},
+		{529, `{"error":{"type":"api_error","message":"gateway timeout"}}`, ErrServer, "529 without overloaded text stays ErrServer"},
+		{400, `{"error":{"message":"overloaded"}}`, ErrClient, "400 stays ErrClient even with overloaded text"},
+	}
+	for _, c := range cases {
+		got := ClassifyStatusBody(c.status, []byte(c.body))
+		if got != c.want {
+			t.Errorf("%s: status=%d body=%q: got %v, want %v", c.desc, c.status, c.body, got, c.want)
+		}
+	}
+}
+
 // TestReportFailureWithBackoffHonorsRetryAfter: an upstream Retry-After
 // acts as a FLOOR on the cooldown, never a ceiling — a long RA dominates
 // the default backoff, a short RA never shortens it. Uses the injected

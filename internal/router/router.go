@@ -48,17 +48,26 @@ const (
 	// ErrStream: failure after the first stream byte — the client already
 	// received a partial response; retrying would duplicate output.
 	ErrStream
+	// ErrOverloaded: 5xx (or 429) with a body that names
+	// "overloaded" / "capacity" / "temporarily unavailable". The
+	// provider is healthy but temporarily out of capacity. Fail over
+	// to the next candidate; do NOT escalate cooldown — a single
+	// overloaded response must not lock the provider out for minutes.
+	// The upstream's Retry-After (when present) is still respected,
+	// but capped at 30s so a long Retry-After doesn't deny service.
+	ErrOverloaded
 )
 
 var errClassNames = map[ErrClass]string{
-	ErrNetwork:   "network",
-	ErrTimeout:   "timeout",
-	ErrRateLimit: "rate-limit",
-	ErrAuth:      "auth",
-	ErrServer:    "server",
-	ErrClient:    "client",
-	ErrCredits:   "credits",
-	ErrStream:    "stream",
+	ErrNetwork:    "network",
+	ErrTimeout:    "timeout",
+	ErrRateLimit:  "rate-limit",
+	ErrAuth:       "auth",
+	ErrServer:     "server",
+	ErrClient:     "client",
+	ErrCredits:    "credits",
+	ErrStream:     "stream",
+	ErrOverloaded: "overloaded",
 }
 
 func (c ErrClass) String() string {
@@ -76,9 +85,15 @@ type CooldownPolicy struct {
 }
 
 // DefaultCooldownPolicy mirrors 9router's error-config: 2s base,
-// exponential, 30min cap.
+// exponential, 5min cap.
+//
+// ponytail: 5min chosen because real-provider transient overloads (Anthropic
+// 529, OpenAI 5xx) clear in seconds-to-minutes; a 30min cap turned a
+// 60-second blip into a half-hour outage. 5min still absorbs a real sustained
+// outage (the exponential backoff saturates by hit 9: 2*2^8=512s≈8.5m →
+// clamped to 5m), but recovers faster once the provider is healthy.
 func DefaultCooldownPolicy() CooldownPolicy {
-	return CooldownPolicy{Base: 2 * time.Second, Max: 30 * time.Minute, MaxHits: 30}
+	return CooldownPolicy{Base: 2 * time.Second, Max: 5 * time.Minute, MaxHits: 30}
 }
 
 // Classify maps an error to a class.
@@ -115,11 +130,16 @@ func ClassifyStatus(status int) ErrClass {
 
 // ClassifyStatusBody maps an HTTP status plus a response body to a class,
 // refining 401s that are actually billing failures (opencode-zen returns
-// 401 with a CreditsError body when the account balance is exhausted).
+// 401 CreditsError when the account balance is exhausted) and 5xx/429
+// that are actually transient "overloaded" responses (Anthropic 529 with
+// overloaded_error, OpenAI "model is currently overloaded", etc.).
 func ClassifyStatusBody(status int, body []byte) ErrClass {
 	c := ClassifyStatus(status)
 	if c == ErrAuth && bodyHasCredits(body) {
 		return ErrCredits
+	}
+	if (c == ErrServer || c == ErrRateLimit) && bodyHasOverloaded(body) {
+		return ErrOverloaded
 	}
 	return c
 }
@@ -131,12 +151,30 @@ func bodyHasCredits(body []byte) bool {
 	return strings.Contains(low, "credit") || strings.Contains(low, "insufficient balance") || strings.Contains(low, "balance")
 }
 
+// bodyHasOverloaded reports whether an error body describes a transient
+// capacity problem. Anthropic 529 ("overloaded_error"), OpenAI 5xx
+// ("model is currently overloaded"), and similar. These get a
+// dedicated class so the gateway's exponential backoff does not lock
+// the provider out for minutes on a single blip.
+func bodyHasOverloaded(body []byte) bool {
+	low := strings.ToLower(string(body))
+	return strings.Contains(low, "overloaded") ||
+		strings.Contains(low, "temporarily unavailable") ||
+		strings.Contains(low, "capacity") ||
+		strings.Contains(low, "try again later") ||
+		strings.Contains(low, "rate limit reached") ||
+		strings.Contains(low, "rate_limit") ||
+		strings.Contains(low, "too many requests")
+}
+
 // IsRetryableClass reports whether a failure should escalate cooldown and
 // trigger failover. Stream aborts and client-caused 4xx do not. Credits
 // failures fail over but never escalate cooldown (see ReportFailure).
+// Overloaded errors fail over with a short Retry-After but do not
+// stack the gateway's own exponential backoff.
 func IsRetryableClass(c ErrClass) bool {
 	switch c {
-	case ErrNetwork, ErrTimeout, ErrRateLimit, ErrAuth, ErrServer, ErrCredits:
+	case ErrNetwork, ErrTimeout, ErrRateLimit, ErrAuth, ErrServer, ErrCredits, ErrOverloaded:
 		return true
 	default:
 		return false
@@ -532,7 +570,27 @@ func (r *Router) ReportFailureWithBackoff(p *ProviderState, class ErrClass, retr
 func (r *Router) reportFailure(p *ProviderState, class ErrClass, retryAfter time.Duration) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
+	// Stream aborts and billing failures do not put the provider in
+	// cooldown — the provider is fine, the user's session is the
+	// problem. ErrOverloaded is the same shape: the provider is
+	// healthy but out of capacity. We honor the upstream's
+	// Retry-After (capped at 30s) so we don't hammer them back into
+	// overload, but we do NOT stack our own exponential backoff.
 	if class == ErrStream || class == ErrCredits {
+		return
+	}
+	if class == ErrOverloaded {
+		// Honor the upstream's Retry-After but cap at 30s. Reset
+		// the failure counter so a single overloaded blip does
+		// not stack with earlier real failures.
+		if retryAfter > 30*time.Second {
+			retryAfter = 30 * time.Second
+		}
+		if retryAfter < r.policy.Base {
+			retryAfter = r.policy.Base
+		}
+		p.until = r.now().Add(retryAfter)
+		p.failures = 0
 		return
 	}
 	if p.failures < r.policy.MaxHits {

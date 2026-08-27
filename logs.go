@@ -24,6 +24,8 @@ func cmdLogs(cfgPath string, args []string, logger *log.Logger) error {
 	fs := flag.NewFlagSet("logs", flag.ExitOnError)
 	n := fs.Int("n", 50, "number of most recent entries to print (0 = all)")
 	follow := fs.Bool("f", false, "follow the log as it grows (tail -f)")
+	errorsOnly := fs.Bool("errors", false, "only show failures (status >= 400 or class=failover/error/all_failed/cache_miss_after_failover)")
+	providerFilter := fs.String("provider", "", "only show entries served by this provider name")
 	fs.StringVar(&cfgPath, "config", cfgPath, "path to config file (request_log path is read from it)")
 	if err := fs.Parse(args); err != nil {
 		return err
@@ -37,10 +39,23 @@ func cmdLogs(cfgPath string, args []string, logger *log.Logger) error {
 		return fmt.Errorf("no request log configured (set request_log in %s)", cfgPath)
 	}
 
-	if *follow {
-		return followLog(path, logger)
+	filter := func(e reqlog.Entry) bool { return true }
+	if *errorsOnly || *providerFilter != "" {
+		filter = func(e reqlog.Entry) bool {
+			if *errorsOnly && e.Status < 400 && e.Class != "all_failed" && e.Class != "failover" && e.Class != "error" {
+				return false
+			}
+			if *providerFilter != "" && e.Provider != *providerFilter {
+				return false
+			}
+			return true
+		}
 	}
-	return printTail(path, *n)
+
+	if *follow {
+		return followLog(path, logger, filter)
+	}
+	return printTail(path, *n, filter)
 }
 
 // logPathFromConfig returns the request_log path from the config file, or
@@ -66,7 +81,8 @@ func defaultReqLogPath() string {
 }
 
 // printTail prints the last n lines of the log (n<=0: all lines).
-func printTail(path string, n int) error {
+// keep (when non-nil) selects which entries to print; nil = print all.
+func printTail(path string, n int, keep func(reqlog.Entry) bool) error {
 	data, err := os.ReadFile(path)
 	if err != nil {
 		return fmt.Errorf("read %s: %v", path, err)
@@ -80,15 +96,25 @@ func printTail(path string, n int) error {
 		if l == "" {
 			continue
 		}
+		e, ok := parseEntry(l)
+		if !ok {
+			if keep == nil {
+				fmt.Println(l)
+			}
+			continue
+		}
+		if keep != nil && !keep(e) {
+			continue
+		}
 		fmt.Println(formatLogLine(l))
 	}
 	return nil
 }
 
 // followLog tails the file: prints existing entries (last 50) then polls
-// for new ones every 500ms.
-func followLog(path string, logger *log.Logger) error {
-	if err := printTail(path, 50); err != nil {
+// for new ones every 500ms. keep applies to both seed and follow output.
+func followLog(path string, logger *log.Logger, keep func(reqlog.Entry) bool) error {
+	if err := printTail(path, 50, keep); err != nil {
 		logger.Printf("warning: %v (waiting for the log to appear)", err)
 	}
 	logger.Printf("following %s (ctrl-C to stop)", path)
@@ -104,11 +130,31 @@ func followLog(path string, logger *log.Logger) error {
 				if l == "" {
 					continue
 				}
+				e, ok := parseEntry(l)
+				if !ok {
+					if keep == nil {
+						fmt.Println(l)
+					}
+					continue
+				}
+				if keep != nil && !keep(e) {
+					continue
+				}
 				fmt.Println(formatLogLine(l))
 			}
 			offset = len(data)
 		}
 	}
+}
+
+// parseEntry decodes one JSONL line; returns (zero, false) on parse error
+// so the caller can decide whether to echo it.
+func parseEntry(line string) (reqlog.Entry, bool) {
+	var e reqlog.Entry
+	if err := json.Unmarshal([]byte(line), &e); err != nil {
+		return reqlog.Entry{}, false
+	}
+	return e, true
 }
 
 // formatLogLine renders one JSONL entry as a compact human-readable line;

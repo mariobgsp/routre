@@ -7,6 +7,7 @@ package reqlog
 
 import (
 	"encoding/json"
+	"fmt"
 	"os"
 	"sync"
 	"time"
@@ -30,10 +31,17 @@ type Entry struct {
 	LatencyMS        int64   `json:"latency_ms,omitempty"`
 }
 
-// Log appends one line to path. Never fails the caller: errors are
-// swallowed (the gateway must not depend on logging).
+// Log appends one line to path. When path is empty the line is written
+// to stderr so a misconfigured request_log does not silently swallow
+// observability — the operator still sees the request.
 func Log(path string, e Entry) {
 	if path == "" {
+		if e.Time == "" {
+			e.Time = time.Now().Format(time.RFC3339)
+		}
+		if data, err := json.Marshal(e); err == nil {
+			fmt.Fprintln(os.Stderr, string(data))
+		}
 		return
 	}
 	if e.Time == "" {

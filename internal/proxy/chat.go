@@ -107,12 +107,16 @@ func (h *Handlers) route(w http.ResponseWriter, r *http.Request, api apiFormat) 
 		req := Request{Body: body, Path: r.URL.Path, Header: r.Header, Client: client}
 		if isStreaming(body) {
 			// Streaming: pipeline writes SSE directly to w and records usage.
-			if serr := h.pipeline.Stream(ctx, req, w); serr == nil {
+			serr := h.pipeline.Stream(ctx, req, w)
+			if serr == nil {
 				logReq(reqlog.Entry{Client: client, Model: modelFromBody(body), Status: http.StatusOK, Class: "ok", Stream: true})
 				return
 			}
-			// Fall through only if the pipeline could not start any stream;
-			// legacy path handles it (kept until pipeline covers all exits).
+			// Pipeline failed before any byte reached the client: it already
+			// wrote a 503 body to w. Log the request so reqlog shows the
+			// failure (previously the streaming 503 path was silent here).
+			logReq(reqlog.Entry{Client: client, Model: modelFromBody(body), Status: http.StatusServiceUnavailable, Class: "all_failed", Stream: true})
+			return
 		} else {
 			resp, perr := h.pipeline.Process(ctx, req)
 			if perr == nil {
@@ -120,11 +124,21 @@ func (h *Handlers) route(w http.ResponseWriter, r *http.Request, api apiFormat) 
 				if resp.Provider != "" {
 					reqModel = resp.Provider
 				}
-				if resp.FromCache {
-					logReq(reqlog.Entry{Client: client, Model: reqModel, Status: resp.StatusCode, Class: "cache", PromptTokens: int64(tokenize.Count(string(body), tokenize.KindOpenAI))})
-				} else {
-					logReq(reqlog.Entry{Client: client, Model: reqModel, Status: resp.StatusCode, Class: "ok"})
+				class := "ok"
+				switch {
+				case resp.FromCache:
+					class = "cache"
+				case resp.StatusCode >= 500:
+					class = "all_failed"
+				case resp.StatusCode >= 400:
+					class = "error"
 				}
+				// Provider is the upstream that served (or tried to
+				// serve) the request. Set on every non-streaming log
+				// line so `routre logs -provider <name>` actually
+				// filters something — previously this field was
+				// always empty, which made the filter a no-op.
+				logReq(reqlog.Entry{Client: client, Model: reqModel, Provider: resp.Provider, Status: resp.StatusCode, Class: class, PromptTokens: int64(tokenize.Count(string(body), tokenize.KindOpenAI))})
 				for k, vv := range resp.Header {
 					for _, v := range vv {
 						w.Header().Add(k, v)
