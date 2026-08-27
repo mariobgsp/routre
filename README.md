@@ -428,13 +428,14 @@ minimal template is `config.example.json` (also in `examples/`).
 | Command | Purpose |
 | --- | --- |
 | `routre setup [-config f]` | interactive wizard (providers, URLs, API keys) |
-| `routre serve [-config f] [-port :p]` | run the gateway in the foreground |
+| `routre serve [-config f] [-port :p] [--debug]` | run the gateway in the foreground (`--debug` or `ROUTRE_DEBUG=1` enables verbose `[DEBUG proxy/router]` trace) |
 | `routre start [-config f] [--autostart]` | start the daemon (systemd/launchd, or detached process) |
 | `routre stop [-config f] [--autostart]` | stop the daemon (+ disable auto-start) |
 | `routre restart [-config f]` | restart the daemon (keeps auto-start state) |
 | `routre check [-config f]` | validate config + API keys |
+| `routre doctor [-config f]` | probe every provider (per-provider `ok`/`overloaded`/`auth` with cooldown, shares `failures.Outcome` shape with 503 body) |
 | `routre list [-config f] [-url http://127.0.0.1:20128]` | connected providers + token/cost ledger |
-| `routre logs [-n 50] [-f] [-config f]` | tail the per-request log |
+| `routre logs [-n 50] [-f] [-errors] [-provider <name>] [-config f]` | tail the per-request log (`-errors` only failures, `-provider` filter) |
 | `routre bench [-config f] [-target 90]` | RTK token-reduction benchmark (gated) |
 | `routre update [-check]` | self-update: download + verify + atomically replace this binary (refuses npm-managed copies) |
 | `http://127.0.0.1:20128/ui` | local dashboard: status, providers, keys, full config editor — loopback-only, `~0` idle RAM |

@@ -40,15 +40,24 @@ type Handlers struct {
 // newHTTPClient builds the upstream transport. Note: no overall timeout —
 // streaming responses can run arbitrarily long; per-phase timeouts bound
 // connection setup and headers.
+//
+// ponytail: MaxConnsPerHost=64 caps a slow provider's queue to bound DoS.
+// ponytail: MaxIdleConnsPerHost=32 quadruples warm-conn reuse vs stdlib 2.
+// ponytail: DisableCompression=true (providers negotiate Accept-Encoding).
+// ponytail: ForceAttemptHTTP2=true (explicit; default-on since Go 1.6, but
+// survives accidental transport resets).
 func newHTTPClient() *http.Client {
 	transport := &http.Transport{
 		Proxy:                 http.ProxyFromEnvironment,
 		DialContext:           (&net.Dialer{Timeout: 5 * time.Second, KeepAlive: 30 * time.Second}).DialContext,
 		TLSHandshakeTimeout:   5 * time.Second,
 		ResponseHeaderTimeout: 20 * time.Second,
-		MaxIdleConns:          32,
-		MaxIdleConnsPerHost:   8,
-		IdleConnTimeout:       90 * time.Second,
+		MaxIdleConns:          64,
+		MaxIdleConnsPerHost:   32,
+		MaxConnsPerHost:       64,
+		IdleConnTimeout:       120 * time.Second,
+		DisableCompression:    true,
+		ForceAttemptHTTP2:     true,
 	}
 	return &http.Client{Transport: transport}
 }

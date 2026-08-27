@@ -12,6 +12,7 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/mariobgsp/routre/internal/cache"
@@ -26,6 +27,38 @@ import (
 // relays are exempt (they can legitimately run for minutes; the transport
 // already bounds dial + response headers).
 const attemptTimeout = 30 * time.Second
+
+// firstByteTimeout caps the wait for the FIRST upstream body byte in a
+// streaming response. ResponseHeaderTimeout (20s) covers the headers;
+// this covers the gap between headers and the first token. After the
+// first byte the relay runs unbounded (a long stream is expected). A
+// slow first byte usually means the provider is stuck (auth, model
+// warm-up) and we should fail over rather than hang the client.
+//
+// ponytail: 30s is a generous tail-killer. Tighten to 10s once a
+// per-phase histogram (latency survey #13) shows the real p99.
+const firstByteTimeout = 30 * time.Second
+
+// firstByteBody wraps a streaming response body so the relay's first
+// successful Read signals `firstByte`, cancelling the firstByteTimeout
+// timer in relayStream. After the first byte, reads pass through
+// unchanged; the relay runs unbounded for the rest of the stream. If
+// the timer fires first, relayStream closes the body, in-flight Reads
+// return an error, and the relay reports a pre-first-byte failure
+// (which the runner treats as retryable → failover).
+type firstByteBody struct {
+	io.ReadCloser
+	firstByte chan struct{}
+	once      sync.Once
+}
+
+func (b *firstByteBody) Read(p []byte) (int, error) {
+	n, err := b.ReadCloser.Read(p)
+	if n > 0 {
+		b.once.Do(func() { close(b.firstByte) })
+	}
+	return n, err
+}
 
 // retryTransientAttempts: how many times a candidate is retried on a
 // transient failure (network error or 5xx) before failover moves on.
@@ -323,6 +356,24 @@ func (h *Handlers) relayStream(ctx context.Context, w http.ResponseWriter, baseU
 		return 0, nil, "", 0, streamUsage{}, err
 	}
 	defer resp.Body.Close()
+
+	// Bound the wait for the first upstream body byte. The relay
+	// signals success via firstByteOK.Close() on its first Write; if
+	// the timer fires first, the body is closed, in-flight Reads
+	// error, and the relay reports a pre-first-byte failure
+	// (retryable → failover). Stops a stuck provider from hanging
+	// the client for minutes.
+	firstByteOK := make(chan struct{})
+	firstByteTimer := time.AfterFunc(firstByteTimeout, func() {
+		select {
+		case <-firstByteOK:
+			// Already succeeded; no-op.
+		default:
+			resp.Body.Close()
+		}
+	})
+	defer firstByteTimer.Stop()
+	resp.Body = &firstByteBody{ReadCloser: resp.Body, firstByte: firstByteOK}
 
 	// A non-2xx response is NOT a stream: return it so the caller can
 	// classify, report the failure, and fail over to the next candidate
