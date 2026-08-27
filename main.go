@@ -68,6 +68,7 @@ func run(args []string, logger *log.Logger) error {
 	url := fs.String("url", "http://127.0.0.1:20128", "list: gateway base URL to query")
 	asJSON := fs.Bool("json", false, "list: emit JSON instead of the table")
 	autostart := fs.Bool("autostart", false, "start: enable auto-start (systemctl enable / launchctl load -w); stop: disable auto-start (systemctl disable / launchctl unload -w)")
+	debug := fs.Bool("debug", false, "serve: enable verbose trace logging (per-candidate, per-attempt, cooldown). Env ROUTRE_DEBUG=1 also enables.")
 
 	// `logs` owns its own flag set (-n, -f, -config); the shared flags
 	// above would reject -n, so skip parsing here and hand the raw args
@@ -88,7 +89,9 @@ func run(args []string, logger *log.Logger) error {
 		return cmdSetup(*cfgPath, logger)
 
 	case "serve":
-		return cmdServe(*cfgPath, *port, logger)
+		// --debug or ROUTRE_DEBUG=1 enables trace logging for this serve process.
+		isDebug := *debug || os.Getenv("ROUTRE_DEBUG") == "1"
+		return cmdServe(*cfgPath, *port, logger, isDebug)
 
 	case "check":
 		return cmdCheck(*cfgPath, logger)
@@ -122,7 +125,13 @@ func run(args []string, logger *log.Logger) error {
 	}
 }
 
-func cmdServe(cfgPath, port string, logger *log.Logger) error {
+func cmdServe(cfgPath, port string, logger *log.Logger, debug ...bool) error {
+	isDebug := len(debug) > 0 && debug[0]
+	if isDebug {
+		logger.Printf("debug: verbose trace enabled (--debug / ROUTRE_DEBUG=1)")
+		proxy.SetDebug(true, logger)
+		router.SetDebug(true, logger)
+	}
 	st := config.NewStore(cfgPath)
 	if err := st.Load(); err != nil {
 		return err

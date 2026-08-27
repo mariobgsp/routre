@@ -12,6 +12,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 > (2026-08-25). Sections marked `legacy` use the pre-rebrand
 > routre-cli numbering and are kept for history only.
 
+## [0.3.1] — 2026-08-27
+
+### Fixed
+
+- **Streaming `overloaded` not stacking** — `streamCandidate` passed `nil` body to `ClassifyStatusBody`, so `529` with `overloaded_error` body was missed for streaming. Now captures `errBody` from `relay` and `529` with empty body is `ErrOverloaded`. Fixes the `4× in 30s` spam for `minimax-m3-free` via `commandcode` streaming.
+- **`overloaded` double retry** — single-provider `overloaded` (e.g. `minimax-m3-free` only on `commandcode`) now does `2× 1s` retries before `503`, hiding a 2-sec upstream blip entirely. `DEBUG` logs `all overloaded → retry after 1s`.
+
+### Added
+
+- **`--debug` / `ROUTRE_DEBUG=1`** — verbose trace (`[DEBUG proxy] try/result`, `process/stream request`) to `stderr` for live `overloaded` tracking. Enable with `routre serve --debug` or `env ROUTRE_DEBUG=1`.
+
 ## [0.3.0] — 2026-08-27
 
 ### Added

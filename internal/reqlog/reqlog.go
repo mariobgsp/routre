@@ -14,6 +14,12 @@ import (
 )
 
 // Entry is one JSONL line. All fields are optional; zero values are omitted.
+//
+// Per-phase latency fields (DialMS, HeadersMS, TTFBMS, TotalMS) are the
+// foundation for diagnosing "is the proxy slow or is the upstream slow?"
+// — without them, end-to-end LatencyMS mixes dial time, header wait,
+// and first-token wait into one number. LatencyMS is kept for back-compat;
+// new code should prefer TotalMS.
 type Entry struct {
 	Time             string  `json:"ts"`
 	Client           string  `json:"client,omitempty"`
@@ -29,6 +35,10 @@ type Entry struct {
 	CacheReadTokens  int64   `json:"cache_read_tokens,omitempty"`
 	CostUSD          float64 `json:"cost_usd,omitempty"`
 	LatencyMS        int64   `json:"latency_ms,omitempty"`
+	DialMS           int64   `json:"dial_ms,omitempty"`
+	HeadersMS        int64   `json:"headers_ms,omitempty"`
+	TTFBMS           int64   `json:"ttfb_ms,omitempty"`
+	TotalMS          int64   `json:"total_ms,omitempty"`
 }
 
 // Log appends one line to path. When path is empty the line is written
