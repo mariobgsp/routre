@@ -12,6 +12,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 > (2026-08-25). Sections marked `legacy` use the pre-rebrand
 > routre-cli numbering and are kept for history only.
 
+## [0.3.4] — 2026-08-28
+
+### Added
+
+- **`routre models sync` / `diff`** — durable model updates so a provider's new model never leaves the user behind. Fetches each provider's `GET {base_url}/models` via the shared discovery path (`router.DiscoverModels`) and persists new IDs into `config.json` (additive by default, `--prune` to drop retired models). `--dry-run` / `--json` for scripting; `diff` is a dry-run alias. Unreachable providers are skipped with a warning and kept as-is. After a successful write the gateway is `SIGHUP`'d best-effort so the new list is live immediately. Discovery still runs every 6h + at startup + on `SIGHUP`; sync just makes it durable across restarts.
+- **`forward_unknown` docs** — README adds "Keeping models current" section explaining the three-layer strategy: `forward_unknown` (instant forward), in-memory discovery (every 6h), and durable `models sync`.
+
+### Changed
+
+- **README refactored** — `Latest` collapsed to `v0.3.4` + collapsible `v0.3.2` detail, added `Keeping models current` subsection, added `models sync/diff` to Quick start and Commands table, updated Project layout (`models.go`), collapsed `doctor`/`bench` descriptions. Architecture caption kept version-agnostic.
+
 ## [0.3.3] — 2026-08-28
 
 ### Changed
