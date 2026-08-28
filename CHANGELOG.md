@@ -12,6 +12,53 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 > (2026-08-25). Sections marked `legacy` use the pre-rebrand
 > routre-cli numbering and are kept for history only.
 
+## [0.3.3] — 2026-08-28
+
+### Changed
+
+- **README rewritten** — new "Latest (v0.3.2)" callout block summarises enriched 503, doctor, per-phase observability, latency hardening, candidateRunner, double-retry, and debug trace. Architecture section updated to describe the full pipeline (format detect → RTK → cache → router → runner → dialect → relay) and the new observability surface. Project layout adds `internal/proxy/dialect`, `internal/proxy/failures`, and the `candidateRunner` deep module. Observability section documents the new `dial_ms` / `headers_ms` / `ttfb_ms` / `total_ms` JSONL fields.
+- **Architecture diagram** — `docs/architecture.puml` rewritten with white background, larger landscape layout, and comprehensive detail (full request pipeline, observability, persistence, providers, and per-component notes). Re-rendered PNG at 4022×1551.
+
+## [0.3.2] — 2026-08-28
+
+### Changed
+
+- **Plans moved to vault** — `docs/PLAN.md`, `docs/SPEC.md`, `specs/PLAN-*.md`, `specs/tech-architecture/tech-stack.md` moved to `~/Projects/brain/plans/routre/`. `.gitignore` updated to keep plans out of the repo. `specs/tech-architecture/` and `specs/PLAN-*.md` are no longer tracked.
+- **Unused imports removed** — `io`, `strings`, `reqlog` dropped from `internal/proxy/pipeline.go`; leftover `var _ =` placeholder lines removed.
+
+## [0.3.1] — 2026-08-27
+
+### Fixed
+
+- **Streaming `overloaded` not stacking** — `streamCandidate` passed `nil` body to `ClassifyStatusBody`, so `529` with `overloaded_error` body was missed for streaming. Now captures `errBody` from `relay` and `529` with empty body is `ErrOverloaded`. Fixes the `4× in 30s` spam for `minimax-m3-free` via `commandcode` streaming.
+- **`overloaded` double retry** — single-provider `overloaded` (e.g. `minimax-m3-free` only on `commandcode`) now does `2× 1s` retries before `503`, hiding a 2-sec upstream blip entirely. `DEBUG` logs `all overloaded → retry after 1s`.
+
+### Added
+
+- **`--debug` / `ROUTRE_DEBUG=1`** — verbose trace (`[DEBUG proxy] try/result`, `process/stream request`) to `stderr` for live `overloaded` tracking. Enable with `routre serve --debug` or `env ROUTRE_DEBUG=1`.
+
+## [0.3.0] — 2026-08-27
+
+### Added
+
+- **`routre doctor`** — one-shot per-provider probe, prints ok/auth/server/network with cooldown. Shares the `failures.Outcome` shape with the 503 wire body so the per-provider reason format is identical on the terminal and over the wire.
+- **`health_check` periodic probe.** Config: `health_check.enabled`, `interval_seconds`, `probe_model`. Internal `probe.Probe` (one HTTP call) + `probe.Runner` (ticker Loop). Probes are strictly observation-only — they never touch router cooldown, cache, usage, or metrics. Off by default.
+- **Enriched 503 body** (`all_providers_failed`, `providers_unavailable`, `model_not_found`). Per-provider `attempts[]` on the wire with `{provider, kind, class, error, cooldown_remaining_seconds}`. Both streaming and non-streaming paths. New `internal/proxy/failures` package owns the wire + human render (`Render` / `RenderBody` / `RenderHuman`).
+- **`routre logs -errors -provider <name>`** filters. `-errors` keeps `status>=400` or class `all_failed`/`failover`/`error`. `-provider` matches the upstream that served (or tried to serve) the request. `reqlog.Entry.Provider` now populated for every non-streaming entry.
+
+### Fixed
+
+- **`overloaded_error` 503 spam** — Anthropic `529 overloaded_error` (and any body matching `overloaded` / `temporarily unavailable` / `capacity` / `try again later` / `rate_limit` / `too many requests`) no longer stacks `2s→4s→8s→…→5m` exponential backoff. New `ErrOverloaded` class caps the cooldown at `30s` (or upstream `Retry-After`, whichever is shorter) and resets the failure counter. Plain `ErrServer` still escalates. Symptom that this fixes: `Retry failed after 3 attempts: 503: {"message":"Upstream model provider is temporarily unavailable…"}` cascade.
+- **Cooldown cap `30m → 5m`.** A 60s upstream blip was turning into a half-hour outage; 5min still absorbs a sustained outage (exponential saturates by hit 9: 2·2⁸=512s ≈ 8.5m → clamped to 5m) and recovers faster.
+- **Uniform-failure 503 reshaping.** When every candidate returns 4xx, the gateway now returns `404 model_not_found` (was `503 all_providers_failed`). When every candidate returns 401/403, returns `502 all_providers_unauthorized`. Mixed classes still surface as `503` with the per-provider breakdown.
+- **Streaming 503 reqlog gap** — `chat.go route` previously logged nothing on a streaming all-failed response; now writes a `class: "all_failed"` line.
+- **`reqlog.Log`** writes the entry to stderr when `request_log` is empty instead of silently dropping observability.
+
+### Changed
+
+- `keystore.Store` is now `sync.RWMutex` and exposes `Keys()` (snapshot of stored env names) for diagnostics.
+- Cooldown `Max` lowered from `30m` to `5m`; `MaxHits` stays `30`.
+
 ## [0.2.3] — 2026-08-26
 
 ### Fixed

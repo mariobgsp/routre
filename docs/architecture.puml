@@ -1,104 +1,178 @@
 @startuml routre-arch
 !theme plain
-skinparam backgroundColor #0a0a0a
-skinparam defaultFontColor #FFFFFF
-skinparam defaultBackgroundColor #1a1a1a
+skinparam backgroundColor #FFFFFF
+skinparam defaultFontColor #000000
+skinparam defaultBackgroundColor #FAFAFA
 skinparam shadowing false
-skinparam roundCorner 12
+skinparam roundCorner 8
 skinparam rectangle {
-  BackgroundColor #1a1a1a
-  BorderColor #4a4a4a
-  FontColor #FFFFFF
+  BackgroundColor #FAFAFA
+  BorderColor #4A6FA5
+  FontColor #000000
+  FontSize 12
 }
 skinparam arrowColor #666666
 skinparam arrowThickness 1.2
-skinparam noteBackgroundColor #1f1f1f
-skinparam noteBorderColor #4a4a4a
-skinparam noteFontColor #CCCCCC
-skinparam titleFontColor #FFFFFF
-skinparam titleFontSize 16
-skinparam packageBackgroundColor #0a0a0a
-skinparam packageBorderColor #333333
-skinparam packageFontColor #AAAAAA
+skinparam noteBackgroundColor #FFF8E1
+skinparam noteBorderColor #D4A017
+skinparam noteFontColor #333333
+skinparam noteFontSize 11
+skinparam titleFontColor #000000
+skinparam titleFontSize 18
+skinparam packageBackgroundColor #FFFFFF
+skinparam packageBorderColor #999999
+skinparam packageFontColor #333333
+skinparam PackageTitleFontSize 14
+skinparam nodesep 60
+skinparam ranksep 80
 
-title routre — The 9-MB gateway (10 MiB RAM, 10.6 MiB binary) — How it works & how efficient it is
+title routre v0.3.2 — LLM API Gateway Architecture (OpenAI / Anthropic / Gemini compatible)
 
 left to right direction
 
-package "Clients  (any OpenAI / Anthropic CLI)" #0a0a0a {
-  rectangle "opencode" as OC #1a1a1a
-  rectangle "Claude Code" as CC #1a1a1a
-  rectangle "Codex" as CX #1a1a1a
-  rectangle "Cursor" as CU #1a1a1a
+' =================== CLIENTS ===================
+package "Clients — any OpenAI / Anthropic / Gemini compatible tool" {
+  rectangle "opencode" as OC
+  rectangle "Claude Code" as CC
+  rectangle "Codex" as CX
+  rectangle "Cursor" as CU
+  rectangle "opencode-go CLI" as OCLI
 }
 
-rectangle "routre  127.0.0.1:20128\n— single Go binary, stdlib only —" as GW #111111 {
-  rectangle "HTTP Gateway\nnet/http + SSE relay\n11 ms overhead" as HTTP #222222
-  rectangle "RTK  90% filter\nheuristic, no LM, no DB\n12 filters" as RTK #2a1a1a
-  rectangle "Cache  sha256 LRU\n512 entries / 1h / 8 MiB" as CACHE #1a222a
-  rectangle "Router  tiers\nsubscription → cheap → free" as ROUTER #1a2a1a
-  rectangle "Ledger  per-agent\ntokens / $ + saved" as LEDGER #1a1a1a
-  rectangle "Dashboard  /ui\nloopback-only, <2 MiB" as UI #222222
+' =================== GATEWAY ===================
+package "routre — single Go binary, stdlib only — 127.0.0.1:20128" {
+  rectangle "HTTP Server\nnet/http + SSE\n11 ms overhead" as HTTP
+
+  package "Request Pipeline  (Pipeline struct)" {
+    rectangle "Format detect\nOpenAI / Anthropic /\nResponses API" as FMT
+    rectangle "RTK  12 filters\n≥90% tool tokens\nno LM, no DB, fail-open" as RTK
+    rectangle "Cache  sha256 LRU\n512 entries / 1h / 8 MiB\nexact + streaming replay" as CACHE
+    rectangle "Router.Candidates\ntiers · cooldown · refresh\n+ probe data" as ROUTER
+    rectangle "candidateRunner\nretry · auth-refresh\nEmitted contract\n[internal/proxy/runner.go]" as RUNNER
+    rectangle "dialect.Stream\nOpenAI ↔ Anthropic\nSSE state machine" as DIALECT
+    rectangle "Dialect + relay\nhttp.Transport tuned\nMaxConns=64, H2,\nDisableCompression\n+ firstByteTimeout 30s" as RELAY
+    rectangle "failures module\n503 / 404 / 502\nenriched per-provider" as FAIL
+  }
+
+  package "Observability" {
+    rectangle "reqlog  JSONL\ndial_ms · headers_ms\nttfb_ms · total_ms\nstream abort preserved" as REQLOG
+    rectangle "metrics  Prometheus\nrequests · cache\nfailures · tokens" as METRICS
+    rectangle "probe  periodic\nper-provider p50\n[survey #3 follow-on]" as PROBE
+    rectangle "doctor  one-shot\nCLI status check" as DOCTOR
+  }
+
+  package "Persistence" {
+    database "Cache\nLRU + streaming" as CACHEDB
+    database "Usage\ntokens / cost\nper-client" as USEDB
+    database "Key store\nin-memory + fsync" as KEYDB
+  }
+
+  rectangle "Dashboard  /ui\nloopback-only" as UI
 }
 
-package "Providers  (506 models via config.all.json)" #0a0a0a {
-  rectangle "Tier 1  subscription\nopencode-go  26 models\nopencode-zen 62 models" as T1 #1a2a1a
-  rectangle "Tier 2  cheap / fallback\nopenrouter 413 models\ngemini 4 models" as T2 #1a222a
-  rectangle "Tier 3  free\ncommunity / local" as T3 #222222
+' =================== PROVIDERS ===================
+package "Providers — 506 models (config.all.json)" {
+  rectangle "Tier 1  subscription\nopencode-go  26\nopencode-zen 62" as T1
+  rectangle "Tier 2  fallback\nopenrouter 413\ngemini 4" as T2
+  rectangle "Tier 3  free\ncommunity / local" as T3
 }
 
-OC --> HTTP
-CC --> HTTP
-CX --> HTTP
-CU --> HTTP
+' =================== FLOWS ===================
+OC    --> HTTP : "POST /v1/chat/completions"
+CC    --> HTTP
+CX    --> HTTP
+CU    --> HTTP
+OCLI  --> HTTP
+HTTP  --> FMT
+FMT   --> RTK
+RTK   --> CACHE : "post-RTK body"
+CACHE --> ROUTER : "cache miss\n→ candidates"
+ROUTER --> RUNNER : "for each cand"
+RUNNER --> DIALECT : "translate if\ncross-kind"
+DIALECT --> RELAY
+RELAY --> T1 : "try T1"
+T1    --> T2 : "429/5xx/401"
+T2    --> T3
+RELAY --> HTTP : "SSE frames"
+HTTP  --> OC : "stream + flush"
+HTTP  --> CACHEDB : "write hit"
+HTTP  --> USEDB : "recordFull"
+HTTP  --> KEYDB : "on 401"
+CACHE --> CACHEDB
+RUNNER ..> FAIL : "all-failed\n→ 503 w/ tryLog"
+RELAY ..> REQLOG : "t0 / t1 /\nfirst body"
+REQLOG ..> METRICS
 
-HTTP --> RTK : "1. 23.4 KB tool_result"
-RTK --> CACHE : "2. RTK → 2.3 KB\n91.5% tool tokens"
-CACHE --> ROUTER : "3. sha256 key\n(prefix_order)"
-ROUTER --> T1 : "4. try T1"
-T1 --> T2 : "failover\n429/5xx/401"
-T2 --> T3 : "failover"
-T1 ..> LEDGER
-CACHE ..> LEDGER : "hit → saved"
-ROUTER ..> LEDGER
-UI ..> LEDGER : "read"
+UI    ..> USEDB : "read"
+UI    ..> CACHEDB : "read"
+DOCTOR ..> T1 : "probe"
+DOCTOR ..> T2 : "probe"
+PROBE  ..> T1 : "background"
+PROBE  ..> T2 : "background"
 
+' =================== ANNOTATIONS ===================
 note right of RTK
-  **RTK efficiency (bench-gated)**
-  • 91.5% aggregate tool tokens
-  • 90.3% worst payload (tree-ls)
-  • 91.3% payload (whole body)
-  • window 500B–10 MiB
-  • never grows, fail-open
-  • `routre bench` fails if <90%
+  **RTK efficiency** (bench-gated)
+  · 91.5% aggregate tool tokens
+  · 90.3% worst payload (tree-ls)
+  · window 500B – 10 MiB
+  · never grows, fail-open
+  · `routre bench` fails if <90%
 end note
 
 note right of CACHE
   **Cache**
-  • exact-match, post-RTK
-  • non-streaming only
-  • prefix_order → stable keys
-  • hit credited with upstream
+  · exact-match, post-RTK
+  · non-streaming + streaming replay
+  · prefix_order → stable keys
+  · hit credited upstream
     prompt tokens (billing-accurate)
 end note
 
-note right of ROUTER
-  **Failover**
-  • tiers in order
-  • exp. cooldown 2s → 30m
-  • 500ms retry same provider
-  • Retry-After honored
-  • streaming: only before
-    1st byte (no dup)
+note right of RUNNER
+  **candidateRunner** (v0.3.2)
+  · 1 + retryTransientAttempts attempts
+  · transientRetryDelay 500ms
+  · auth-refresh-and-retry (1 free)
+  · ErrClient → no retry
+  · Emitted=true → no failover
+  · 11 unit tests
 end note
 
-note bottom of GW
-  **Efficiency at a glance — measured (scripts/measure-ram.sh)**
-  Idle RSS: 10 MiB  (was 9 MiB pre-UI)  ≤100 MiB budget
-  Peak (3 sessions): 12.9 MiB  ≤200 MiB
-  Binary: 10.6 MiB  (CGO_ENABLED=0, -s -w)  was 6.7 MiB
-  Dashboard delta: +0.2 MiB after serving /ui once  (<2 MiB)
+note right of RELAY
+  **http.Transport** (latency survey #1)
+  · MaxConnsPerHost: 64
+  · MaxIdleConnsPerHost: 32
+  · IdleConnTimeout: 120s
+  · DisableCompression: true
+  · ForceAttemptHTTP2: true
+  · firstByteTimeout: 30s
+    (kills p99 stuck providers)
+end note
+
+note right of FAIL
+  **failures.Outcome**
+  · provider, kind, class
+  · err, cooldown_remaining
+  · 3 render funcs (wire + human)
+  · 6 surface call sites
+end note
+
+note right of REQLOG
+  **Per-phase observability**
+  · dial_ms    (proxy prep)
+  · headers_ms (upstream headers)
+  · ttfb_ms    (first body byte)
+  · total_ms   (whole attempt)
+  · latency_ms kept for back-compat
+end note
+
+note bottom of HTTP
+  **Efficiency — measured (scripts/measure-ram.sh)**
+  Binary: 10.6 MiB  (CGO_ENABLED=0, -s -w)
+  Idle RSS: 10 MiB    Peak (3 sessions): 12.9 MiB
   Overhead: ~11 ms per request
+  Tests: 18 packages, runner has 11 unit tests
 end note
 
 @enduml

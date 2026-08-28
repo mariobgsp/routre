@@ -5,9 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"io"
 	"net/http"
-	"strings"
 	"time"
 
 	"github.com/mariobgsp/routre/internal/cache"
@@ -15,7 +13,7 @@ import (
 	"github.com/mariobgsp/routre/internal/keystore"
 	"github.com/mariobgsp/routre/internal/metrics"
 	"github.com/mariobgsp/routre/internal/proxy/dialect"
-	"github.com/mariobgsp/routre/internal/reqlog"
+	"github.com/mariobgsp/routre/internal/proxy/failures"
 	"github.com/mariobgsp/routre/internal/router"
 	"github.com/mariobgsp/routre/internal/rtk"
 	"github.com/mariobgsp/routre/internal/tokenize"
@@ -37,7 +35,14 @@ type Pipeline struct {
 	metrics    *metrics.Metrics
 	keys       *keystore.Store
 	logger     *log.Logger
+	lastPhases *Phases
 }
+
+// LastPhases returns the per-phase timing from the most recent
+// upstream attempt, or nil if the request was served from cache or
+// eval didn't measure. Read once, immediately after Stream/Process
+// returns.
+func (p *Pipeline) LastPhases() *Phases { return p.lastPhases }
 
 func NewPipeline(h *Handlers) *Pipeline {
 	return &Pipeline{
@@ -81,11 +86,13 @@ func (p *Pipeline) Process(ctx context.Context, req Request) (Response, error) {
 }
 
 func (p *Pipeline) Stream(ctx context.Context, req Request, w http.ResponseWriter) error {
+	p.lastPhases = nil
 	body := req.Body
 	path := req.Path
 	client := req.Client
 	header := req.Header
 	api := apiFormat(dialect.DetectFormat(path, body))
+	debugf("stream request %q client=%q api=%v", modelFromBody(body), client, api)
 	clientFmt := api
 	if api == fmtResponses {
 		translated, err := dialect.ResponsesToOpenAI(body)
@@ -131,81 +138,105 @@ func (p *Pipeline) Stream(ctx context.Context, req Request, w http.ResponseWrite
 	p.metrics.CacheMiss()
 	cands := p.router.CandidatesWithFallbacks(requested, p.cfg.Get().Fallbacks)
 	if len(cands) == 0 {
-		return fmt.Errorf("no candidates")
+		// No candidate was even eligible (model unlisted or every serving
+		// provider is in cooldown). Surface the reason on the wire so the
+		// user can see it without a separate status call.
+		if retryAfter, served := p.router.MinCooldownForModel(requested, p.cfg.Get().ForwardUnknown); served {
+			failures.Render(w, failures.KindProvidersUnavailable, requested,
+				[]failures.Outcome{{Provider: "*", Cooldown: retryAfter}}, retryAfter)
+			return nil
+		}
+		failures.Render(w, failures.KindModelNotFound, requested, nil, 0)
+		return nil
 	}
-	var lastErr error
-	var lastClass router.ErrClass
-	for _, cand := range cands {
-		attempts := 1 + retryTransientAttempts
-		for attempt := 0; attempt < attempts; attempt++ {
-			if attempt > 0 {
-				if lastClass == router.ErrClient {
-					break
-				}
-				time.Sleep(transientRetryDelay)
-			}
-			ok, err, class := p.streamCandidate(ctx, w, header, api, cand, requested, body, processed, client, rtkSaved, clientFmt)
-			if ok && err == nil {
-				return nil
-			}
-			if err != nil {
-				lastErr = err
-				lastClass = class
-				if !router.IsRetryableClass(class) {
-					break
-				}
-			}
+	// Per-cand retry + auth refresh + tryLog accumulation now flow
+	// through candidateRunner (internal/proxy/runner.go). The eval
+	// closure below is the per-attempt work; the runner owns the
+	// iteration policy.
+	runner := newRunner(p.router, p.handlers.refreshCredentials)
+	result := runner.Run(ctx, cands, func(ctx context.Context, cand router.Candidate, attempt int) evalResult {
+		return p.streamEval(ctx, cand, attempt, w, header, api, requested, body, processed, client, rtkSaved, clientFmt)
+	})
+	if result.OK {
+		return nil
+	}
+	allOverloaded := len(result.TryLog) > 0
+	for _, e := range result.TryLog {
+		if e.Class != router.ErrOverloaded.String() {
+			allOverloaded = false
+			break
 		}
 	}
-	if lastErr != nil {
-		return lastErr
+	if allOverloaded {
+		debugf("all overloaded (stream) for %q, retry after 1s", requested)
+		time.Sleep(time.Second)
+		retry := runner.Run(ctx, cands, func(ctx context.Context, cand router.Candidate, attempt int) evalResult {
+			return p.streamEval(ctx, cand, attempt, w, header, api, requested, body, processed, client, rtkSaved, clientFmt)
+		})
+		if retry.OK {
+			return nil
+		}
+		if len(retry.TryLog) > 0 {
+			stillOverloaded := true
+			for _, e := range retry.TryLog {
+				if e.Class != router.ErrOverloaded.String() {
+					stillOverloaded = false
+					break
+				}
+			}
+			if stillOverloaded {
+				debugf("still overloaded (stream) for %q, second retry after 1s", requested)
+				time.Sleep(time.Second)
+				retry2 := runner.Run(ctx, cands, func(ctx context.Context, cand router.Candidate, attempt int) evalResult {
+					return p.streamEval(ctx, cand, attempt, w, header, api, requested, body, processed, client, rtkSaved, clientFmt)
+				})
+				if retry2.OK {
+					return nil
+				}
+				result = retry2
+			} else {
+				result = retry
+			}
+		} else {
+			result = retry
+		}
 	}
-	return fmt.Errorf("all providers failed")
+	failures.Render(w, failures.KindAllFailed, requested, result.TryLog, 5*time.Second)
+	return nil
 }
 
-func (p *Pipeline) streamCandidate(ctx context.Context, w http.ResponseWriter, header http.Header, api apiFormat, cand router.Candidate, requested string, body []byte, processed []byte, client string, rtkSaved int, clientFmt apiFormat) (bool, error, router.ErrClass) {
-	kind := cand.Provider.Provider.Kind
-	payload := cand.Payload(processed, requested)
-	crossKind := crossKindRequest(api, kind)
-	if clientFmt == fmtResponses && (kind == "anthropic" || kind == "gemini") {
+// streamEval is the per-attempt streaming eval passed to candidateRunner.
+// It performs prep + the upstream relay, records success/failure
+// side effects, and tells the runner whether to stop (OK), retry
+// (Retryable + retryable class), or move to the next candidate.
+func (p *Pipeline) streamEval(ctx context.Context, cand router.Candidate, _ int, w http.ResponseWriter, header http.Header, api apiFormat, requested string, body, processed []byte, client string, rtkSaved int, clientFmt apiFormat) evalResult {
+	payload, perr := p.preparePayload(api, clientFmt, cand, requested, processed)
+	if perr != nil {
 		p.router.ReportFailure(cand.Provider, router.ErrClient)
-		return false, fmt.Errorf("provider %s cannot serve Responses", cand.Provider.Provider.Name), router.ErrClient
+		return evalResult{Err: perr, Class: router.ErrClient, Retryable: false}
 	}
-	if crossKind {
-		translated, terr := p.d.Request(dialect.Format(api), dialect.KindToFormat(kind), processed)
-		if terr != nil {
-			p.router.ReportFailure(cand.Provider, router.ErrServer)
-			return false, terr, router.ErrServer
-		}
-		payload = translated
-		if cand.Upstream != requested {
-			if rewritten, rerr := rewriteModel(payload, cand.Upstream); rerr == nil {
-				payload = rewritten
-			}
-		}
-		payload = clampPayload(payload, cand.Provider.Provider.MaxTokens)
-	}
-	if kind == "anthropic" && p.cfg.Get().Cache.PromptCache {
-		payload = injectPromptCache(payload)
-	}
+	kind := cand.Provider.Provider.Kind
 	dummyReq := &http.Request{Header: header}
 	// Streaming relays are exempt from the per-attempt timeout (they can run
 	// for minutes); the transport bounds dial + response headers.
 	streamCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
-	status, _, _, retryAfter, susage, rerr := p.handlers.relay(streamCtx, w, cand.Provider.Provider.BaseURL, dummyReq, payload, true, kind, cand.Provider.Provider.APIKeyEnv, api, clientFmt)
+	relayStart := time.Now()
+	status, errBody, _, retryAfter, susage, rerr := p.handlers.relay(streamCtx, w, cand.Provider.Provider.BaseURL, dummyReq, payload, true, kind, cand.Provider.Provider.APIKeyEnv, api, clientFmt)
+	relayDur := time.Since(relayStart).Milliseconds()
+	p.lastPhases = &Phases{TotalMS: relayDur}
 	if rerr != nil {
 		if router.IsStreamAborted(rerr) {
 			// Client already received bytes; failover would duplicate output.
-			return true, nil, 0
+			return evalResult{OK: true, Err: rerr, Class: router.ErrStream, Emitted: true}
 		}
 		class := router.Classify(rerr)
 		p.metrics.Failure(cand.Provider.Provider.Name, class.String())
 		if !router.IsRetryableClass(class) {
-			return true, rerr, class
+			return evalResult{OK: true, Err: rerr, Class: class, Retryable: false, Emitted: true}
 		}
 		p.router.ReportFailureWithBackoff(cand.Provider, class, retryAfter)
-		return false, rerr, class
+		return evalResult{Err: rerr, Class: class, Retryable: true}
 	}
 	if status >= 200 && status < 300 {
 		p.router.ReportSuccess(cand.Provider)
@@ -227,28 +258,56 @@ func (p *Pipeline) streamCandidate(ctx context.Context, w http.ResponseWriter, h
 				SSE: true,
 			})
 		}
-		return true, nil, 0
+		return evalResult{OK: true}
 	}
-	class := router.ClassifyStatusBody(status, nil)
+	class := router.ClassifyStatusBody(status, errBody)
 	if class == router.ErrAuth {
-		if refreshed := p.handlers.refreshCredentials(cand.Provider.Provider.APIKeyEnv); refreshed {
-			if ok, rerr, c := p.streamCandidate(ctx, w, header, api, cand, requested, body, processed, client, rtkSaved, clientFmt); ok || rerr != nil {
-				return ok, rerr, c
-			}
-		}
+		// Auth-refresh-and-retry: the runner will call refreshFn
+		// on ErrAuth and re-invoke eval.
+		return evalResult{Err: fmt.Errorf("provider %s: status %d (%v)", cand.Provider.Provider.Name, status, class), Class: class, Retryable: false}
 	}
 	if !router.IsRetryableClass(class) {
 		if cand.ShouldFailoverOnClientError() {
-			return false, fmt.Errorf("provider %s rejected model %q (HTTP %d)", cand.Provider.Provider.Name, cand.Upstream, status), class
+			return evalResult{Err: fmt.Errorf("provider %s rejected model %q (HTTP %d)", cand.Provider.Provider.Name, cand.Upstream, status), Class: class, Retryable: false}
 		}
-		return true, fmt.Errorf("provider %s: status %d (%v)", cand.Provider.Provider.Name, status, class), class
+		return evalResult{OK: true, Err: fmt.Errorf("provider %s: status %d (%v)", cand.Provider.Provider.Name, status, class), Class: class, Retryable: false, Emitted: false}
 	}
 	p.metrics.Failure(cand.Provider.Provider.Name, class.String())
 	p.router.ReportFailureWithBackoff(cand.Provider, class, retryAfter)
-	return false, fmt.Errorf("provider %s: status %d (%v)", cand.Provider.Provider.Name, status, class), class
+	return evalResult{Err: fmt.Errorf("provider %s: status %d (%v)", cand.Provider.Provider.Name, status, class), Class: class, Retryable: true}
+}
+
+// preparePayload produces the wire body for one candidate: cross-kind
+// translate, model rewrite, max_tokens clamp, and the Anthropic
+// prompt-cache injection. Pulled out of the per-attempt evals so
+// streaming and non-streaming share the same per-cand prep.
+func (p *Pipeline) preparePayload(api apiFormat, clientFmt apiFormat, cand router.Candidate, requested string, processed []byte) ([]byte, error) {
+	kind := cand.Provider.Provider.Kind
+	if clientFmt == fmtResponses && (kind == "anthropic" || kind == "gemini") {
+		return nil, fmt.Errorf("provider %s (kind=%s) cannot serve a Responses API request", cand.Provider.Provider.Name, kind)
+	}
+	payload := cand.Payload(processed, requested)
+	if crossKindRequest(api, kind) {
+		translated, terr := p.d.Request(dialect.Format(api), dialect.KindToFormat(kind), processed)
+		if terr != nil {
+			return nil, terr
+		}
+		payload = translated
+		if cand.Upstream != requested {
+			if rewritten, rerr := rewriteModel(payload, cand.Upstream); rerr == nil {
+				payload = rewritten
+			}
+		}
+		payload = clampPayload(payload, cand.Provider.Provider.MaxTokens)
+	}
+	if kind == "anthropic" && p.cfg.Get().Cache.PromptCache {
+		payload = injectPromptCache(payload)
+	}
+	return payload, nil
 }
 
 func (p *Pipeline) processInternal(ctx context.Context, req Request) (Response, error) {
+	p.lastPhases = nil
 	body := req.Body
 	path := req.Path
 	client := req.Client
@@ -264,6 +323,7 @@ func (p *Pipeline) processInternal(ctx context.Context, req Request) (Response, 
 	}
 	streaming := dialect.IsStreaming(body)
 	requested := modelFromBody(body)
+	debugf("process request %q streaming=%v client=%q api=%v", requested, streaming, client, api)
 	processed, rtkChanged := p.rtk.Apply(body)
 	rtkSaved := 0
 	if rtkChanged {
@@ -303,41 +363,115 @@ func (p *Pipeline) processInternal(ctx context.Context, req Request) (Response, 
 			if retryAfter < time.Second {
 				retryAfter = time.Second
 			}
-			return Response{StatusCode: 503, Body: []byte(fmt.Sprintf(`{"error":{"message":"all providers that serve model %q are cooling down (retry in %s)","type":"providers_unavailable"}}`, requested, retryAfter.Round(time.Second))), Header: http.Header{"Retry-After": []string{fmt.Sprintf("%d", int(retryAfter.Seconds()))}}}, nil
+			body, hdr := failures.RenderBody(failures.KindProvidersUnavailable, requested,
+				[]failures.Outcome{{Provider: "*", Cooldown: retryAfter}}, retryAfter)
+			return Response{StatusCode: 503, Body: body, Header: hdr}, nil
 		}
-		return Response{StatusCode: 503, Body: []byte(fmt.Sprintf(`{"error":{"message":"no configured provider serves model %q (check config tiers/models)","type":"model_not_found"}}`, requested))}, nil
+		body, _ := failures.RenderBody(failures.KindModelNotFound, requested, nil, 0)
+		return Response{StatusCode: 503, Body: body}, nil
 	}
 	if !streaming {
-		var lastErr error
-		var lastClass router.ErrClass
-		for _, cand := range cands {
-			attempts := 1 + retryTransientAttempts
-			for attempt := 0; attempt < attempts; attempt++ {
-				if attempt > 0 {
-					if lastClass == router.ErrClient {
-						break
-					}
-					time.Sleep(transientRetryDelay)
-				}
-				resp, ok, err, class := p.tryCandidate(ctx, req, api, cand, requested, body, processed, streaming, client, rtkSaved, clientFmt)
-				if err != nil {
-					lastErr = err
-					lastClass = class
-				}
-				if ok {
-					return resp, nil
-				}
-				lastErr = err
-				lastClass = class
+		runner := newRunner(p.router, p.handlers.refreshCredentials)
+		result := runner.Run(ctx, cands, func(ctx context.Context, cand router.Candidate, attempt int) evalResult {
+			return p.tryEval(ctx, cand, req, api, requested, body, processed, streaming, client, rtkSaved, clientFmt)
+		})
+		if result.OK && result.Response != nil {
+			return *result.Response, nil
+		}
+		tryLog := result.TryLog
+		allOverloaded := len(tryLog) > 0
+		for _, e := range tryLog {
+			if e.Class != router.ErrOverloaded.String() {
+				allOverloaded = false
+				break
 			}
 		}
-		msg := "all providers unavailable"
-		if lastErr != nil {
-			msg = lastErr.Error()
+		if allOverloaded {
+			debugf("all overloaded for %q, retry after 1s", requested)
+			time.Sleep(time.Second)
+			retry := runner.Run(ctx, cands, func(ctx context.Context, cand router.Candidate, attempt int) evalResult {
+				return p.tryEval(ctx, cand, req, api, requested, body, processed, streaming, client, rtkSaved, clientFmt)
+			})
+			if retry.OK && retry.Response != nil {
+				debugf("overloaded retry success for %q", requested)
+				return *retry.Response, nil
+			}
+			if len(retry.TryLog) > 0 {
+				stillOverloaded := true
+				for _, e := range retry.TryLog {
+					if e.Class != router.ErrOverloaded.String() {
+						stillOverloaded = false
+						break
+					}
+				}
+				if stillOverloaded {
+					debugf("still overloaded for %q, second retry after 1s", requested)
+					time.Sleep(time.Second)
+					retry2 := runner.Run(ctx, cands, func(ctx context.Context, cand router.Candidate, attempt int) evalResult {
+						return p.tryEval(ctx, cand, req, api, requested, body, processed, streaming, client, rtkSaved, clientFmt)
+					})
+					if retry2.OK && retry2.Response != nil {
+						return *retry2.Response, nil
+					}
+					tryLog = retry2.TryLog
+				} else {
+					tryLog = retry.TryLog
+				}
+			} else {
+				tryLog = retry.TryLog
+			}
 		}
-		return Response{StatusCode: 503, Body: []byte(fmt.Sprintf(`{"error":{"message":%q,"type":"all_providers_failed"}}`, msg)), Header: http.Header{"Retry-After": []string{"5"}}}, nil
+		// Re-shape the 503 into a more honest status when the failure
+		// pattern is uniform. If every candidate returned 4xx (the
+		// provider doesn't serve this model), the user should see a
+		// 404 model_not_found, not a 503 outage. If every candidate
+		// returned 401/403, the user should see a 502 (their keys are
+		// bad for this model), not a 503. Only the mixed / server-side
+		// case stays as 503.
+		allClient, allAuth := true, true
+		for _, e := range tryLog {
+			if e.Class != router.ErrClient.String() {
+				allClient = false
+			}
+			if e.Class != router.ErrAuth.String() {
+				allAuth = false
+			}
+		}
+		switch {
+		case allClient && len(tryLog) > 0:
+			// Every provider rejected the model (400/404/422). This
+			// is a model-not-found, not a service outage.
+			body, _ := failures.RenderBody(failures.KindModelNotFound, requested, tryLog, 0)
+			return Response{StatusCode: 404, Body: body, Header: http.Header{"Content-Type": []string{"application/json"}}, Provider: tryLog[0].Provider}, nil
+		case allAuth && len(tryLog) > 0:
+			// Every provider returned 401/403: the configured keys
+			// don't authorize this model. Surface as 502 (bad
+			// gateway) so the user knows the gateway is fine, the
+			// auth is wrong.
+			body := []byte(fmt.Sprintf(`{"error":{"message":"all configured providers rejected the request (auth). check API keys and model access.","type":"all_providers_unauthorized","model":%q,"attempts":%s}}`,
+				requested, mustJSON(tryLog)))
+			return Response{StatusCode: 502, Body: body, Header: http.Header{"Content-Type": []string{"application/json"}}, Provider: tryLog[0].Provider}, nil
+		}
+		// Mixed classes (some 5xx, some 4xx, some auth) — genuine
+		// outage. Surface as 503 with the per-provider breakdown.
+		prov := ""
+		if len(tryLog) > 0 {
+			prov = tryLog[0].Provider
+		}
+		body, hdr := failures.RenderBody(failures.KindAllFailed, requested, tryLog, 5*time.Second)
+		return Response{StatusCode: 503, Body: body, Header: hdr, Provider: prov}, nil
 	}
 	return Response{}, fmt.Errorf("streaming request: use Stream")
+}
+
+// mustJSON marshals v or returns a literal null. Used for the
+// all-auth response body where failures.Outcome[] must serialize.
+func mustJSON(v any) string {
+	b, err := json.Marshal(v)
+	if err != nil {
+		return "null"
+	}
+	return string(b)
 }
 
 // crossKindRequest reports whether an inbound request of dialect `api`
@@ -347,48 +481,33 @@ func crossKindRequest(api apiFormat, kind string) bool {
 	return api != fmtResponses && api != kindOf(kind)
 }
 
-func (p *Pipeline) tryCandidate(ctx context.Context, req Request, api apiFormat, cand router.Candidate, requested string, body, processed []byte, streaming bool, client string, rtkSaved int, clientFmt apiFormat) (Response, bool, error, router.ErrClass) {
+func (p *Pipeline) tryEval(ctx context.Context, cand router.Candidate, req Request, api apiFormat, requested string, body, processed []byte, streaming bool, client string, rtkSaved int, clientFmt apiFormat) evalResult {
+	payload, perr := p.preparePayload(api, clientFmt, cand, requested, processed)
+	if perr != nil {
+		p.router.ReportFailure(cand.Provider, router.ErrClient)
+		return evalResult{Err: perr, Class: router.ErrClient, Retryable: false}
+	}
+	kind := cand.Provider.Provider.Kind
 	ph := req.Header
 	dummyReq := &http.Request{Header: ph}
-	payload := cand.Payload(processed, requested)
-	kind := cand.Provider.Provider.Kind
-	crossKind := crossKindRequest(api, kind)
-	if clientFmt == fmtResponses && (kind == "anthropic" || kind == "gemini") {
-		p.router.ReportFailure(cand.Provider, router.ErrClient)
-		return Response{}, false, fmt.Errorf("provider %s (kind=%s) cannot serve a Responses API request", cand.Provider.Provider.Name, kind), router.ErrClient
-	}
-	if crossKind {
-		translated, terr := p.d.Request(dialect.Format(api), dialect.KindToFormat(kind), processed)
-		if terr != nil {
-			p.router.ReportFailure(cand.Provider, router.ErrServer)
-			return Response{}, false, terr, router.ErrServer
-		}
-		payload = translated
-		if cand.Upstream != requested {
-			if rewritten, rerr := rewriteModel(payload, cand.Upstream); rerr == nil {
-				payload = rewritten
-			}
-		}
-		payload = clampPayload(payload, cand.Provider.Provider.MaxTokens)
-	}
-	if kind == "anthropic" && p.cfg.Get().Cache.PromptCache {
-		payload = injectPromptCache(payload)
-	}
 	attemptCtx, cancel := context.WithTimeout(ctx, attemptTimeout)
 	defer cancel()
 	rec := &responseRecorder{header: make(http.Header)}
+	relayStart := time.Now()
 	status, respBody, ct, retryAfter, _, rerr := p.handlers.relay(attemptCtx, rec, cand.Provider.Provider.BaseURL, dummyReq, payload, streaming, kind, cand.Provider.Provider.APIKeyEnv, api, clientFmt)
+	relayDur := time.Since(relayStart).Milliseconds()
+	p.lastPhases = &Phases{TotalMS: relayDur}
 	if rerr != nil {
 		if router.IsStreamAborted(rerr) {
-			return Response{}, true, nil, router.ErrStream
+			return evalResult{OK: true, Err: rerr, Class: router.ErrStream}
 		}
 		class := router.Classify(rerr)
 		if !router.IsRetryableClass(class) {
-			return Response{StatusCode: 502, Body: []byte(fmt.Sprintf(`{"error":{"message":%q,"type":"upstream_error"}}`, rerr.Error()))}, true, rerr, class
+			return evalResult{OK: true, Response: &Response{StatusCode: 502, Body: []byte(fmt.Sprintf(`{"error":{"message":%q,"type":"upstream_error"}}`, rerr.Error()))}, Err: rerr, Class: class, Retryable: false}
 		}
 		p.metrics.Failure(cand.Provider.Provider.Name, class.String())
 		p.router.ReportFailureWithBackoff(cand.Provider, class, retryAfter)
-		return Response{}, false, rerr, class
+		return evalResult{Err: rerr, Class: class, Retryable: true}
 	}
 	if status >= 200 && status < 300 {
 		p.router.ReportSuccess(cand.Provider)
@@ -428,25 +547,23 @@ func (p *Pipeline) tryCandidate(ctx context.Context, req Request, api apiFormat,
 		if cand.IsFree {
 			hdr.Set("X-Llrouter-Free", cand.Upstream)
 		}
-		return Response{StatusCode: status, Body: sendBody, ContentType: ct, Header: hdr, Provider: cand.Provider.Provider.Name}, true, nil, 0
+		return evalResult{OK: true, Response: &Response{StatusCode: status, Body: sendBody, ContentType: ct, Header: hdr, Provider: cand.Provider.Provider.Name}}
 	}
 	class := router.ClassifyStatusBody(status, respBody)
 	if class == router.ErrAuth {
-		if refreshed := p.handlers.refreshCredentials(cand.Provider.Provider.APIKeyEnv); refreshed {
-			if resp, ok, err, c := p.tryCandidate(ctx, req, api, cand, requested, body, processed, streaming, client, rtkSaved, clientFmt); ok {
-				return resp, ok, err, c
-			}
-		}
+		// Auth-refresh-and-retry: runner calls refreshFn on
+		// ErrAuth and re-invokes eval.
+		return evalResult{Err: fmt.Errorf("provider %s: status %d (%v)", cand.Provider.Provider.Name, status, class), Class: class, Retryable: false}
 	}
 	if !router.IsRetryableClass(class) {
 		if cand.ShouldFailoverOnClientError() {
-			return Response{}, false, fmt.Errorf("provider %s rejected model %q (HTTP %d)", cand.Provider.Provider.Name, cand.Upstream, status), class
+			return evalResult{Err: fmt.Errorf("provider %s rejected model %q (HTTP %d)", cand.Provider.Provider.Name, cand.Upstream, status), Class: class, Retryable: false}
 		}
-		return Response{StatusCode: status, Body: respBody, ContentType: ct}, true, nil, class
+		return evalResult{OK: true, Response: &Response{StatusCode: status, Body: respBody, ContentType: ct}, Class: class, Retryable: false}
 	}
 	p.metrics.Failure(cand.Provider.Provider.Name, class.String())
 	p.router.ReportFailureWithBackoff(cand.Provider, class, retryAfter)
-	return Response{}, false, fmt.Errorf("provider %s: status %d (%v)", cand.Provider.Provider.Name, status, class), class
+	return evalResult{Err: fmt.Errorf("provider %s: status %d (%v)", cand.Provider.Provider.Name, status, class), Class: class, Retryable: true}
 }
 
 // clampPayload caps max_tokens in payload to ceiling, handling both OpenAI (max_tokens) and Gemini (generationConfig.maxOutputTokens) shapes.
@@ -522,6 +639,3 @@ func (r *responseRecorder) Write(b []byte) (int, error) { return r.body.Write(b)
 func (r *responseRecorder) WriteHeader(statusCode int)  { r.status = statusCode }
 
 var _ = json.Marshal
-var _ = strings.Contains
-var _ = io.Copy
-var _ = reqlog.Write

@@ -12,6 +12,7 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/mariobgsp/routre/internal/cache"
@@ -26,6 +27,38 @@ import (
 // relays are exempt (they can legitimately run for minutes; the transport
 // already bounds dial + response headers).
 const attemptTimeout = 30 * time.Second
+
+// firstByteTimeout caps the wait for the FIRST upstream body byte in a
+// streaming response. ResponseHeaderTimeout (20s) covers the headers;
+// this covers the gap between headers and the first token. After the
+// first byte the relay runs unbounded (a long stream is expected). A
+// slow first byte usually means the provider is stuck (auth, model
+// warm-up) and we should fail over rather than hang the client.
+//
+// ponytail: 30s is a generous tail-killer. Tighten to 10s once a
+// per-phase histogram (latency survey #13) shows the real p99.
+const firstByteTimeout = 30 * time.Second
+
+// firstByteBody wraps a streaming response body so the relay's first
+// successful Read signals `firstByte`, cancelling the firstByteTimeout
+// timer in relayStream. After the first byte, reads pass through
+// unchanged; the relay runs unbounded for the rest of the stream. If
+// the timer fires first, relayStream closes the body, in-flight Reads
+// return an error, and the relay reports a pre-first-byte failure
+// (which the runner treats as retryable → failover).
+type firstByteBody struct {
+	io.ReadCloser
+	firstByte chan struct{}
+	once      sync.Once
+}
+
+func (b *firstByteBody) Read(p []byte) (int, error) {
+	n, err := b.ReadCloser.Read(p)
+	if n > 0 {
+		b.once.Do(func() { close(b.firstByte) })
+	}
+	return n, err
+}
 
 // retryTransientAttempts: how many times a candidate is retried on a
 // transient failure (network error or 5xx) before failover moves on.
@@ -80,6 +113,21 @@ func (h *Handlers) route(w http.ResponseWriter, r *http.Request, api apiFormat) 
 	// Request-log + metrics emission on every exit path.
 	logReq := func(e reqlog.Entry) {
 		e.LatencyMS = time.Since(start).Milliseconds()
+		// Per-phase observability foundation (latency survey #4).
+		// Only the successful upstream attempt's phases are
+		// populated; cache-served requests and pre-pipeline errors
+		// leave these zero. TotalMS is the upstream-call wall
+		// time (dial + headers + first body + body, depending on
+		// streaming shape). Future httptrace work will split
+		// this into DialMS/HeadersMS/TTFBMS.
+		if h.pipeline != nil {
+			if ph := h.pipeline.LastPhases(); ph != nil {
+				e.DialMS = ph.DialMS
+				e.HeadersMS = ph.HeadersMS
+				e.TTFBMS = ph.TTFBMS
+				e.TotalMS = ph.TotalMS
+			}
+		}
 		reqlog.Write(e)
 	}
 
@@ -107,12 +155,16 @@ func (h *Handlers) route(w http.ResponseWriter, r *http.Request, api apiFormat) 
 		req := Request{Body: body, Path: r.URL.Path, Header: r.Header, Client: client}
 		if isStreaming(body) {
 			// Streaming: pipeline writes SSE directly to w and records usage.
-			if serr := h.pipeline.Stream(ctx, req, w); serr == nil {
+			serr := h.pipeline.Stream(ctx, req, w)
+			if serr == nil {
 				logReq(reqlog.Entry{Client: client, Model: modelFromBody(body), Status: http.StatusOK, Class: "ok", Stream: true})
 				return
 			}
-			// Fall through only if the pipeline could not start any stream;
-			// legacy path handles it (kept until pipeline covers all exits).
+			// Pipeline failed before any byte reached the client: it already
+			// wrote a 503 body to w. Log the request so reqlog shows the
+			// failure (previously the streaming 503 path was silent here).
+			logReq(reqlog.Entry{Client: client, Model: modelFromBody(body), Status: http.StatusServiceUnavailable, Class: "all_failed", Stream: true})
+			return
 		} else {
 			resp, perr := h.pipeline.Process(ctx, req)
 			if perr == nil {
@@ -120,11 +172,21 @@ func (h *Handlers) route(w http.ResponseWriter, r *http.Request, api apiFormat) 
 				if resp.Provider != "" {
 					reqModel = resp.Provider
 				}
-				if resp.FromCache {
-					logReq(reqlog.Entry{Client: client, Model: reqModel, Status: resp.StatusCode, Class: "cache", PromptTokens: int64(tokenize.Count(string(body), tokenize.KindOpenAI))})
-				} else {
-					logReq(reqlog.Entry{Client: client, Model: reqModel, Status: resp.StatusCode, Class: "ok"})
+				class := "ok"
+				switch {
+				case resp.FromCache:
+					class = "cache"
+				case resp.StatusCode >= 500:
+					class = "all_failed"
+				case resp.StatusCode >= 400:
+					class = "error"
 				}
+				// Provider is the upstream that served (or tried to
+				// serve) the request. Set on every non-streaming log
+				// line so `routre logs -provider <name>` actually
+				// filters something — previously this field was
+				// always empty, which made the filter a no-op.
+				logReq(reqlog.Entry{Client: client, Model: reqModel, Provider: resp.Provider, Status: resp.StatusCode, Class: class, PromptTokens: int64(tokenize.Count(string(body), tokenize.KindOpenAI))})
 				for k, vv := range resp.Header {
 					for _, v := range vv {
 						w.Header().Add(k, v)
@@ -309,6 +371,24 @@ func (h *Handlers) relayStream(ctx context.Context, w http.ResponseWriter, baseU
 		return 0, nil, "", 0, streamUsage{}, err
 	}
 	defer resp.Body.Close()
+
+	// Bound the wait for the first upstream body byte. The relay
+	// signals success via firstByteOK.Close() on its first Write; if
+	// the timer fires first, the body is closed, in-flight Reads
+	// error, and the relay reports a pre-first-byte failure
+	// (retryable → failover). Stops a stuck provider from hanging
+	// the client for minutes.
+	firstByteOK := make(chan struct{})
+	firstByteTimer := time.AfterFunc(firstByteTimeout, func() {
+		select {
+		case <-firstByteOK:
+			// Already succeeded; no-op.
+		default:
+			resp.Body.Close()
+		}
+	})
+	defer firstByteTimer.Stop()
+	resp.Body = &firstByteBody{ReadCloser: resp.Body, firstByte: firstByteOK}
 
 	// A non-2xx response is NOT a stream: return it so the caller can
 	// classify, report the failure, and fail over to the next candidate

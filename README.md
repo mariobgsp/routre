@@ -14,6 +14,18 @@ routre list               # connected providers + token/cost ledger
 Point any agent at `http://127.0.0.1:20128` via `OPENAI_BASE_URL` /
 `ANTHROPIC_BASE_URL` — failover, compression, and caching come for free.
 
+### Latest (v0.3.2 — 2026-08-28)
+
+- **Enriched 503 surface** — every "all providers failed" response now lists per-provider `attempts[]` (provider, kind, class, error, cooldown). Surfaced on both streaming and non-streaming paths; the `failures.Outcome` shape is shared with `routre doctor` so the terminal output and the wire body are byte-identical.
+- **`routre doctor`** — one-shot per-provider probe. Prints `ok` / `auth` / `overloaded` / `server` / `network` for every configured provider, with current cooldown.
+- **Per-phase observability** — request log gains `dial_ms`, `headers_ms`, `ttfb_ms`, `total_ms`. Currently `total_ms` is populated end-to-end; the dial/headers/TTFB split is plumbed and ready for `httptrace` wiring.
+- **Latency hardening** — `http.Transport` tuned (MaxConnsPerHost=64, MaxIdleConnsPerHost=32, DisableCompression, ForceAttemptHTTP2); streaming `firstByteTimeout: 30s` kills stuck-provider p99 spikes by failing over. 20-req bench: p50 4.0s, p90 10s, max 11s (vs 4.0s / 12s / 16s pre-change).
+- **`candidateRunner`** — extracted deep module owning the per-candidate retry, auth-refresh-and-retry, and `Emitted` (no-failover-after-bytes) contract. Both streaming and non-streaming paths go through it; 11 unit tests in `internal/proxy/runner_test.go`.
+- **Streaming `overloaded` double retry** — a single-provider 529 (e.g. `minimax-m3-free` via commandcode) now does `2× 1s` retries before the 503, hiding a 2-second upstream blip entirely.
+- **`--debug` trace** — `routre serve --debug` (or `ROUTRE_DEBUG=1`) prints `[DEBUG proxy]` per-request lines to stderr.
+
+See [CHANGELOG.md](CHANGELOG.md) for the full version history.
+
 ---
 
 ## Table of contents
@@ -210,10 +222,10 @@ opencode run --model <provider>/<model> "hello"
 
 ## How it works
 
-![routre architecture — how it works & how efficient it is](docs/architecture.png)
+![routre v0.3.2 architecture — clients, gateway pipeline, observability, providers](docs/architecture.png)
 
-> **How it works:** every CLI (`opencode`, `Claude Code`, `Codex`, `Cursor`) hits `routre` on `127.0.0.1:20128` → **RTK 90% filter** (12 heuristic filters, no LM) → **sha256 LRU cache** → **tiered router** (subscription → cheap → free, 2s→30m cooldown, `Retry-After` honored) → upstream. **Efficiency:** 91.5% tool-token reduction (90.3% worst payload), 10 MiB RAM idle (+0.2 MiB for `/ui`), 10.6 MiB binary, ~11 ms overhead. See `benchdata/` and `scripts/measure-ram.sh`.
-> Source: [`docs/architecture.puml`](docs/architecture.puml) (PlantUML, rendered via `kroki.io` / `plantuml.com`).
+> **How it works:** every CLI (`opencode`, `Claude Code`, `Codex`, `Cursor`) hits `routre` on `127.0.0.1:20128` → **format detect** (OpenAI / Anthropic / Responses API) → **RTK 90% filter** (12 heuristic filters, no LM) → **sha256 LRU cache** (exact + streaming replay) → **tiered router** (subscription → cheap → free, 2s→30m cooldown, `Retry-After` honored) → `candidateRunner` (1× retry, auth-refresh-and-retry, Emitted contract) → **dialect translator** (OpenAI ↔ Anthropic in-flight SSE) → **dialects-aware relay** (`http.Transport` tuned: MaxConnsPerHost=64, H2, firstByteTimeout=30s) → upstream. Failures surface through the `failures` module with per-provider breakdown. **Observability:** per-phase `total_ms` (dial/headers/TTFB) in JSONL, Prometheus metrics, periodic probe, `routre doctor`. **Efficiency:** 91.5% tool-token reduction (90.3% worst payload), 10 MiB RAM idle (+0.2 MiB for `/ui`), 10.6 MiB binary, ~11 ms overhead.
+> Source: [`docs/architecture.puml`](docs/architecture.puml) (PlantUML, rendered via plantuml.com).
 
 ### Automatic failover
 
@@ -355,6 +367,21 @@ per-request JSONL log (`request_log` in config, tailed with
 `routre logs`) and the `/v1/status` + `/v1/usage` JSON endpoints cover
 the structured detail.
 
+**Per-phase latency (v0.3.2+).** Every JSONL log line carries:
+
+| Field | Meaning |
+| --- | --- |
+| `dial_ms` | time spent establishing the upstream connection |
+| `headers_ms` | time to receive upstream response headers |
+| `ttfb_ms` | time to first body byte (streaming only) |
+| `total_ms` | the whole attempt (end-to-end) |
+| `latency_ms` | end-to-end from request to log (kept for back-compat) |
+
+Currently `total_ms` is populated (single measurement around the relay
+call); the three phase fields are plumbed and ready for `httptrace.ClientTrace`
+wiring. Filter the live log with `routre logs -errors` (failures only) or
+`routre logs -provider <name>` (per-provider).
+
 ### Always-on daemon
 
 - `deploy/routre.service` + `deploy/routre.socket` (systemd;
@@ -428,13 +455,14 @@ minimal template is `config.example.json` (also in `examples/`).
 | Command | Purpose |
 | --- | --- |
 | `routre setup [-config f]` | interactive wizard (providers, URLs, API keys) |
-| `routre serve [-config f] [-port :p]` | run the gateway in the foreground |
+| `routre serve [-config f] [-port :p] [--debug]` | run the gateway in the foreground (`--debug` or `ROUTRE_DEBUG=1` enables verbose `[DEBUG proxy/router]` trace) |
 | `routre start [-config f] [--autostart]` | start the daemon (systemd/launchd, or detached process) |
 | `routre stop [-config f] [--autostart]` | stop the daemon (+ disable auto-start) |
 | `routre restart [-config f]` | restart the daemon (keeps auto-start state) |
 | `routre check [-config f]` | validate config + API keys |
+| `routre doctor [-config f]` | probe every provider (per-provider `ok`/`overloaded`/`auth` with cooldown, shares `failures.Outcome` shape with 503 body) |
 | `routre list [-config f] [-url http://127.0.0.1:20128]` | connected providers + token/cost ledger |
-| `routre logs [-n 50] [-f] [-config f]` | tail the per-request log |
+| `routre logs [-n 50] [-f] [-errors] [-provider <name>] [-config f]` | tail the per-request log (`-errors` only failures, `-provider` filter) |
 | `routre bench [-config f] [-target 90]` | RTK token-reduction benchmark (gated) |
 | `routre update [-check]` | self-update: download + verify + atomically replace this binary (refuses npm-managed copies) |
 | `http://127.0.0.1:20128/ui` | local dashboard: status, providers, keys, full config editor — loopback-only, `~0` idle RAM |
@@ -518,7 +546,9 @@ internal/config/         JSON config + routre.env + SIGHUP reload
 internal/router/         tiers, failover, cooldowns (exponential backoff)
 internal/rtk/            token compression (12 filters + autodetect)
 internal/cache/          exact-match LRU + prefix ordering
-internal/proxy/          HTTP gateway, SSE relay, key injection, translation, loopback-only /ui dashboard
+internal/proxy/          HTTP gateway, SSE relay, key injection, translation, loopback-only /ui dashboard, candidateRunner (retry/refresh/Emitted), per-phase Phases
+internal/proxy/dialect/  cross-kind SSE state machine (OpenAI ↔ Anthropic ↔ Gemini)
+internal/proxy/failures/ shared failure.Outcome shape + 3 render functions (wire 503/404, human doctor)
 internal/usage/          token/cost ledger (persisted to ~/.routre/)
 internal/tokenize/       token estimator (benchmark instrument)
 internal/mock/           mock upstream (tests + keyless e2e)
