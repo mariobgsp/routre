@@ -70,10 +70,10 @@ func run(args []string, logger *log.Logger) error {
 	autostart := fs.Bool("autostart", false, "start: enable auto-start (systemctl enable / launchctl load -w); stop: disable auto-start (systemctl disable / launchctl unload -w)")
 	debug := fs.Bool("debug", false, "serve: enable verbose trace logging (per-candidate, per-attempt, cooldown). Env ROUTRE_DEBUG=1 also enables.")
 
-	// `logs` owns its own flag set (-n, -f, -config); the shared flags
-	// above would reject -n, so skip parsing here and hand the raw args
-	// to cmdLogs. Same for `update` (-check).
-	if sub != "logs" && sub != "update" {
+	// `logs` and `models` own their own flag sets; the shared flags
+	// above would reject their flags, so skip parsing here and hand the
+	// raw args to the subcommand. Same for `update` (-check).
+	if sub != "logs" && sub != "update" && sub != "models" {
 		if err := fs.Parse(args); err != nil {
 			return err
 		}
@@ -114,6 +114,9 @@ func run(args []string, logger *log.Logger) error {
 	case "logs":
 		return cmdLogs("", args, logger)
 
+	case "models":
+		return cmdModels(args, logger)
+
 	case "update":
 		return cmdUpdate(args, logger)
 
@@ -121,7 +124,7 @@ func run(args []string, logger *log.Logger) error {
 		return cmdBench(*cfgPath, *target, logger)
 
 	default:
-		return fmt.Errorf("unknown subcommand %q (want setup, serve, check, doctor, start, stop, restart, list, logs, bench, version)", sub)
+		return fmt.Errorf("unknown subcommand %q (want setup, serve, check, doctor, start, stop, restart, list, logs, models, bench, version)", sub)
 	}
 }
 
