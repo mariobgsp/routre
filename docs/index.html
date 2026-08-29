@@ -479,6 +479,7 @@
           grid-template-columns: 1fr;
         }
       }
+          @media (max-width: 760px){ #what div[style*="grid-template-columns:repeat(3,1fr)"]{grid-template-columns:1fr!important} #goals div[style*="grid-template-columns:repeat(3,1fr)"]{grid-template-columns:1fr!important} }
     </style>
   </head>
   <body>
@@ -510,16 +511,13 @@
     <div class="wrap hero">
       <div>
         <div class="kicker">
-          Single static binary · stdlib only · bench-gated
+          For everyone — works with Claude Code, Codex, opencode, Cursor
         </div>
         <h1 class="h1">
-          The 10-MB gateway<br />you <span class="acc">forget</span> is running.
+          Your AI apps, <span class="acc">cheaper</span> &amp; always online.<br /><span style="font-weight:300;font-size:.62em;color:var(--ink2)">The 10-MB gateway you forget is running.</span>
         </h1>
         <p class="lead" id="lead">
-          10 MiB binary, ~10 MiB RAM idle. Gives every OpenAI/Anthropic CLI —
-          opencode, Claude Code, Codex, Cursor — automatic failover,
-          <b>90% RTK token compression</b> (bench-gated), response cache &amp;
-          per-agent ledger.
+          Routre sits between your apps and AI providers — like a smart power strip.<br />One address, less cost, stays online when a provider is busy. 10&nbsp;MiB, runs quietly on your computer.
         </p>
         <div class="install-pill">
           <code
@@ -607,6 +605,34 @@
       </div>
     </div>
 
+    
+    <!-- Plain-language intro for non-IT -->
+    <div class="wrap section" id="what">
+      <h2 class="h2">What is routre, in plain words?</h2>
+      <p style="font-size:1.06rem;line-height:1.7;max-width:780px;color:var(--ink2)">
+        Your AI tools (Claude Code, Codex, Cursor…) normally talk directly to an AI provider.
+        <strong style="color:var(--fg)">Routre sits in the middle on your computer</strong> and does three simple things:
+        it <strong>remembers answers</strong> so you don't pay twice, it <strong>shrinks sent data</strong> without losing meaning, and it <strong>switches providers</strong> automatically if one is busy.
+        You change one line in your app — point it to <span class="mono" style="background:var(--cream);padding:2px 6px;border-radius:6px">http://127.0.0.1:20128</span> — and everything else is automatic.
+      </p>
+      <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:14px;margin-top:18px">
+        <div class="card" style="text-align:left"><div style="font-size:1.4rem">💰</div><h3>Pay less</h3><p>Remembers identical asks &amp; compresses tool output — <strong>≥90% less</strong> on repetitive tasks. See savings in <span class="mono">routre list</span>.</p><a href="#rtk-token-compression--90-on-tool-heavy-traffic" style="font-size:.82rem">How? →</a></div>
+        <div class="card" style="text-align:left"><div style="font-size:1.4rem">🛡️</div><h3>Stay online</h3><p>If a provider says “overloaded” (common on free models), routre tries the next one instantly. No error shown if another works.</p><a href="#architecture" style="font-size:.82rem">How? →</a></div>
+        <div class="card" style="text-align:left"><div style="font-size:1.4rem">📊</div><h3>See what you spend</h3><p>Built-in ledger per app — tokens, cost, cache hits. Doctor checks each provider. All on <span class="mono">http://127.0.0.1:20128/ui</span>.</p><a href="#response-cache" style="font-size:.82rem">How? →</a></div>
+      </div>
+    </div>
+
+    <div class="wrap section" id="goals" style="background:var(--cream);border:1px solid var(--bd);border-radius:18px;padding:22px 20px">
+      <h2 class="h2" style="margin-top:0">Our goals</h2>
+      <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:16px">
+        <div><strong>1. Save you money</strong><br /><span style="color:var(--ink2)">Every repeated question and every large tool result is made smaller before billing. Cache + RTK together cut real costs, measured by a build gate (&gt;90%).</span></div>
+        <div><strong>2. Never block you</strong><br /><span style="color:var(--ink2)">Free-tier “overloaded” is not your fault. We explain it briefly — “free-tier capacity, not routre” — and fail over so your work continues.</span></div>
+        <div><strong>3. Stay light &amp; forgettable</strong><br /><span style="color:var(--ink2)">One 10-MB binary, ~10 MB RAM idle, stdlib only, bench-gated. No cloud, no account. Dashboard for non-programmers — no JSON editing.</span></div>
+      </div>
+      <p style="margin:12px 0 0;color:var(--ink3);font-size:.86rem">Analogy: like a travel adapter — one plug you trust, it picks the best socket behind the scenes.</p>
+    </div>
+
+    <div style="max-width:780px;margin:14px auto 0;padding:0 20px;color:var(--ink3);font-size:.84rem;text-align:center">👩‍💻 Are you an engineer? Details below stay collapsed — click “How?” above or scroll for full tech spec.</div>
     <div class="wrap section" id="install">
       <h2 class="h2">Install</h2>
       <div class="cols">

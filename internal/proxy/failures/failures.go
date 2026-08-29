@@ -23,6 +23,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"strings"
 	"time"
 )
 
@@ -147,6 +148,34 @@ func RenderBody(kind Kind, model string, outcomes []Outcome, retryAfter time.Dur
 // For OK outcomes: "  <kind>  OK  (<latency>ms)".
 // For failures:    "  <kind>  <class>  status=<int>  <err>".
 func RenderHuman(w io.Writer, outcomes []Outcome) {
+	// Brief for free-tier overloaded: all providers hit overloaded (e.g.
+	// minimax-m3-free via commandcode). One line explains it's free-tier
+	// capacity, not routre, and keeps the log readable. Wire keeps attempts.
+	if len(outcomes) > 0 {
+		allOverloaded := true
+		for _, o := range outcomes {
+			if o.Class != "overloaded" {
+				allOverloaded = false
+				break
+			}
+		}
+		if allOverloaded {
+			// If any provider/model hints at -free, mention free-tier.
+			freeHint := false
+			for _, o := range outcomes {
+				if strings.Contains(o.Provider, "-free") || strings.Contains(o.Err, "-free") {
+					freeHint = true
+					break
+				}
+			}
+			if freeHint {
+				fmt.Fprintln(w, "overloaded — free-tier capacity (not routre), retrying in 1s")
+			} else {
+				fmt.Fprintln(w, "overloaded — upstream capacity (not routre), retrying in 1s")
+			}
+			return
+		}
+	}
 	for _, o := range outcomes {
 		if o.Class == "" || o.Class == "ok" {
 			fmt.Fprintf(w, "  %-18s %-9s OK", o.Provider, o.Kind)
@@ -176,6 +205,20 @@ func buildBody(kind Kind, model string, outcomes []Outcome) body {
 	b.Error.Model = model
 	switch kind {
 	case KindAllFailed:
+		if strings.HasSuffix(model, "-free") && len(outcomes) > 0 {
+			allOverloaded := true
+			for _, o := range outcomes {
+				if o.Class != "overloaded" {
+					allOverloaded = false
+					break
+				}
+			}
+			if allOverloaded {
+				b.Error.Message = fmt.Sprintf("model %q overloaded — free-tier capacity (not routre), retry in 1s", model)
+				b.Error.Attempts = dedup(outcomes)
+				break
+			}
+		}
 		b.Error.Message = fmt.Sprintf("all providers for model %q failed", model)
 		b.Error.Attempts = dedup(outcomes)
 	case KindProvidersUnavailable:
