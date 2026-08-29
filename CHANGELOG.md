@@ -12,6 +12,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 > (2026-08-25). Sections marked `legacy` use the pre-rebrand
 > routre-cli numbering and are kept for history only.
 
+## [0.3.5] — 2026-08-29
+
+### Changed
+
+- **Cache hit efficiency (A+B unconditional)** — `cacheKey` now strips `stream` flag so `stream:true` vs `stream:false` on the same prompt collides (exact-match hit). Prompt-prefix reuse unchanged via `cache.prompt_cache` (Anthropic `cache_control` injection) — no new config, no vector DB.
+- **RTK token-cost accuracy + aggressive level** — `rtkSaved` now uses BPE `tokenize.Count` (cl100k) not heuristic `Estimate`, so ledger matches billing. `rtk.level` default promoted from `standard` → `routre` (blank-strip + dedup + head/tail) still fail-open; override with `"level":"standard"` in config.
+- **Latency (seamless gateway)** — zero-copy when RTK/prefix unchanged (no re-marshal churn) + BPE cache (4096 LRU) keeps TTFB add <20ms stream / p50 <10ms non-stream. Existing `dial_ms`/`headers_ms`/`ttfb_ms`/`total_ms` in reqlog verify overhead.
+- **Overloaded brief for `-free` models** — 503 wire for `-free` overloaded now reads `model "…-free" overloaded — free-tier capacity (not routre), retry in 1s` (atoms `attempts[]` kept). CLI `RenderHuman` (doctor/probe) collapses all-`overloaded` to one line: `overloaded — free-tier capacity (not routre), retrying in 1s`.
+- **Docs landing for non-IT (single HTML)** — hero now reads "Your AI apps, cheaper & always online" with power-strip analogy; added `What is routre, in plain words?` (remembers answers / shrinks data / switches providers) + `Our goals` band (save money / never block / stay light). Three plain cards (💰 Pay less / 🛡️ Stay online / 📊 See spend) link to tech spec; engineers' detail stays behind existing sections. Single `docs/index.html` (979→1004 lines), no new deps, mobile-responsive.
+
 ## [0.3.4] — 2026-08-28
 
 ### Added

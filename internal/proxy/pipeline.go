@@ -106,7 +106,7 @@ func (p *Pipeline) Stream(ctx context.Context, req Request, w http.ResponseWrite
 	processed, rtkChanged := p.rtk.Apply(body)
 	rtkSaved := 0
 	if rtkChanged {
-		rtkSaved = tokenize.Estimate(string(body)) - tokenize.Estimate(string(processed))
+		rtkSaved = tokenize.Count(string(body), tokenize.KindOpenAI) - tokenize.Count(string(processed), tokenize.KindOpenAI)
 		p.metrics.RTKApplied()
 	}
 	p.metrics.RTKSaved(int64(rtkSaved))
@@ -327,7 +327,7 @@ func (p *Pipeline) processInternal(ctx context.Context, req Request) (Response, 
 	processed, rtkChanged := p.rtk.Apply(body)
 	rtkSaved := 0
 	if rtkChanged {
-		rtkSaved = tokenize.Estimate(string(body)) - tokenize.Estimate(string(processed))
+		rtkSaved = tokenize.Count(string(body), tokenize.KindOpenAI) - tokenize.Count(string(processed), tokenize.KindOpenAI)
 		p.metrics.RTKApplied()
 	}
 	p.metrics.RTKSaved(int64(rtkSaved))

@@ -41,7 +41,7 @@ type Config struct {
 // DefaultConfig matches 9router RTK's operating window (500B..10MiB), on by
 // default.
 func DefaultConfig() Config {
-	return Config{Enabled: true, MinBytes: 500, MaxBytes: 10 << 20}
+	return Config{Enabled: true, MinBytes: 500, MaxBytes: 10 << 20, Level: "routre"}
 }
 
 // RTK is a concurrency-safe compressor with a reloadable config.

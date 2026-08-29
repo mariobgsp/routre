@@ -222,8 +222,20 @@ func isStreaming(body []byte) bool {
 }
 
 // cacheKey is the exact-match key over the processed body (post-RTK,
-// post-ordering).
+// post-ordering). The "stream" flag is stripped so the same prompt
+// hits whether the client used stream:true or stream:false.
 func cacheKey(processed []byte) string {
+	if bytes.Contains(processed, []byte(`"stream"`)) {
+		var m map[string]json.RawMessage
+		if err := json.Unmarshal(processed, &m); err == nil {
+			if _, ok := m["stream"]; ok {
+				delete(m, "stream")
+				if b, err := json.Marshal(m); err == nil {
+					return cache.Key(b)
+				}
+			}
+		}
+	}
 	return cache.Key(processed)
 }
 
