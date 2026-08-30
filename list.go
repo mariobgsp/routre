@@ -239,8 +239,13 @@ func printUsageTo(w io.Writer, rows []usage.Row, live bool) {
 			cr.TotalTokens(), cr.PromptTokens, cr.CompletionTokens)
 		fmt.Fprintf(w, "    saved:    %d tokens (rtk %d + cache %d)\n",
 			cr.TotalSavedTokens(), cr.RTKSavedTokens, cr.CacheSavedTokens)
-		if cr.CacheReadTokens > 0 {
-			fmt.Fprintf(w, "    cache read: %d tokens (provider-reported)\n", cr.CacheReadTokens)
+		if cr.CacheReadTokens > 0 || cr.CacheCreationTokens > 0 {
+			fmt.Fprintf(w, "    prompt cache: %d read tokens, %d creation tokens",
+				cr.CacheReadTokens, cr.CacheCreationTokens)
+			if cr.CacheSavingsUSD > 0 {
+				fmt.Fprintf(w, " — net savings %s", fmtMoney(cr.CacheSavingsUSD))
+			}
+			fmt.Fprintln(w)
 		}
 		costStr := "n/a (no prices configured)"
 		savedStr := "n/a"
@@ -264,6 +269,9 @@ func printUsageTo(w io.Writer, rows []usage.Row, live bool) {
 					r.Provider, r.Model, r.Requests, r.TotalTokens(), r.TotalSavedTokens())
 				if r.CacheReadTokens > 0 {
 					line += fmt.Sprintf("  cache-read %d", r.CacheReadTokens)
+				}
+				if r.CacheCreationTokens > 0 {
+					line += fmt.Sprintf("  cache-create %d", r.CacheCreationTokens)
 				}
 				fmt.Fprintln(w, line)
 			}

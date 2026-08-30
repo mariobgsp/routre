@@ -28,6 +28,15 @@ func translateBody(from, to Format, body []byte) ([]byte, error) {
 //   - tools: not mapped (tool definitions are dropped);
 //   - image_url blocks: replaced with an omission placeholder;
 //   - function calls / tool_calls: flattened into text.
+//
+// Anthropic prompt-cache breakpoints (cache_control: {type: "ephemeral"})
+// are injected on the system block and on the last two messages so
+// every request that lands on an Anthropic provider benefits from the
+// upstream prompt cache (1.25x write on a new prefix, 0.1x read on
+// hits). Without explicit breakpoints, Anthropic's implicit cache
+// only covers one prefix per conversation; the explicit pair captures
+// the system prompt (the largest stable prefix in agent traffic) plus
+// the conversation tail, which is what most repeat calls share.
 func openAItoAnthropic(body []byte) ([]byte, error) {
 	var in struct {
 		Model       string          `json:"model"`
@@ -79,13 +88,47 @@ func openAItoAnthropic(body []byte) ([]byte, error) {
 		out = append(out, outMsg{Role: m.Role, Content: text})
 	}
 
+	// Mark the last two messages (or all of them if fewer) with
+	// cache_control: {type: "ephemeral"} so Anthropic's prompt cache
+	// captures both the system prefix and the conversation tail. The
+	// control object is attached to the message's content array, not
+	// the message itself: Anthropic reads cache_control from the last
+	// block of the marked content array.
+	// Skipped for empty / single-message conversations where there is
+	// no tail to cache beyond the system.
+	for i := range out {
+		if i < len(out)-2 {
+			continue
+		}
+		// Convert string content to a single text block so we can
+		// attach cache_control to it. Anthropic also accepts cache_control
+		// on a string content directly via the new schema, but a block
+		// array is the most compatible shape across SDK versions.
+		switch c := out[i].Content.(type) {
+		case string:
+			out[i].Content = []map[string]any{
+				{"type": "text", "text": c, "cache_control": map[string]any{"type": "ephemeral"}},
+			}
+		case []map[string]any:
+			if len(c) > 0 {
+				c[len(c)-1]["cache_control"] = map[string]any{"type": "ephemeral"}
+			}
+		}
+	}
+
 	doc := map[string]any{
 		"model":      in.Model,
 		"max_tokens": maxInt(in.MaxTokens, 4096),
 		"messages":   out,
 	}
 	if len(systemParts) > 0 {
-		doc["system"] = joinStrings(systemParts, "\n")
+		// Emit the system as a content-block array with cache_control
+		// on the (only) block. This is the primary cache hit surface
+		// for agents: the system prompt is large, stable across calls,
+		// and shared across every request in a session.
+		doc["system"] = []map[string]any{
+			{"type": "text", "text": joinStrings(systemParts, "\n"), "cache_control": map[string]any{"type": "ephemeral"}},
+		}
 	}
 	if in.Stream {
 		doc["stream"] = true

@@ -25,15 +25,21 @@ type Metrics struct {
 	rtkSave    int64
 	rtkApplied int64
 	cacheRd    int64
+	cacheCr    int64            // prompt-cache creation tokens (1.25x writes), global sum
+	cacheCrBy  map[string]int64 // per-provider creation tokens (provider -> tokens)
+	cacheSv    int64            // estimated prompt-cache savings tokens, global sum
+	cacheSvBy  map[string]int64 // per-provider net savings (provider -> net tokens)
 }
 
 // New creates an empty registry with start time now.
 func New() *Metrics {
 	return &Metrics{
-		start:    time.Now(),
-		req:      map[string]int64{},
-		fail:     map[string]int64{},
-		cacheMBy: map[string]int64{},
+		start:     time.Now(),
+		req:       map[string]int64{},
+		fail:      map[string]int64{},
+		cacheMBy:  map[string]int64{},
+		cacheCrBy: map[string]int64{},
+		cacheSvBy: map[string]int64{},
 	}
 }
 
@@ -92,9 +98,41 @@ func (m *Metrics) RTKApplied() {
 }
 
 // CacheRead adds provider-reported prompt-cache read tokens.
-func (m *Metrics) CacheRead(n int64) {
+// The provider name is recorded as a label so the per-provider
+// breakdown in /metrics can answer "which providers are benefiting
+// from prompt caching" — most useful for Anthropic where the cache
+// control injection is the explicit lever.
+func (m *Metrics) CacheRead(provider string, n int64) {
 	m.mu.Lock()
 	m.cacheRd += n
+	// A read token implies a 0.1x billing — savings vs full price are
+	// 0.9 * n. Track this directly so /metrics shows the visible benefit
+	// even when no pricing is configured (the dollar figure is reported
+	// per-row in `routre list`).
+	savings := n * 9 / 10
+	m.cacheSv += savings
+	m.cacheSvBy[provider] += savings
+	m.mu.Unlock()
+}
+
+// CacheCreation adds provider-reported prompt-cache creation tokens
+// (OpenAI / Anthropic `cache_creation_input_tokens`). These are billed
+// at 1.25x — i.e. the write *cost* is 0.25x the token count beyond
+// the standard input rate. Tracked as a separate counter so callers can
+// see the full prompt-cache picture: how many tokens were reused (read)
+// and how many were spent to make them reusable (creation).
+func (m *Metrics) CacheCreation(provider string, n int64) {
+	m.mu.Lock()
+	m.cacheCr += n
+	m.cacheCrBy[provider] += n
+	// A creation token is an investment: it costs 0.25x extra now, but
+	// the next 9 reads of the same prefix at 0.1x are pure savings.
+	// We track the *gross write cost* here so callers can see the full
+	// ledger; net (read savings minus write extra cost) is computed in
+	// the usage store using configured provider prices.
+	if n > 0 {
+		m.cacheSvBy[provider] -= n / 4
+	}
 	m.mu.Unlock()
 }
 
@@ -150,6 +188,31 @@ func (m *Metrics) WriteProm(w io.Writer) {
 	fmt.Fprintf(w, "# HELP routre_cache_read_tokens_total provider-reported prompt-cache hit tokens\n")
 	fmt.Fprintf(w, "# TYPE routre_cache_read_tokens_total counter\n")
 	fmt.Fprintf(w, "routre_cache_read_tokens_total %d\n", m.cacheRd)
+	fmt.Fprintf(w, "# HELP routre_cache_creation_tokens_total provider-reported prompt-cache creation (write) tokens\n")
+	fmt.Fprintf(w, "# TYPE routre_cache_creation_tokens_total counter\n")
+	fmt.Fprintf(w, "routre_cache_creation_tokens_total %d\n", m.cacheCr)
+	// Per-provider breakdown of cache creation so callers can see which
+	// providers are paying the 1.25x write cost. The `_total` series
+	// above is kept for backward compatibility; the per-provider lines
+	// are additive and the per-provider values sum to the total.
+	for _, k := range sortedKeys(m.cacheCrBy) {
+		fmt.Fprintf(w, "routre_cache_creation_tokens_total{provider=%q} %d\n", k, m.cacheCrBy[k])
+	}
+	fmt.Fprintf(w, "# HELP routre_cache_savings_tokens_total estimated prompt-cache savings (read*0.9 minus write*0.25)\n")
+	fmt.Fprintf(w, "# TYPE routre_cache_savings_tokens_total gauge\n")
+	// Net token-equivalent savings: every read token saves 0.9 of a
+	// full-price token, every creation token costs 0.25 of a full-price
+	// token. The gauge below is the per-token net — positive means
+	// caching is winning, negative means more is being written than
+	// read on the running window.
+	netSavings := m.cacheRd*9/10 - m.cacheCr/4
+	fmt.Fprintf(w, "routre_cache_savings_tokens_total %d\n", netSavings)
+	// Per-provider net savings so the Anthropic vs OpenAI prompt-cache
+	// effect can be compared directly. Each provider's gauge is the
+	// sum of its own read savings minus its own write extra cost.
+	for _, k := range sortedKeys(m.cacheSvBy) {
+		fmt.Fprintf(w, "routre_cache_savings_tokens_total{provider=%q} %d\n", k, m.cacheSvBy[k])
+	}
 }
 
 // CacheMissByReason returns a copy of the per-reason miss counters.

@@ -12,10 +12,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 > (2026-08-25). Sections marked `legacy` use the pre-rebrand
 > routre-cli numbering and are kept for history only.
 
+## [0.4.1] — 2026-08-30
+
+### Added
+
+- **Per-provider cache labels** — `routre_cache_creation_tokens_total{provider="…"}` and `routre_cache_savings_tokens_total{provider="…"}` are now exposed in `/metrics` alongside the existing global sums, so the per-provider cost vs benefit of prompt caching can be compared at a glance. Backward-compatible: the unlabelled `_total` series are kept and equal the sum of the per-provider values. `CacheRead` / `CacheCreation` on the metrics layer now take a `provider` argument; the call sites in `internal/proxy/pipeline.go` pass `cand.Provider.Provider.Name` directly. The Anthropic vs OpenAI prompt-cache effect can now be measured separately on a single `/metrics` scrape.
+
+- **Anthropic `cache_control` injection (inactive)** — when the OpenAI→Anthropic cross-kind translation fires, the system block and the last two conversation messages now carry `cache_control: {type: "ephemeral"}` breakpoints so Anthropic's upstream 5-minute prompt cache can cache the prefix across consecutive calls. Three unit tests cover the breakpoint shape (`internal/proxy/dialect/translate_test.go`). **Inactive on the current shipped configuration**: no live provider has `kind: "anthropic"` in `config.json`, so the OpenAI→Anthropic translation path does not fire for current traffic. The code is in the binary so that the moment an Anthropic-kind provider is added, the breakpoints activate without a code change. The per-provider label above will surface the cache_creation_input_tokens Anthropic returns on first use.
+
 ## [0.4.0] — 2026-08-30
 
 ### Added
 
+- **Prompt-cache creation ledger** — provider-reported `cache_creation_input_tokens` (OpenAI's 1.25x write on a new cacheable prefix; Anthropic's equivalent) is now captured alongside cache reads. New `/metrics` counters: `routre_cache_creation_tokens_total` (counter) and `routre_cache_savings_tokens_total` (gauge, `read*0.9 - creation*0.25`). New per-row fields in `routre list`: `cache_creation` token count and `CacheSavingsUSD` (net prompt-cache savings at the provider's configured input price). Replaces the previous "read tokens only" blind spot — the prior live data showed 17.6M read tokens with creation tokens dropped entirely, so the *cost* of cache writes was invisible. The non-streaming extractor, streaming sniffer, and Anthropic→OpenAI dialect now all surface both fields. Pure observation change: no config knob, no cache logic touched.
 - **Cache miss attribution** — misses are now counted by reason (`absent`, `expired`, `shape_mismatch`, `disabled`) via `routre_cache_misses_by_reason_total{reason=…}` in `/metrics` and `cache_miss_reasons` in `/v1/status`. The legacy `routre_cache_misses_total` counter is kept for compatibility. This answers “why do I miss?” before tuning anything.
 - **Canonical cache keys** (`cache.canonical_keys`, default on) — the cache key is computed over a deterministic JSON round-trip (sorted keys, no whitespace, `json.Number` preserves large ints), so requests that differ only in key order or whitespace share a key and hit. Strictly output-inert: sampling parameters stay in the key, so there is zero wrong-output risk. Applies to stream and non-stream, get and put, via a single `Pipeline.keyFor`.
 - **Sliding TTL** (`cache.sliding_ttl`, default on) — a hit refreshes the entry's expiry (`now + TTL`), so actively used entries no longer expire mid-use; only `max_bytes` bounds RAM.

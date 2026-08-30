@@ -256,8 +256,9 @@ func (p *Pipeline) streamEval(ctx context.Context, cand router.Candidate, _ int,
 		if prompt == 0 {
 			prompt = int64(tokenize.Count(string(processed), tokenize.KindOpenAI))
 		}
-		p.usage.RecordFull(client, modelFromBody(body), prompt, susage.completion, int64(rtkSaved), 0, susage.cacheRead, pricesOf(p.cfg.Get(), cand.Provider.Provider.Name), 0)
-		p.metrics.CacheRead(susage.cacheRead)
+		p.usage.RecordFull(client, modelFromBody(body), prompt, susage.completion, int64(rtkSaved), 0, susage.cacheRead, susage.cacheCreation, pricesOf(p.cfg.Get(), cand.Provider.Provider.Name), 0)
+		p.metrics.CacheRead(cand.Provider.Provider.Name, susage.cacheRead)
+		p.metrics.CacheCreation(cand.Provider.Provider.Name, susage.cacheCreation)
 		p.metrics.Request(client, cand.Provider.Provider.Name, requested, "ok")
 		// Streaming replay cache: store the exact client-dialect SSE bytes so
 		// an identical later request replays without an upstream call.
@@ -569,11 +570,12 @@ func (p *Pipeline) tryEval(ctx context.Context, cand router.Candidate, req Reque
 			}
 		}
 		extractor := NewExtractor()
-		prompt, completion, reportedCost, cacheRead := extractor.ExtractNonStreaming(respBody, body)
-		p.usage.RecordFull(client, modelFromBody(body), prompt, completion, int64(rtkSaved), 0, cacheRead, pricesOf(p.cfg.Get(), cand.Provider.Provider.Name), reportedCost)
+		prompt, completion, reportedCost, cacheRead, cacheCreation := extractor.ExtractNonStreaming(respBody, body)
+		p.usage.RecordFull(client, modelFromBody(body), prompt, completion, int64(rtkSaved), 0, cacheRead, cacheCreation, pricesOf(p.cfg.Get(), cand.Provider.Provider.Name), reportedCost)
 		p.cache.Put(p.keyFor(processed), cacheEntry(respBody, ct, prompt, completion))
 		p.metrics.Request(client, cand.Provider.Provider.Name, requested, "ok")
-		p.metrics.CacheRead(cacheRead)
+		p.metrics.CacheRead(cand.Provider.Provider.Name, cacheRead)
+		p.metrics.CacheCreation(cand.Provider.Provider.Name, cacheCreation)
 		hdr := http.Header{"Content-Type": []string{ct}, "X-Llrouter-Cache": []string{"miss"}, "X-Llrouter-Provider": []string{cand.Provider.Provider.Name}}
 		if cand.IsFree {
 			hdr.Set("X-Llrouter-Free", cand.Upstream)

@@ -16,6 +16,17 @@ type streamUsage struct {
 	// discounted cache-read rate. Zero when the provider does not report
 	// them or the prefix was not cached.
 	cacheRead int64
+	// cacheCreation: provider-reported prompt-cache creation tokens
+	// (OpenAI `cache_creation_input_tokens`, Anthropic
+	// `cache_creation_input_tokens`), the one-time 1.25x write charged on
+	// the first request that materializes a cacheable prefix. Zero when
+	// the provider does not report it or no new prefix was written.
+	// These are NOT savings: the same input was billed (at a higher
+	// rate) on this request, but every subsequent read of the same
+	// prefix is at the 0.1x rate, so creation tokens are an investment
+	// in future savings — surfaced alongside cacheRead so the ledger
+	// shows the full prompt-cache picture.
+	cacheCreation int64
 	// captured holds the exact client-dialect SSE bytes written to the
 	// client on a cleanly completed stream, for the streaming replay cache.
 	// Nil when capture was skipped or the client went away.
@@ -34,11 +45,12 @@ type streamUsage struct {
 // are best-effort: providers emit usage on the final chunk (OpenAI) or across
 // message_start/message_delta events (Anthropic).
 type usageSniffer struct {
-	r          io.Reader
-	carry      []byte
-	prompt     int64
-	completion int64
-	cacheRead  int64
+	r             io.Reader
+	carry         []byte
+	prompt        int64
+	completion    int64
+	cacheRead     int64
+	cacheCreation int64
 }
 
 var (
@@ -48,6 +60,12 @@ var (
 	// and cachedContentTokenCount (Gemini) report prompt-cache hits. Mirrors
 	// usageFromBody, which already parses the first two non-streaming.
 	reCached = regexp.MustCompile(`"(?:cached_tokens|cache_read_input_tokens|cachedContentTokenCount)":\s*(\d+)`)
+	// cache_creation_input_tokens (OpenAI + Anthropic): prompt-cache
+	// write tokens, billed at 1.25x the standard input rate on the
+	// request that materializes the prefix. Every subsequent read of
+	// the same prefix is at 0.1x, so this is the *investment* side of
+	// the prompt-cache ledger and is needed to compute dollar savings.
+	reCacheCreation = regexp.MustCompile(`"cache_creation_input_tokens":\s*(\d+)`)
 )
 
 func newUsageSniffer(r io.Reader) *usageSniffer { return &usageSniffer{r: r} }
@@ -97,10 +115,19 @@ func (u *usageSniffer) scan(b []byte) {
 			u.cacheRead = v
 		}
 	}
+	// Cache creation (the 1.25x write) only appears on requests that
+	// actually wrote a new prefix; absence is normal and means the
+	// prefix was already cached or the model doesn't support
+	// prompt caching. Last-wins mirrors the other fields above.
+	if ms := reCacheCreation.FindAllSubmatch(b, -1); len(ms) > 0 {
+		if v, e := strconv.ParseInt(string(ms[len(ms)-1][1]), 10, 64); e == nil {
+			u.cacheCreation = v
+		}
+	}
 }
 
 func (u *usageSniffer) usage() streamUsage {
-	return streamUsage{prompt: u.prompt, completion: u.completion, cacheRead: u.cacheRead}
+	return streamUsage{prompt: u.prompt, completion: u.completion, cacheRead: u.cacheRead, cacheCreation: u.cacheCreation}
 }
 
 // drainCarry scans any remaining buffered carry (stream ended without a
