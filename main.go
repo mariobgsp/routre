@@ -171,6 +171,7 @@ func cmdServe(cfgPath, port string, logger *log.Logger, debug ...bool) error {
 	cch := cache.New(cache.Config{
 		Enabled: cfg.Cache.Enabled, MaxEntries: cfg.Cache.MaxEntries,
 		TTLSeconds: cfg.Cache.TTLSeconds, PrefixOrder: cfg.Cache.PrefixOrder,
+		MaxBytes: cfg.Cache.MaxBytes, SlidingTTL: cfg.Cache.SlidingTTL,
 	})
 	tk := rtk.New(rtk.Config{Enabled: cfg.RTK.Enabled, MinBytes: cfg.RTK.MinBytes, MaxBytes: cfg.RTK.MaxBytes, Level: cfg.RTK.Level})
 

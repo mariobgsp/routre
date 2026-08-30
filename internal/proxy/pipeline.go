@@ -116,7 +116,9 @@ func (p *Pipeline) Stream(ctx context.Context, req Request, w http.ResponseWrite
 	// Streaming replay cache: serve an identical earlier stream from memory.
 	// Entries are byte-identical client-dialect SSE captures, so tool-call
 	// ids, finish_reason and [DONE] stay self-consistent by construction.
-	if e, ok := p.cache.Get(cacheKey(processed)); ok && e.SSE {
+	streamKey := p.keyFor(processed)
+	e, got, missReason := p.cache.GetWithReason(streamKey)
+	if got && e.SSE {
 		cacheSaved := e.PromptTokens
 		if cacheSaved == 0 {
 			cacheSaved = int64(tokenize.Count(string(processed), tokenize.KindOpenAI))
@@ -134,6 +136,14 @@ func (p *Pipeline) Stream(ctx context.Context, req Request, w http.ResponseWrite
 			f.Flush()
 		}
 		return nil
+	}
+	if got && !e.SSE {
+		// Entry exists but is a JSON (non-streaming) capture; the client
+		// asked for a stream. This is a shape mismatch, not a capacity/age
+		// miss.
+		p.metrics.CacheMissReason("shape_mismatch")
+	} else {
+		p.metrics.CacheMissReason(string(missReason))
 	}
 	p.metrics.CacheMiss()
 	cands := p.router.CandidatesWithFallbacks(requested, p.cfg.Get().Fallbacks)
@@ -252,7 +262,7 @@ func (p *Pipeline) streamEval(ctx context.Context, cand router.Candidate, _ int,
 		// Streaming replay cache: store the exact client-dialect SSE bytes so
 		// an identical later request replays without an upstream call.
 		if len(susage.captured) > 0 {
-			p.cache.Put(cacheKey(processed), cache.Entry{
+			p.cache.Put(p.keyFor(processed), cache.Entry{
 				Body: susage.captured, ContentType: "text/event-stream",
 				PromptTokens: susage.prompt, CompletionTokens: susage.completion,
 				SSE: true,
@@ -306,6 +316,19 @@ func (p *Pipeline) preparePayload(api apiFormat, clientFmt apiFormat, cand route
 	return payload, nil
 }
 
+// keyFor returns the cache key for a processed body. When
+// cache.canonical_keys is enabled the body is first reduced to a
+// deterministic JSON round-trip (sorted keys, no whitespace) so that
+// semantically identical requests differing only in byte layout share a
+// key. Canonicalization never touches the values, so sampling
+// parameters stay in the key and wrong-output risk is zero.
+func (p *Pipeline) keyFor(processed []byte) string {
+	if p.cfg.Get().Cache.CanonicalKeys {
+		return cacheKey(cache.CanonicalJSON(processed))
+	}
+	return cacheKey(processed)
+}
+
 func (p *Pipeline) processInternal(ctx context.Context, req Request) (Response, error) {
 	p.lastPhases = nil
 	body := req.Body
@@ -334,9 +357,10 @@ func (p *Pipeline) processInternal(ctx context.Context, req Request) (Response, 
 	if cfg := p.cfg.Get(); cfg.Cache.PrefixOrder {
 		processed = orderPrompt(processed)
 	}
-	key := cacheKey(processed)
+	key := p.keyFor(processed)
 	if !streaming {
-		if e, ok := p.cache.Get(key); ok && !e.SSE {
+		e, got, missReason := p.cache.GetWithReason(key)
+		if got && !e.SSE {
 			cacheSaved := e.PromptTokens
 			if cacheSaved == 0 {
 				cacheSaved = int64(tokenize.Count(string(processed), tokenize.KindOpenAI))
@@ -354,6 +378,13 @@ func (p *Pipeline) processInternal(ctx context.Context, req Request) (Response, 
 				}
 			}
 			return Response{StatusCode: 200, Body: cacheBody, ContentType: cacheCT, Header: http.Header{"X-Llrouter-Cache": []string{"hit"}}, FromCache: true}, nil
+		}
+		if got && e.SSE {
+			// Entry exists but is an SSE (streaming) capture; the client
+			// asked for JSON. Shape mismatch, not capacity/age.
+			p.metrics.CacheMissReason("shape_mismatch")
+		} else {
+			p.metrics.CacheMissReason(string(missReason))
 		}
 		p.metrics.CacheMiss()
 	}
@@ -540,7 +571,7 @@ func (p *Pipeline) tryEval(ctx context.Context, cand router.Candidate, req Reque
 		extractor := NewExtractor()
 		prompt, completion, reportedCost, cacheRead := extractor.ExtractNonStreaming(respBody, body)
 		p.usage.RecordFull(client, modelFromBody(body), prompt, completion, int64(rtkSaved), 0, cacheRead, pricesOf(p.cfg.Get(), cand.Provider.Provider.Name), reportedCost)
-		p.cache.Put(cacheKey(processed), cacheEntry(respBody, ct, prompt, completion))
+		p.cache.Put(p.keyFor(processed), cacheEntry(respBody, ct, prompt, completion))
 		p.metrics.Request(client, cand.Provider.Provider.Name, requested, "ok")
 		p.metrics.CacheRead(cacheRead)
 		hdr := http.Header{"Content-Type": []string{ct}, "X-Llrouter-Cache": []string{"miss"}, "X-Llrouter-Provider": []string{cand.Provider.Provider.Name}}

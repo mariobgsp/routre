@@ -105,3 +105,82 @@ func TestOrderPromptBails(t *testing.T) {
 		t.Fatal("no messages: pass through")
 	}
 }
+
+func TestMissReasons(t *testing.T) {
+	c := New(Config{Enabled: true, MaxEntries: 8, TTLSeconds: 1})
+	if _, ok, r := c.GetWithReason("k"); ok || r != MissAbsent {
+		t.Fatalf("absent miss: got ok=%v reason=%q", ok, r)
+	}
+	c.Put("k", Entry{Body: []byte("x")})
+	if _, ok, r := c.GetWithReason("k"); !ok || r != "" {
+		t.Fatalf("hit: got ok=%v reason=%q", ok, r)
+	}
+	time.Sleep(1100 * time.Millisecond)
+	if _, ok, r := c.GetWithReason("k"); ok || r != MissExpired {
+		t.Fatalf("expired miss: got ok=%v reason=%q", ok, r)
+	}
+	d := New(Config{Enabled: false})
+	d.Put("k", Entry{Body: []byte("x")})
+	if _, ok, r := d.GetWithReason("k"); ok || r != MissDisabled {
+		t.Fatalf("disabled miss: got ok=%v reason=%q", ok, r)
+	}
+}
+
+func TestCanonicalJSON(t *testing.T) {
+	a := `{"model":"gpt-5", "messages":[{"role":"user","content":"hi"}], "temperature":0.7}`
+	b := `{"temperature":0.7,"model":"gpt-5","messages":[{"content":"hi","role":"user"}]}`
+	ca := CanonicalJSON([]byte(a))
+	cb := CanonicalJSON([]byte(b))
+	if string(ca) != string(cb) {
+		t.Fatalf("canonical mismatch:\n%s\n%s", ca, cb)
+	}
+	if !strings.Contains(string(ca), `"temperature":0.7`) {
+		t.Fatalf("sampling param must be preserved: %s", ca)
+	}
+	if Key(ca) != Key(cb) {
+		t.Fatal("canonical forms must key identically")
+	}
+}
+
+func TestCanonicalJSONNumberPrecision(t *testing.T) {
+	in := `{"n":9007199254740993}`
+	out := CanonicalJSON([]byte(in))
+	if string(out) != in {
+		t.Fatalf("large int must survive round-trip exactly: %s", out)
+	}
+}
+
+func TestCanonicalJSONInvalid(t *testing.T) {
+	in := []byte(`{"messages":[`)
+	if out := CanonicalJSON(in); string(out) != string(in) {
+		t.Fatal("invalid JSON must pass through unchanged")
+	}
+}
+
+func TestSlidingTTL(t *testing.T) {
+	// TTL 1s, sliding on: a hit shortly before expiry must refresh it so
+	// the entry survives past the original deadline.
+	c := New(Config{Enabled: true, MaxEntries: 8, TTLSeconds: 1, SlidingTTL: true})
+	c.Put("k", Entry{Body: []byte("x")})
+	time.Sleep(600 * time.Millisecond)
+	if _, ok, _ := c.GetWithReason("k"); !ok {
+		t.Fatal("entry must be alive at 0.6s")
+	}
+	time.Sleep(600 * time.Millisecond) // now 1.2s > original 1s TTL
+	if _, ok, r := c.GetWithReason("k"); !ok {
+		t.Fatalf("sliding hit must refresh expiry (reason=%q)", r)
+	}
+}
+
+func TestSlidingTTLOff(t *testing.T) {
+	c := New(Config{Enabled: true, MaxEntries: 8, TTLSeconds: 1, SlidingTTL: false})
+	c.Put("k", Entry{Body: []byte("x")})
+	time.Sleep(600 * time.Millisecond)
+	if _, ok, _ := c.GetWithReason("k"); !ok {
+		t.Fatal("entry must be alive at 0.6s")
+	}
+	time.Sleep(600 * time.Millisecond)
+	if _, ok, r := c.GetWithReason("k"); ok || r != MissExpired {
+		t.Fatalf("fixed TTL must expire at 1s: ok=%v reason=%q", ok, r)
+	}
+}
