@@ -1,0 +1,129 @@
+@startuml routre-lifecycle
+!pragma layout smetana
+!theme plain
+skinparam backgroundColor #FFFFFF
+skinparam defaultFontColor #1A1A1A
+skinparam shadowing false
+skinparam roundCorner 8
+skinparam rectangle {
+  BackgroundColor #FAFAFA
+  BorderColor #4A6FA5
+}
+skinparam arrowColor #555555
+skinparam arrowThickness 1.2
+skinparam noteBackgroundColor #FFF8E1
+skinparam noteBorderColor #D4A017
+skinparam titleFontColor #111111
+skinparam titleFontSize 17
+skinparam sequenceArrowThickness 1.3
+skinparam sequenceLifeLineBorderColor #999999
+skinparam sequenceParticipantBorderThickness 1.2
+
+title routre — Request Lifecycle (streaming & non-streaming, with failover)
+
+actor "Client\n(opencode / Codex)" as Client
+participant "HTTP Server\nnet/http" as HTTP
+participant "Pipeline\n(7 steps)" as Pipe
+database "Cache\nLRU SHA-256" as Cache
+participant "Router\ntiers + cooldown" as Router
+participant "candidateRunner\n+ dialect + relay" as Runner
+database "Upstream\nProviders" as Up
+
+== Step 1-2 — Ingest & compress ==
+
+Client -> HTTP : POST /v1/chat/completions\n(JSON body + stream flag)
+HTTP -> Pipe : Request{body, path, header, client}
+Pipe -> Pipe : **1 — Format detect**\nOpenAI / Anthropic / Responses\n(Responses → OpenAI translate)
+Pipe -> Pipe : **2 — RTK Apply(body)**\n12 filters on tool_result\n→ processed (strictly smaller or equal)\nmetrics: RTKApplied / RTKSaved
+
+note right of Pipe
+  Fail-open: malformed JSON
+  passes through untouched.
+  Window 500 B–10 MiB only.
+end note
+
+== Step 3 — Cache lookup (post-RTK, canonical JSON) ==
+
+Pipe -> Cache : keyFor(processed)\ncanonical JSON → SHA-256 hex\n(GetWithReason)
+alt cache HIT (shape matches request kind)
+  Cache --> Pipe : Entry{body, sse, promptTokens}
+  Pipe -> Pipe : usage.Record(cacheSaved)\nmetrics.CacheHit()
+  Pipe --> HTTP : 200 + X-Llrouter-Cache: hit\n(replay SSE verbatim or JSON)
+  HTTP --> Client : stream replay / JSON response\n**[no upstream call]**
+else miss — reasons: disabled / absent / expired / shape_mismatch\n(shape_mismatch = SSE vs JSON kind crossover)
+  Cache --> Pipe : miss + MissReason
+  Pipe -> Pipe : metrics.CacheMissReason(reason)\nmetrics.CacheMiss()
+end
+
+== Step 4 — Candidate selection ==
+
+Pipe -> Router : CandidatesWithFallbacks(model, fallbacks)
+Router -> Router : filter tiers by availability\nskip cooling-down providers\nforward_unknown=true → try all tiers\nforward_unknown=false → strict whitelist
+alt no candidates at all
+  Router --> Pipe : empty
+  alt any provider cooling for this model
+    Pipe --> HTTP : 503 providers_unavailable\nRetry-After: cooldown_remaining
+  else unlisted model & strict mode
+    Pipe --> HTTP : 503 model_not_found\n+ failures.Outcome[]
+  end
+  HTTP --> Client : error JSON\n(no upstream attempt)
+else candidates found\n(T1 subscription → T2 fallback → T3 free)
+  Router --> Pipe : []Candidate{provider, baseURL, kind}
+end
+
+== Steps 5-7 — Run with failover (streaming shown ; non-streaming similar) ==
+
+Pipe -> Runner : newRunner(router, refreshCredentials)\n.Run(ctx, candidates, eval)
+loop for each candidate (tier order)
+  Runner -> Up : attempt #1 — POST {base}/v1/chat/completions\nHeader: Authorization: Bearer <keystore key>\nBody: processed (+ dialect translate if cross-kind)
+  Up --> Runner : response headers + status
+
+  alt 401/403 — auth failure
+    Runner -> Runner : re-read routre.env\nkey rotated?
+    alt key changed since start
+      Runner -> Up : attempt #1b — retry same provider\nwith fresh key (1 free retry)
+      Up --> Runner : 200 or error
+    else key unchanged
+      Runner -> Runner : mark ErrAuth → next candidate
+    end
+  else 5xx / network error / 429 without Retry-After
+    Runner -> Runner : sleep 500 ms → attempt #2\nsame provider (1 retry)
+    alt still 5xx / network error
+      Runner -> Runner : record failures.Outcome\nnext candidate (failover)
+    else 200
+      Runner --> Pipe : success
+    end
+  else 429 / 5xx with Retry-After
+    Runner -> Runner : record cooldown = max(backoff, Retry-After)\nnext candidate
+  else 400 / 404 / 422 — client error
+    Runner --> Pipe : surface last error (no retry,\nno failover on ErrClient)
+  else 200 — success
+    alt streaming
+      Up --> Runner : SSE frames (in-flight dialect\ntranslation if cross-kind:\nAnthropic ↔ OpenAI state machine\nflush each frame, no buffering)
+      Runner --> HTTP : flush frames to client\ncapture frames for cache Put
+      note right
+        **Emitted guard:** once first byte
+        flushed, failover is disabled
+        (no duplicated output).
+        Mid-stream abort → not cached.
+      end note
+    else non-streaming
+      Up --> Runner : JSON body\ncapture usage {prompt, completion, cost}
+    end
+    Runner -> Runner : on success → reset cooldown for provider
+    Runner --> Pipe : success
+  end
+end
+
+alt all candidates failed
+  Runner --> Pipe : RunResult{OK:false, TryLog: []Outcome}
+  Pipe -> Pipe : allOverloaded? → pick 502 vs 503\nfailures.Render(w, KindAllProvidersFailed,\n  requested, TryLog, retryAfter)
+  Pipe --> HTTP : 503 all_providers_failed\n{ \"attempts\": [{provider, kind, class,\n  error, cooldown_remaining_seconds}] }\n+ Retry-After
+  HTTP --> Client : errors enriched — same shape as\n`routre doctor` probe
+else success already flushed / returned
+  Pipe -> Cache : Put(key, Entry{body, sse, promptTokens})\n(cap 8 MiB/entry, 128 MiB total,\n16k entries, 7d TTL + sliding)
+  Pipe -> Pipe : usage.Record(in/out/cache) + cost\nreqlog: dial_ms / headers_ms / ttfb_ms / total_ms
+  HTTP --> Client : 200 (stream done or JSON)
+end
+
+@enduml
