@@ -30,6 +30,23 @@ type Row struct {
 	// read rate (0.1x) instead of full price — provider-reported
 	// prompt-cache hits. Zero when the provider does not report them.
 	CacheReadTokens int64 `json:"cache_read_tokens"`
+	// CacheCreationTokens: input tokens billed at the provider's
+	// prompt-cache *write* rate (1.25x, OpenAI/Anthropic) on the
+	// request that materializes a new cacheable prefix. Provider-
+	// reported. Zero when the provider does not report it or the
+	// prefix was already cached. These are an *investment* in future
+	// reads, not savings — every subsequent read of the same prefix
+	// is at 0.1x, so creation tokens buy ~9x read savings.
+	CacheCreationTokens int64 `json:"cache_creation_tokens"`
+	// CacheSavingsUSD: net USD saved by prompt caching across this
+	// row's lifetime. Read savings minus the extra cost of writes, at
+	// the provider's configured input price:
+	//   read_savings   = cache_read_tokens * 0.9 * price_in / 1e6
+	//   write_extra    = cache_creation_tokens * 0.25 * price_in / 1e6
+	//   net            = read_savings - write_extra
+	// Zero when the provider has no configured input price (so the
+	// math cannot run) or when there was no prompt-cache activity.
+	CacheSavingsUSD float64 `json:"cache_savings_usd"`
 
 	// CostUSD: billed cost at the provider's price (0 = pricing unknown).
 	CostUSD float64 `json:"cost_usd"`
@@ -46,6 +63,11 @@ func (r *Row) Add(o Row) {
 	r.RTKSavedTokens += o.RTKSavedTokens
 	r.CacheSavedTokens += o.CacheSavedTokens
 	r.CacheReadTokens += o.CacheReadTokens
+	r.CacheCreationTokens += o.CacheCreationTokens
+	// CacheSavingsUSD is per-request computed by RecordFull using the
+	// provider's configured price, so re-sum is correct (each delta
+	// already carries the same per-token rate).
+	r.CacheSavingsUSD += o.CacheSavingsUSD
 	r.CostUSD += o.CostUSD
 	r.SavedUSD += o.SavedUSD
 	r.Requests += o.Requests
@@ -114,15 +136,28 @@ func Load(path string) (*Store, error) {
 // cacheRead counts provider-reported prompt-cache hit tokens (billed at
 // the discounted rate); they are not savings, just cheaper input.
 func (s *Store) Record(provider, model string, prompt, completion int64, rtkSaved, cacheSaved int64, p Prices, providerReportedCost float64) {
-	s.RecordFull(provider, model, prompt, completion, rtkSaved, cacheSaved, 0, p, providerReportedCost)
+	s.RecordFull(provider, model, prompt, completion, rtkSaved, cacheSaved, 0, 0, p, providerReportedCost)
 }
 
 // RecordFull is Record plus provider-reported prompt-cache read tokens.
-func (s *Store) RecordFull(provider, model string, prompt, completion int64, rtkSaved, cacheSaved, cacheRead int64, p Prices, providerReportedCost float64) {
+// cacheCreation counts provider-reported prompt-cache write tokens
+// (billed at 1.25x); both are passed through so the ledger can
+// compute net prompt-cache savings (read savings minus write extra
+// cost) at the provider's configured input price.
+func (s *Store) RecordFull(provider, model string, prompt, completion int64, rtkSaved, cacheSaved, cacheRead, cacheCreation int64, p Prices, providerReportedCost float64) {
 	computedCost, saved := p.CostOf(prompt, completion, rtkSaved, cacheSaved)
 	cost := computedCost
 	if providerReportedCost > 0 {
 		cost = providerReportedCost
+	}
+	// Net prompt-cache savings in USD at this provider's input price.
+	// Zero when the price is unknown (p.InputPerMillion == 0) — we
+	// refuse to invent a rate.
+	var cacheSavings float64
+	if p.InputPerMillion > 0 {
+		readSaved := float64(cacheRead) * 0.9 * p.InputPerMillion / 1e6
+		writeExtra := float64(cacheCreation) * 0.25 * p.InputPerMillion / 1e6
+		cacheSavings = readSaved - writeExtra
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -136,7 +171,8 @@ func (s *Store) RecordFull(provider, model string, prompt, completion int64, rtk
 		Provider: provider, Model: model,
 		PromptTokens: prompt, CompletionTokens: completion,
 		RTKSavedTokens: rtkSaved, CacheSavedTokens: cacheSaved,
-		CacheReadTokens: cacheRead,
+		CacheReadTokens: cacheRead, CacheCreationTokens: cacheCreation,
+		CacheSavingsUSD: cacheSavings,
 		CostUSD:         cost, SavedUSD: saved,
 		Requests: 1,
 	})

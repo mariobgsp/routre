@@ -13,7 +13,7 @@ func NewExtractor() *Extractor { return &Extractor{} }
 
 // ExtractNonStreaming parses a non-streaming response body for usage.
 // It handles OpenAI, Anthropic, and Gemini (via geminiToOpenAI unwrapping already done by caller).
-func (e *Extractor) ExtractNonStreaming(respBody, reqBody []byte) (prompt, completion int64, cost float64, cacheRead int64) {
+func (e *Extractor) ExtractNonStreaming(respBody, reqBody []byte) (prompt, completion int64, cost float64, cacheRead, cacheCreation int64) {
 	return usageFromBody(respBody, reqBody)
 }
 
@@ -24,11 +24,11 @@ func (e *Extractor) NewSniffer(r io.Reader) io.Reader {
 }
 
 // SnifferUsage extracts the captured usage from a sniffer after the stream ends.
-func (e *Extractor) SnifferUsage(r io.Reader) (prompt, completion, cacheRead int64) {
+func (e *Extractor) SnifferUsage(r io.Reader) (prompt, completion, cacheRead, cacheCreation int64) {
 	if s, ok := r.(*usageSniffer); ok {
 		s.drainCarry()
 		u := s.usage()
-		return u.prompt, u.completion, u.cacheRead
+		return u.prompt, u.completion, u.cacheRead, u.cacheCreation
 	}
-	return 0, 0, 0
+	return 0, 0, 0, 0
 }

@@ -100,3 +100,28 @@ func TestUsageSnifferCacheRead(t *testing.T) {
 		})
 	}
 }
+
+// Provider prompt-cache *creation* (write) tokens
+// (cache_creation_input_tokens) must be captured alongside cacheRead
+// so the ledger can show net prompt-cache savings (read savings minus
+// the extra 1.25x write cost). OpenAI emits the field under
+// `prompt_tokens_details.cache_creation_input_tokens`; Anthropic
+// emits it as a top-level `cache_creation_input_tokens`.
+func TestUsageSnifferCacheCreation(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		body string
+		want int64
+	}{
+		{"openai_cache_creation", `data: {"choices":[{"delta":{}}],"usage":{"prompt_tokens":120,"completion_tokens":10,"prompt_tokens_details":{"cached_tokens":95,"cache_creation_input_tokens":40}}}` + "\n\n", 40},
+		{"anthropic_cache_creation", `data: {"type":"message_delta","usage":{"output_tokens":20,"cache_creation_input_tokens":60}}` + "\n\n", 60},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			s := newUsageSniffer(oneByteReader{strings.NewReader(tc.body)})
+			u := readAllSniff(t, s)
+			if u.cacheCreation != tc.want {
+				t.Fatalf("%s: expected cacheCreation=%d, got %+v", tc.name, tc.want, u)
+			}
+		})
+	}
+}
