@@ -5,6 +5,30 @@ import (
 	"encoding/json"
 )
 
+// CanonicalJSON reduces a JSON document to a deterministic byte form:
+// sorted keys, no insignificant whitespace, numbers preserved exactly
+// (json.Number — no float64 mangling). Semantically identical documents
+// differing only in key order or whitespace produce identical bytes, so
+// they collide on the same cache key. It never drops or rewrites values
+// (sampling parameters included). Returns input unchanged when it is not
+// valid JSON.
+func CanonicalJSON(in []byte) []byte {
+	if !json.Valid(in) {
+		return in
+	}
+	dec := json.NewDecoder(bytes.NewReader(in))
+	dec.UseNumber()
+	var v any
+	if err := dec.Decode(&v); err != nil {
+		return in
+	}
+	out, err := json.Marshal(v)
+	if err != nil {
+		return in
+	}
+	return out
+}
+
 // OrderPrompt moves system messages to the front of the messages array so
 // the request has a stable prefix (a prerequisite for upstream prompt-cache
 // hits) and so two semantically identical requests differing only in message

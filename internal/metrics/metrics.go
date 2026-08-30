@@ -21,6 +21,7 @@ type Metrics struct {
 	fail       map[string]int64 // label: provider|class
 	cacheH     int64
 	cacheM     int64
+	cacheMBy   map[string]int64 // miss reason -> count
 	rtkSave    int64
 	rtkApplied int64
 	cacheRd    int64
@@ -29,9 +30,10 @@ type Metrics struct {
 // New creates an empty registry with start time now.
 func New() *Metrics {
 	return &Metrics{
-		start: time.Now(),
-		req:   map[string]int64{},
-		fail:  map[string]int64{},
+		start:    time.Now(),
+		req:      map[string]int64{},
+		fail:     map[string]int64{},
+		cacheMBy: map[string]int64{},
 	}
 }
 
@@ -60,8 +62,17 @@ func (m *Metrics) CacheHit() {
 
 // CacheMiss records a cache miss.
 func (m *Metrics) CacheMiss() {
+	m.CacheMissReason("")
+}
+
+// CacheMissReason records a cache miss attributed to a reason
+// (empty, absent, expired, shape_mismatch, disabled).
+func (m *Metrics) CacheMissReason(reason string) {
 	m.mu.Lock()
 	m.cacheM++
+	if reason != "" {
+		m.cacheMBy[reason]++
+	}
 	m.mu.Unlock()
 }
 
@@ -118,6 +129,11 @@ func (m *Metrics) WriteProm(w io.Writer) {
 	fmt.Fprintf(w, "# HELP routre_cache_misses_total exact-match cache misses\n")
 	fmt.Fprintf(w, "# TYPE routre_cache_misses_total counter\n")
 	fmt.Fprintf(w, "routre_cache_misses_total %d\n", m.cacheM)
+	fmt.Fprintf(w, "# HELP routre_cache_misses_by_reason_total exact-match cache misses by reason\n")
+	fmt.Fprintf(w, "# TYPE routre_cache_misses_by_reason_total counter\n")
+	for _, k := range sortedKeys(m.cacheMBy) {
+		fmt.Fprintf(w, "routre_cache_misses_by_reason_total{reason=%q} %d\n", k, m.cacheMBy[k])
+	}
 	fmt.Fprintf(w, "# HELP routre_cache_hit_ratio hits / (hits+misses), 0 when idle\n")
 	fmt.Fprintf(w, "# TYPE routre_cache_hit_ratio gauge\n")
 	if total := m.cacheH + m.cacheM; total > 0 {
@@ -134,6 +150,17 @@ func (m *Metrics) WriteProm(w io.Writer) {
 	fmt.Fprintf(w, "# HELP routre_cache_read_tokens_total provider-reported prompt-cache hit tokens\n")
 	fmt.Fprintf(w, "# TYPE routre_cache_read_tokens_total counter\n")
 	fmt.Fprintf(w, "routre_cache_read_tokens_total %d\n", m.cacheRd)
+}
+
+// CacheMissByReason returns a copy of the per-reason miss counters.
+func (m *Metrics) CacheMissByReason() map[string]int64 {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	out := make(map[string]int64, len(m.cacheMBy))
+	for k, v := range m.cacheMBy {
+		out[k] = v
+	}
+	return out
 }
 
 // CacheHitRatio returns hits/(hits+misses); 0 when no traffic.

@@ -192,3 +192,42 @@ func postB(b *testing.B, url, path string, body []byte) (*http.Response, []byte)
 	resp.Body.Close()
 	return resp, data
 }
+
+// BenchmarkCacheKeyVariance measures the hit rate when the same semantic
+// request arrives with different JSON key order each time. With canonical
+// keys enabled (the default) all variants must share one key and hit after
+// warmup; without canonicalization each variant misses.
+func BenchmarkCacheKeyVariance(b *testing.B) {
+	base, m := cacheImpactEnv(b)
+	// Warm one canonical entry.
+	warm, _ := json.Marshal(map[string]any{
+		"model": "m", "messages": []any{map[string]any{"role": "user", "content": "hello"}},
+		"temperature": 0.7,
+	})
+	if resp, _ := postB(b, base, "/v1/chat/completions", warm); resp.Header.Get("X-Llrouter-Cache") != "miss" {
+		b.Fatal("warmup must be a miss")
+	}
+	b.ResetTimer()
+	// Rotate key order of the same fields each iteration (Go maps marshal
+	// sorted, so build the variant manually to guarantee differing bytes).
+	var sb strings.Builder
+	for i := 0; i < b.N; i++ {
+		sb.Reset()
+		if i%2 == 0 {
+			sb.WriteString(`{"model":"m","temperature":0.7,"messages":[{"content":"hello","role":"user"}]}`)
+		} else {
+			sb.WriteString(`{"messages":[{"role":"user","content":"hello"}],"temperature":0.7,"model":"m"}`)
+		}
+		resp, data := postB(b, base, "/v1/chat/completions", []byte(sb.String()))
+		if resp.StatusCode != 200 {
+			b.Fatalf("status %d: %s", resp.StatusCode, data)
+		}
+		if resp.Header.Get("X-Llrouter-Cache") != "hit" {
+			b.Fatalf("key-order variant must hit canonical entry, got %q (%s)", resp.Header.Get("X-Llrouter-Cache"), data)
+		}
+	}
+	b.StopTimer()
+	if got := m.Requests(); got != 1 {
+		b.Fatalf("upstream called %d times, want 1 (canonicalization must collapse variants)", got)
+	}
+}

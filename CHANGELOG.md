@@ -12,6 +12,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 > (2026-08-25). Sections marked `legacy` use the pre-rebrand
 > routre-cli numbering and are kept for history only.
 
+## [0.4.0] — 2026-08-30
+
+### Added
+
+- **Cache miss attribution** — misses are now counted by reason (`absent`, `expired`, `shape_mismatch`, `disabled`) via `routre_cache_misses_by_reason_total{reason=…}` in `/metrics` and `cache_miss_reasons` in `/v1/status`. The legacy `routre_cache_misses_total` counter is kept for compatibility. This answers “why do I miss?” before tuning anything.
+- **Canonical cache keys** (`cache.canonical_keys`, default on) — the cache key is computed over a deterministic JSON round-trip (sorted keys, no whitespace, `json.Number` preserves large ints), so requests that differ only in key order or whitespace share a key and hit. Strictly output-inert: sampling parameters stay in the key, so there is zero wrong-output risk. Applies to stream and non-stream, get and put, via a single `Pipeline.keyFor`.
+- **Sliding TTL** (`cache.sliding_ttl`, default on) — a hit refreshes the entry's expiry (`now + TTL`), so actively used entries no longer expire mid-use; only `max_bytes` bounds RAM.
+
+### Changed
+
+- **Cache defaults raised** — `max_entries` 4096→16384, `ttl_seconds` 86400→604800 (7 days), `max_bytes` 64→128 MiB. All still overridable in `config.json` and reloadable via SIGHUP.
+
 ## [0.3.5] — 2026-08-29
 
 ### Changed

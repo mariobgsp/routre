@@ -13,6 +13,20 @@ import (
 	"time"
 )
 
+// MissReason classifies why Get did not serve an entry. Used for
+// per-reason miss metrics so the dominant miss cause is observable.
+type MissReason string
+
+const (
+	// MissDisabled: cache disabled; Get never serves.
+	MissDisabled MissReason = "disabled"
+	// MissAbsent: no entry under the key (never cached, evicted, or
+	// wiped by restart).
+	MissAbsent MissReason = "absent"
+	// MissExpired: an entry existed but its TTL elapsed; removed on read.
+	MissExpired MissReason = "expired"
+)
+
 // Entry is a cached upstream response. PromptTokens/CompletionTokens are
 // the upstream-reported usage of the request that produced the response;
 // cache hits report them so the ledger matches the provider's counts
@@ -44,14 +58,19 @@ type Config struct {
 	// MaxBytes caps the total RAM held by cached bodies (0 = unbounded).
 	// Eviction is LRU: oldest entries drop first when the cap is exceeded.
 	MaxBytes int64 `json:"max_bytes"`
+	// SlidingTTL, when true, refreshes an entry's expiry on every hit
+	// (now + TTL), so actively used entries never expire. Hot repeat
+	// traffic stops missing once/day.
+	SlidingTTL bool `json:"sliding_ttl"`
 }
 
 // DefaultConfig targets a near-100% hit rate for repeat traffic: a large
-// entry budget (4096), a long TTL (24h), and prefix ordering ON so that
-// requests differing only in message order collide on the same key. The
-// 64MiB byte cap keeps the cache bounded even with big responses cached.
+// entry budget (16384), a long TTL (7 days), sliding TTL so hot entries
+// never expire, and prefix ordering ON so that requests differing only in
+// message order collide on the same key. The 128MiB byte cap keeps the
+// cache bounded even with big responses cached.
 func DefaultConfig() Config {
-	return Config{Enabled: true, MaxEntries: 4096, TTLSeconds: 86400, PrefixOrder: true, MaxBytes: 64 << 20}
+	return Config{Enabled: true, MaxEntries: 16384, TTLSeconds: 604800, PrefixOrder: true, MaxBytes: 128 << 20, SlidingTTL: true}
 }
 
 // Cache is a concurrency-safe exact-match LRU with TTL.
@@ -83,6 +102,7 @@ func (c *Cache) Reconfigure(cfg config.Config) {
 		TTLSeconds:  cfg.Cache.TTLSeconds,
 		PrefixOrder: cfg.Cache.PrefixOrder,
 		MaxBytes:    cfg.Cache.MaxBytes,
+		SlidingTTL:  cfg.Cache.SlidingTTL,
 	})
 }
 
@@ -100,23 +120,37 @@ func Key(body []byte) string {
 }
 
 // Get returns the cached entry for key, if present and unexpired.
+// A hit moves the entry to the LRU front.
 func (c *Cache) Get(key string) (Entry, bool) {
+	e, ok, _ := c.GetWithReason(key)
+	return e, ok
+}
+
+// GetWithReason returns the cached entry for key, if present and
+// unexpired, plus a miss reason (disabled / absent / expired) when it
+// is not served. A hit moves the entry to the LRU front.
+func (c *Cache) GetWithReason(key string) (Entry, bool, MissReason) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if !c.cfg.Enabled {
-		return Entry{}, false
+		return Entry{}, false, MissDisabled
 	}
 	el, ok := c.m[key]
 	if !ok {
-		return Entry{}, false
+		return Entry{}, false, MissAbsent
 	}
 	it := el.Value.(*item)
 	if time.Now().After(it.exp) {
 		c.remove(el)
-		return Entry{}, false
+		return Entry{}, false, MissExpired
+	}
+	// SlidingTTL: on hit, refresh expiry to now + TTL so hot entries
+	// never expire while actively used.
+	if c.cfg.SlidingTTL {
+		it.exp = time.Now().Add(time.Duration(c.cfg.TTLSeconds) * time.Second)
 	}
 	c.ll.MoveToFront(el)
-	return it.e, true
+	return it.e, true, ""
 }
 
 // Put stores an entry under key, enforcing TTL and LRU capacity. Oversized

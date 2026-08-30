@@ -59,6 +59,14 @@ type CacheConfig struct {
 	TTLSeconds  int64 `json:"ttl_seconds"`
 	PrefixOrder bool  `json:"prefix_order"`
 	MaxBytes    int64 `json:"max_bytes"`
+	// CanonicalKeys: when true, the cache key is computed over a
+	// deterministic JSON round-trip (sorted keys, no whitespace) so that
+	// semantically identical requests differing only in byte layout share
+	// a key. Strictly output-inert: sampling parameters are preserved.
+	CanonicalKeys bool `json:"canonical_keys,omitempty"`
+	// SlidingTTL: when true, a hit refreshes the entry's expiry
+	// (now + TTL), so hot entries never expire while actively used.
+	SlidingTTL bool `json:"sliding_ttl,omitempty"`
 	// PromptCache: when true, the gateway injects Anthropic cache_control
 	// breakpoints (system prefix + last message) into Anthropic-bound
 	// outbound requests so repeat agentic prefixes are billed at the cache
@@ -141,7 +149,7 @@ func Default() Config {
 		LogLevel: "info",
 		Tiers:    []Tier{},
 		RTK:      RTKConfig{Enabled: true, MinBytes: 0, MaxBytes: 10 << 20},
-		Cache:    CacheConfig{Enabled: true, MaxEntries: 4096, TTLSeconds: 86400, PrefixOrder: true, MaxBytes: 64 << 20},
+		Cache:    CacheConfig{Enabled: true, MaxEntries: 4096, TTLSeconds: 86400, PrefixOrder: true, MaxBytes: 64 << 20, CanonicalKeys: true, SlidingTTL: true},
 		// Zero-config model handling: unknown/future models forward to all
 		// providers and fail over, instead of requiring a whitelist edit.
 		ForwardUnknown: true,
