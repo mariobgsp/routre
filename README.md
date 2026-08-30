@@ -38,6 +38,9 @@ See [CHANGELOG.md](CHANGELOG.md) for the full version history.
 - [Quick start](#quick-start)
   - [Local dashboard for non-programmers](#local-dashboard-for-non-programmers)
 - [How it works](#how-it-works)
+  - [System overview — the 7-step pipeline](#system-overview--the-7-step-pipeline-main-diagram)
+  - [Request lifecycle](#request-lifecycle--what-happens-per-request-supporting-diagram-1)
+  - [Cache, RTK & routing internals](#cache-rtk--routing-internals-supporting-diagram-2)
   - [Automatic failover](#automatic-failover)
   - [Keeping models current](#keeping-models-current)
   - [RTK token compression](#rtk-token-compression--90-on-tool-heavy-traffic)
@@ -228,10 +231,59 @@ opencode run --model <provider>/<model> "hello"
 
 ## How it works
 
-![routre architecture — clients, gateway pipeline, observability, providers](docs/architecture.png)
+> One binary, 7 steps, zero config: every CLI hits `127.0.0.1:20128` → detect → compress → cache → route → retry → translate → relay. Failover, compression, and caching come for free.
 
-> **How it works:** every CLI (`opencode`, `Claude Code`, `Codex`, `Cursor`) hits `routre` on `127.0.0.1:20128` → **format detect** (OpenAI / Anthropic / Responses API) → **RTK 90% filter** (12 heuristic filters, no LM) → **sha256 LRU cache** (exact + streaming replay) → **tiered router** (subscription → cheap → free, 2s→30m cooldown, `Retry-After` honored) → `candidateRunner` (1× retry, auth-refresh-and-retry, Emitted contract) → **dialect translator** (OpenAI ↔ Anthropic in-flight SSE) → **dialects-aware relay** (`http.Transport` tuned: MaxConnsPerHost=64, H2, firstByteTimeout=30s) → upstream. Failures surface through the `failures` module with per-provider breakdown. **Observability:** per-phase `total_ms` (dial/headers/TTFB) in JSONL, Prometheus metrics, periodic probe, `routre doctor`. **Efficiency:** 91.5% tool-token reduction (90.3% worst payload), 10 MiB RAM idle (+0.2 MiB for `/ui`), 10.6 MiB binary, ~11 ms overhead.
-> Source: [`docs/architecture.puml`](docs/architecture.puml) (PlantUML, rendered via plantuml.com).
+### System overview — the 7-step pipeline (main diagram)
+
+![routre system overview — clients, 7-step pipeline, observability, tiered providers](docs/architecture.png)
+
+*Sources: [`docs/architecture.puml`](docs/architecture.puml) · rendered with PlantUML `smetana` (no Graphviz). All three diagrams are versioned as `.puml` + `.png` in [`docs/`](docs/).*
+
+<!-- markdownlint-disable MD060 -->
+| Step | What happens | Where in code |
+|------|--------------|---------------|
+| **1 — Format detect** | `OpenAI / Anthropic / Responses API` detected from path + body; `/v1/responses` → OpenAI translation | `internal/proxy/dialect/` |
+| **2 — RTK** | 12 heuristic filters on `tool_result` bodies — ≥90% fewer tokens, fail-open, no LM, 500 B–10 MiB window | `internal/rtk/` |
+| **3 — Cache** | SHA-256 of canonical JSON (post-RTK) → LRU hit/miss; streaming & JSON never cross; `shape_mismatch` tracked | `internal/cache/` |
+| **4 — Router** | Tiered `subscription → cheap → free`, per-provider cooldown `2s→30m`, `Retry-After` honored, `forward_unknown` | `internal/router/` |
+| **5 — candidateRunner** | 1× transient retry (500 ms) + 1 free auth-refresh on 401/403 + `Emitted` guard | `internal/proxy/runner.go` |
+| **6 — Dialect** | OpenAI ↔ Anthropic ↔ Gemini SSE state machine, flushed frame-by-frame, no buffering | `internal/proxy/dialect/` |
+| **7 — Relay** | `http.Transport` tuned (MaxConns 64, H2, `firstByteTimeout 30s` kills p99 stalls) | `internal/proxy/` |
+<!-- markdownlint-enable MD060 -->
+
+> **Observability** (left out of the hot path): per-phase `dial_ms / headers_ms / ttfb_ms / total_ms` → JSONL, `GET /metrics` (Prometheus), `routre doctor` + `probe`. **Footprint**: 10.6 MiB binary, ~10 MiB idle RSS, ~11 ms overhead (see *Benchmarks*).
+
+---
+
+### Request lifecycle — what happens per request (supporting diagram 1)
+
+![routre request lifecycle — cache hit vs miss, streaming, failover with retry and auth-refresh](docs/request-lifecycle.png)
+
+*Source: [`docs/request-lifecycle.puml`](docs/request-lifecycle.puml)*
+
+**Read it left → right, top → bottom:**
+
+1. **Ingest & compress** — body → format detect → RTK (strictly never grows).
+2. **Cache lookup** — `keyFor(CanonicalJSON(post-RTK))` → `GetWithReason` → hit = immediate replay (`X-Llrouter-Cache: hit`, no upstream), miss reason emitted as `routre_cache_misses_by_reason_total{reason}`.
+3. **Candidate selection** — `Router.CandidatesWithFallbacks(model)` respects tiers, cooldowns, and `forward_unknown` (unknown model tries every tier).
+4. **Failover loop** — for each candidate: try → on `401/403` refresh `routre.env` key and retry once → on `5xx`/network retry once after 500 ms → on `429` with `Retry-After` set cooldown floor → on `400/404/422` surface immediately → on `200` capture SSE frames with in-flight dialect translation and flush. Once first byte is emitted, failover is *disabled* (no duplicated output); mid-stream aborts are never cached.
+5. **All-failed → honest error** — `model_not_found` (no provider can serve) vs `providers_unavailable` (every capable provider cooling, `Retry-After` tells you to wait) vs `all_providers_failed` with full `attempts[]` the same shape `doctor` shows.
+
+---
+
+### Cache, RTK & routing internals (supporting diagram 2)
+
+![routre cache, RTK and tiered routing internals — filters, canonical keys, LRU, cooldowns](docs/cache-rtk-routing.png)
+
+*Source: [`docs/cache-rtk-routing.puml`](docs/cache-rtk-routing.puml)*
+
+**Left — RTK (12 filters):** autodetect `tool_result` kind → matched filter (git-diff 10 lines/hunk + 80/30 head/tail, git-log 50/15, grep 80/40, dedup for tree/ls/find, build-output 50/25, smart-truncate head 120/tail 60) → fail-open guard. Bench-gated: `routre bench` fails the build if aggregate <90% or worst payload <90% (measured 91.5% / 90.3%).
+
+**Middle — Cache:** canonical JSON (sorted keys, stable numbers) → SHA-256 hex key → `prefix_order` moves system prompt first for stable upstream prompt-cache → `GetWithReason` classifies misses (`disabled`/`absent`/`expired`/`shape_mismatch` → `/v1/status` + Prometheus) → streaming replay is byte-identical & shape-aware (SSE entry never served to JSON request) → billing-accurate hit (credits stored `promptTokens`, not length estimate) → LRU `16k entries / 7d / 128 MiB`, sliding TTL refreshes hot hits, 8 MiB/entry cap, abort never stored.
+
+**Right — Router & failover:** tiers in config order (`subscription → cheap → free`) → `forward_unknown` switch → per-provider exponential cooldown `2s → 30m` (isolated — one 503 never cools others) → `Retry-After` as floor → `candidateRunner` (transient retry + auth-refresh + Emitted guard) → background `GET {base}/models` every 6h + startup + `SIGHUP` (`routre models sync` persists to `config.json`).
+
+---
 
 ### Automatic failover
 
