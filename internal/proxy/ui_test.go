@@ -169,6 +169,143 @@ func TestUISaveRejectsNonLoopbackOrigin(t *testing.T) {
 	}
 }
 
+func TestUIConfigRejectsNonLoopbackHost(t *testing.T) {
+	base, _, _ := uiTestEnv(t, `{"listen":"127.0.0.1:0","tiers":[]}`)
+	req, _ := http.NewRequest("GET", base+"/ui/api/config", nil)
+	req.Host = "attacker.com"
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != 403 {
+		t.Fatalf("UIConfig non-loopback Host should be 403, got %d", resp.StatusCode)
+	}
+}
+
+func TestUISaveRejectsNonLoopbackHost(t *testing.T) {
+	base, _, _ := uiTestEnv(t, `{"listen":"127.0.0.1:0","tiers":[]}`)
+	b, _ := json.Marshal(config.Config{Listen: "127.0.0.1:0"})
+	req, _ := http.NewRequest("POST", base+"/ui/api/save", bytes.NewReader(b))
+	req.Header.Set("Content-Type", "application/json")
+	req.Host = "attacker.com"
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != 403 {
+		t.Fatalf("UISave non-loopback Host should be 403, got %d", resp.StatusCode)
+	}
+}
+
+func TestUISetEnvRejectsNonLoopbackHost(t *testing.T) {
+	base, _, _ := uiTestEnv(t, `{"listen":"127.0.0.1:0","tiers":[]}`)
+	payload, _ := json.Marshal(map[string]string{"key": "K", "value": "v"})
+	req, _ := http.NewRequest("POST", base+"/ui/api/env", bytes.NewReader(payload))
+	req.Header.Set("Content-Type", "application/json")
+	req.Host = "attacker.com"
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != 403 {
+		t.Fatalf("UISetEnv non-loopback Host should be 403, got %d", resp.StatusCode)
+	}
+}
+
+func TestUISaveRejectsOversizedBody(t *testing.T) {
+	base, _, _ := uiTestEnv(t, `{"listen":"127.0.0.1:0","tiers":[]}`)
+	big := bytes.Repeat([]byte("a"), 1<<20+1)
+	resp, err := http.Post(base+"/ui/api/save", "application/json", bytes.NewReader(big))
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != 400 {
+		t.Fatalf("oversized UISave should be 400, got %d", resp.StatusCode)
+	}
+}
+
+func TestUISetEnvRejectsOversizedBody(t *testing.T) {
+	base, _, _ := uiTestEnv(t, `{"listen":"127.0.0.1:0","tiers":[]}`)
+	big := bytes.Repeat([]byte("a"), 64<<10+1)
+	resp, err := http.Post(base+"/ui/api/env", "application/json", bytes.NewReader(big))
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != 400 {
+		t.Fatalf("oversized UISetEnv should be 400, got %d", resp.StatusCode)
+	}
+}
+
+func TestUISetEnvRejectsEmptyKey(t *testing.T) {
+	base, store, _ := uiTestEnv(t, `{"listen":"127.0.0.1:0","tiers":[]}`)
+	envPath := config.EnvFilePath(store.Path())
+	os.Remove(envPath)
+	for _, payload := range []string{`{"key":"","value":"v"}`, `{"key":"   ","value":"v"}`, `{"value":"v"}`} {
+		resp, err := http.Post(base+"/ui/api/env", "application/json", bytes.NewReader([]byte(payload)))
+		if err != nil {
+			t.Fatal(err)
+		}
+		resp.Body.Close()
+		if resp.StatusCode != 400 {
+			t.Fatalf("empty key payload %q should be 400, got %d", payload, resp.StatusCode)
+		}
+	}
+	if _, err := os.Stat(envPath); !os.IsNotExist(err) {
+		t.Fatalf("empty key should not create env file")
+	}
+}
+
+func TestUISetEnvRejectsNonLoopbackOrigin(t *testing.T) {
+	base, _, _ := uiTestEnv(t, `{"listen":"127.0.0.1:0","tiers":[]}`)
+	payload, _ := json.Marshal(map[string]string{"key": "K", "value": "v"})
+	req, _ := http.NewRequest("POST", base+"/ui/api/env", bytes.NewReader(payload))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Origin", "https://attacker.com")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != 403 {
+		t.Fatalf("UISetEnv bad Origin should be 403, got %d", resp.StatusCode)
+	}
+}
+
+func TestUISaveRejectsInvalidConfig(t *testing.T) {
+	base, store, _ := uiTestEnv(t, `{"listen":"127.0.0.1:0","tiers":[]}`)
+	// invalid kind triggers config.Validate -> 400, store unchanged
+	bad := config.Config{Listen: "127.0.0.1:0", Tiers: []config.Tier{{Name: "t", Providers: []config.Provider{{Name: "p", Kind: "invalid", BaseURL: "https://x", APIKeyEnv: "K", Models: []string{"m"}}}}}}
+	b, _ := json.Marshal(bad)
+	resp, err := http.Post(base+"/ui/api/save", "application/json", bytes.NewReader(b))
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != 400 {
+		t.Fatalf("invalid config should be 400, got %d", resp.StatusCode)
+	}
+	if len(store.Get().Tiers) != 0 {
+		t.Fatalf("invalid save should not update store")
+	}
+}
+
+func TestUISetEnvBadJSON(t *testing.T) {
+	base, _, _ := uiTestEnv(t, `{"listen":"127.0.0.1:0","tiers":[]}`)
+	resp, err := http.Post(base+"/ui/api/env", "application/json", bytes.NewReader([]byte(`{bad`)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != 400 {
+		t.Fatalf("bad JSON on UISetEnv should be 400, got %d", resp.StatusCode)
+	}
+}
+
 func TestConfigSaveAtomic(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "config.json")
