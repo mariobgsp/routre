@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/mariobgsp/routre/internal/cache"
@@ -94,14 +95,11 @@ func (p *Pipeline) Stream(ctx context.Context, req Request, w http.ResponseWrite
 	api := apiFormat(dialect.DetectFormat(path, body))
 	debugf("stream request %q client=%q api=%v", modelFromBody(body), client, api)
 	clientFmt := api
-	if api == fmtResponses {
-		translated, err := dialect.ResponsesToOpenAI(body)
-		if err != nil {
-			return err
-		}
-		body = translated
-		api = fmtOpenAI
-	}
+	// ponytail: keep Responses payload native for opencode upstreams that
+	// support /v1/responses directly (opencode.ai/zen). Translation to
+	// chat.completions is per-candidate in preparePayload; doing it
+	// globally broke muse-spark which only serves /v1/responses (500 on
+	// /v1/chat/completions). Keep api as Responses here.
 	requested := modelFromBody(body)
 	processed, rtkChanged := p.rtk.Apply(body)
 	rtkSaved := 0
@@ -292,10 +290,32 @@ func (p *Pipeline) streamEval(ctx context.Context, cand router.Candidate, _ int,
 // translate, model rewrite, max_tokens clamp, and the Anthropic
 // prompt-cache injection. Pulled out of the per-attempt evals so
 // streaming and non-streaming share the same per-cand prep.
+// isNativeResponses reports whether an upstream speaks /v1/responses natively.
+// opencode.ai/zen does; openrouter/others don't. ponytail: heuristic on baseURL.
+func isNativeResponses(baseURL string) bool { return strings.Contains(baseURL, "opencode.ai") }
+
 func (p *Pipeline) preparePayload(api apiFormat, clientFmt apiFormat, cand router.Candidate, requested string, processed []byte) ([]byte, error) {
 	kind := cand.Provider.Provider.Kind
 	if clientFmt == fmtResponses && (kind == "anthropic" || kind == "gemini") {
 		return nil, fmt.Errorf("provider %s (kind=%s) cannot serve a Responses API request", cand.Provider.Provider.Name, kind)
+	}
+	// ponytail: Responses native passthrough for opencode upstreams
+	if clientFmt == fmtResponses && isNativeResponses(cand.Provider.Provider.BaseURL) {
+		// Send /v1/responses verbatim (model rewrite only); no chat translation.
+		return cand.Payload(processed, requested), nil
+	}
+	if clientFmt == fmtResponses {
+		// Non-native provider: translate Responses -> chat before relay.
+		translated, terr := dialect.ResponsesToOpenAI(processed)
+		if terr != nil {
+			return nil, terr
+		}
+		payload := cand.Payload(translated, requested)
+		payload = clampPayload(payload, cand.Provider.Provider.MaxTokens)
+		if kind == "anthropic" && p.cfg.Get().Cache.PromptCache {
+			payload = injectPromptCache(payload)
+		}
+		return payload, nil
 	}
 	payload := cand.Payload(processed, requested)
 	if crossKindRequest(api, kind) {
@@ -337,14 +357,7 @@ func (p *Pipeline) processInternal(ctx context.Context, req Request) (Response, 
 	client := req.Client
 	api := apiFormat(dialect.DetectFormat(path, body))
 	clientFmt := api
-	if api == fmtResponses {
-		translated, err := dialect.ResponsesToOpenAI(body)
-		if err != nil {
-			return Response{StatusCode: 400, Body: []byte(fmt.Sprintf(`{"error":{"message":"could not parse Responses request: %v","type":"invalid_request_error"}}`, err))}, nil
-		}
-		body = translated
-		api = fmtOpenAI
-	}
+	// ponytail: same as Stream — keep Responses native, translate per-candidate
 	streaming := dialect.IsStreaming(body)
 	requested := modelFromBody(body)
 	debugf("process request %q streaming=%v client=%q api=%v", requested, streaming, client, api)
@@ -372,7 +385,7 @@ func (p *Pipeline) processInternal(ctx context.Context, req Request) (Response, 
 			p.metrics.CacheHit()
 			cacheBody := e.Body
 			cacheCT := e.ContentType
-			if clientFmt == fmtResponses {
+			if clientFmt == fmtResponses && !bytes.Contains(e.Body, []byte(`"object":"response"`)) {
 				if wrapped, werr := dialect.OpenAIToResponses(e.Body, requested); werr == nil {
 					cacheBody = wrapped
 					cacheCT = "application/json"
@@ -564,7 +577,7 @@ func (p *Pipeline) tryEval(ctx context.Context, cand router.Candidate, req Reque
 				sendBody = ab
 			}
 		}
-		if clientFmt == fmtResponses {
+		if clientFmt == fmtResponses && !isNativeResponses(cand.Provider.Provider.BaseURL) {
 			if wrapped, werr := dialect.OpenAIToResponses(respBody, requested); werr == nil {
 				sendBody = wrapped
 			}
@@ -572,7 +585,12 @@ func (p *Pipeline) tryEval(ctx context.Context, cand router.Candidate, req Reque
 		extractor := NewExtractor()
 		prompt, completion, reportedCost, cacheRead, cacheCreation := extractor.ExtractNonStreaming(respBody, body)
 		p.usage.RecordFull(client, modelFromBody(body), prompt, completion, int64(rtkSaved), 0, cacheRead, cacheCreation, pricesOf(p.cfg.Get(), cand.Provider.Provider.Name), reportedCost)
-		p.cache.Put(p.keyFor(processed), cacheEntry(respBody, ct, prompt, completion))
+		// ponytail: cache the post-translation body for non-native, raw responses for native
+		cacheBody := respBody
+		if clientFmt == fmtResponses && !isNativeResponses(cand.Provider.Provider.BaseURL) {
+			cacheBody = respBody
+		}
+		p.cache.Put(p.keyFor(processed), cacheEntry(cacheBody, ct, prompt, completion))
 		p.metrics.Request(client, cand.Provider.Provider.Name, requested, "ok")
 		p.metrics.CacheRead(cand.Provider.Provider.Name, cacheRead)
 		p.metrics.CacheCreation(cand.Provider.Provider.Name, cacheCreation)

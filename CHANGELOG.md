@@ -12,6 +12,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 > (2026-08-25). Sections marked `legacy` use the pre-rebrand
 > routre-cli numbering and are kept for history only.
 
+## [0.4.3] — 2026-09-02
+
+### Fixed
+
+- **Native Responses passthrough for opencode** — `muse-spark-1.2-contributor-free` (and other `opencode` `responses`-only models) returned `500` via `routre` because `/v1/responses` was always translated to `/v1/chat/completions` upstream, but `opencode.ai/zen` only serves that model on `/v1/responses`. `routre` now detects native upstreams (`base_url` contains `opencode.ai` → `isNativeResponsesBase`) and proxies `responses` verbatim to `/v1/responses` (model rewrite only). Non-native providers (e.g. `openrouter`) still translate `responses → chat` for failover. Streaming (`relayStream` `to=responses`) and non-streaming (`tryEval` wrap/cache) both respect the native path. Fixes `all_providers_failed` with `cooldown_remaining_seconds: 64→256` and restores `pi → routre → opencode.ai` for `muse-spark` (verified `200` streaming + non-streaming via `127.0.0.1:20128`).
+
+- **Pi routing via routre** — `~/.pi/agent/models.json` now routes `opencode` + `openrouter` (and template for `anthropic`/`openai`/ChatGPT/Codex) through `http://127.0.0.1:20128/v1` instead of direct `https://opencode.ai/zen/v1`. `forward_unknown: true` and `ling-3.0-flash-fin-free`/`muse-spark-1.2` added to `opencode-zen` whitelist.
+
+### Added
+
+- **Agent Routre Guide** — `docs/AGENT_ROUTRE_GUIDE.md` (copied to `~/.pi/agent/skills/routre-guide/SKILL.md` + `~/.pi/agent/ROUTRE_GUIDE.md`) — mandatory `127.0.0.1:20128` rule for every provider (`opencode`, `openrouter`, `anthropic` ↔ Claude Code, `openai` ↔ ChatGPT/Codex, `google` ↔ Gemini), `models.json` + `config.json` templates, `forward_unknown:true`, `isNativeResponses` extension point, and copy-paste `curl` + `requests.jsonl` + `routre list` verification & failure signatures + pre-merge checklist. Prevents the `responses`→`chat` 500 recurrence.
+
+- **Upstream 500 debug log** — `relayStream` non-2xx now logs `baseURL+path status body payload` (500 chars) when `Logger` is set, so the next `500` is diagnosable without a mock upstream.
+
+## [0.4.2] — 2026-09-02
+
+### Fixed
+
+- **UI dashboard Host/Origin hardening** — loopback `Host` 403, `Origin` 403, `1MiB/64KB` overflow 400, empty key 400, bad JSON 400, invalid config `Validate` 400 — 15/15 UI tests, full suite + race green; smoke 7/7 on 20199.
+
 ## [0.4.1] — 2026-08-30
 
 ### Added
