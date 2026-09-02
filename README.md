@@ -14,7 +14,12 @@ routre models sync        # pull new provider models into config.json
 Point any agent at `http://127.0.0.1:20128` via `OPENAI_BASE_URL` /
 `ANTHROPIC_BASE_URL` — failover, compression, and caching come for free.
 
-### Latest (v0.3.4 — 2026-08-28)
+### Latest (v0.4.3 — 2026-09-02)
+
+- **Native Responses passthrough** — `muse-spark-1.2-contributor-free` (opencode `responses`-only) no longer 500s via `routre`; native `/v1/responses` proxy for `opencode.ai` upstreams, chat translation kept for others. Pi now routes `opencode`/`openrouter`/`anthropic`/`openai` via `127.0.0.1:20128`.
+- **Agent guide** — `docs/AGENT_ROUTRE_GUIDE.md` (also `~/.pi/agent/skills/routre-guide`) » mandatory `127.0.0.1:20128` rule, templates, and verification checklist so the 500 never recurs.
+
+<details><summary>Previous — v0.3.4</summary>
 
 - **`routre models sync`** — fetches each provider's `GET {base_url}/models` and persists new IDs into `config.json` so a provider's new model works without a manual edit. Additive by default (never removes), `--prune` to drop retired models, `--dry-run`/`--json` for scripting, `routre models diff` as dry-run alias. Discovery still runs every 6h + at startup + on `SIGHUP`; sync just makes it durable across restarts.
 - **Zero-config still works without sync** — `forward_unknown: true` (default) forwards any unknown model to all providers with automatic failover, so even before you run `sync` you won't be left behind.
@@ -25,6 +30,7 @@ Point any agent at `http://127.0.0.1:20128` via `OPENAI_BASE_URL` /
 - `routre doctor` per-provider probe + per-phase observability + latency hardening.
 - `candidateRunner` deep module, streaming `overloaded` double retry, `--debug` trace.
 
+</details>
 </details>
 
 See [CHANGELOG.md](CHANGELOG.md) for the full version history.

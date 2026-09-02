@@ -323,15 +323,18 @@ func (h *Handlers) buildUpstreamRequest(ctx context.Context, baseURL, kind, path
 // router.StreamAborted() after the first byte. from is the client's dialect,
 // used for cross-kind streaming translation. retryAfter is the parsed
 // upstream Retry-After delay (0 when absent) on a non-2xx response.
+func isNativeResponsesBase(baseURL string) bool { return strings.Contains(baseURL, "opencode.ai") }
+
 func (h *Handlers) relay(ctx context.Context, w http.ResponseWriter, baseURL string, r *http.Request, payload []byte, streaming bool, kind, apiKeyEnv string, from apiFormat, clientFmt apiFormat) (int, []byte, string, time.Duration, streamUsage, error) {
 	if streaming {
 		return h.relayStream(ctx, w, baseURL, r, payload, kind, apiKeyEnv, clientFmt)
 	}
 	path := "/v1/chat/completions"
-	if kind == "anthropic" {
+	if clientFmt == fmtResponses && isNativeResponsesBase(baseURL) {
+		path = "/v1/responses"
+	} else if kind == "anthropic" {
 		path = "/v1/messages"
-	}
-	if kind == "gemini" {
+	} else if kind == "gemini" {
 		path = "/v1beta/models/" + modelFromBody(payload) + ":generateContent"
 	}
 	req, err := h.buildUpstreamRequest(ctx, baseURL, kind, path, payload, r, apiKeyEnv, false)
@@ -369,10 +372,11 @@ func (h *Handlers) relay(ctx context.Context, w http.ResponseWriter, baseURL str
 // router.StreamAborted().
 func (h *Handlers) relayStream(ctx context.Context, w http.ResponseWriter, baseURL string, r *http.Request, payload []byte, kind, apiKeyEnv string, from apiFormat) (int, []byte, string, time.Duration, streamUsage, error) {
 	path := "/v1/chat/completions"
-	if kind == "anthropic" {
+	if from == fmtResponses && isNativeResponsesBase(baseURL) {
+		path = "/v1/responses"
+	} else if kind == "anthropic" {
 		path = "/v1/messages"
-	}
-	if kind == "gemini" {
+	} else if kind == "gemini" {
 		path = "/v1beta/models/" + modelFromBody(payload) + ":generateContent?alt=sse"
 	}
 	req, err := h.buildUpstreamRequest(ctx, baseURL, kind, path, payload, r, apiKeyEnv, true)
@@ -414,10 +418,17 @@ func (h *Handlers) relayStream(ctx context.Context, w http.ResponseWriter, baseU
 		if rerr != nil {
 			return 0, nil, "", 0, streamUsage{}, rerr
 		}
+		if h.Logger != nil {
+			h.Logger.Printf("[DEBUG upstream] %s%s status=%d body=%.500s payload=%.500s", baseURL, path, resp.StatusCode, string(body), string(payload))
+		}
 		return resp.StatusCode, body, resp.Header.Get("Content-Type"), parseRetryAfter(resp.Header.Get("Retry-After")), streamUsage{}, nil
 	}
 
-	susage, serr := h.streamRelay(w, resp, from, kindOf(kind))
+	to := kindOf(kind)
+	if from == fmtResponses && isNativeResponsesBase(baseURL) {
+		to = fmtResponses
+	}
+	susage, serr := h.streamRelay(w, resp, from, to)
 	if serr != nil {
 		return 0, nil, "", 0, streamUsage{}, serr
 	}
