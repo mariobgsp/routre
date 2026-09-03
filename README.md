@@ -14,10 +14,17 @@ routre models sync        # pull new provider models into config.json
 Point any agent at `http://127.0.0.1:20128` via `OPENAI_BASE_URL` /
 `ANTHROPIC_BASE_URL` — failover, compression, and caching come for free.
 
-### Latest (v0.4.3 — 2026-09-02)
+### Latest (v0.4.4 — 2026-09-03)
+
+- **Opencode session header** — every request to `opencode.ai` now carries `x-opencode-session` (forwarded when the client sends it, else a stable gateway-generated ID). Prevents the `09/06` `missing x-opencode-session` error for `Go HTTP client` / `curl` user-agents. Applied to relay + `doctor`/`probe`.
+- Native Responses passthrough and agent guide (v0.4.3) still included — see below.
+
+<details><summary>Previous — v0.4.3</summary>
 
 - **Native Responses passthrough** — `muse-spark-1.2-contributor-free` (opencode `responses`-only) no longer 500s via `routre`; native `/v1/responses` proxy for `opencode.ai` upstreams, chat translation kept for others. Pi now routes `opencode`/`openrouter`/`anthropic`/`openai` via `127.0.0.1:20128`.
 - **Agent guide** — `docs/AGENT_ROUTRE_GUIDE.md` (also `~/.pi/agent/skills/routre-guide`) » mandatory `127.0.0.1:20128` rule, templates, and verification checklist so the 500 never recurs.
+
+</details>
 
 <details><summary>Previous — v0.3.4</summary>
 

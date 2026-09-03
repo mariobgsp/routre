@@ -12,6 +12,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 > (2026-08-25). Sections marked `legacy` use the pre-rebrand
 > routre-cli numbering and are kept for history only.
 
+## [0.4.4] — 2026-09-03
+
+### Fixed
+
+- **Opencode `x-opencode-session` header** — requests from `Go HTTP client` / `curl` user-agents were missing `x-opencode-session` and will error from `09/06` (opencode Go notification). `routre` now forwards an incoming `x-opencode-session` when present, otherwise injects a stable gateway-generated ID for every `opencode.ai` upstream request (relay streaming + non-streaming) and for `probe`/`doctor`. Minimal stdlib-only change (`crypto/rand` once per gateway instance, `ponytail: per-gateway stable, upgrade to per-client/per-conversation map if opencode optimizes on it`).
+
 ## [0.4.3] — 2026-09-02
 
 ### Fixed

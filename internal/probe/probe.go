@@ -12,6 +12,8 @@ package probe
 import (
 	"bytes"
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"log"
@@ -224,6 +226,10 @@ func (pr *Probe) probeOne(p config.Provider, model string) Result {
 		req.Header.Set("X-Api-Key", key)
 		req.Header.Set("Anthropic-Version", "2023-06-01")
 	}
+	if strings.Contains(p.BaseURL, "opencode.ai") {
+		// Opencode session header required from 09/06.
+		req.Header.Set("x-opencode-session", probeOpencodeSession())
+	}
 	start := pr.cfg.Now()
 	resp, err := pr.cfg.HTTPClient.Do(req)
 	res.Latency = pr.cfg.Now().Sub(start)
@@ -331,4 +337,21 @@ func currentConfig() *config.Config {
 	cfgMu.RLock()
 	defer cfgMu.RUnlock()
 	return cfg
+}
+
+var (
+	probeSessID  string
+	probeSessOnce sync.Once
+)
+
+func probeOpencodeSession() string {
+	probeSessOnce.Do(func() {
+		b := make([]byte, 16)
+		if _, err := rand.Read(b); err == nil {
+			probeSessID = hex.EncodeToString(b)
+		} else {
+			probeSessID = "routre-fallback-session"
+		}
+	})
+	return probeSessID
 }
