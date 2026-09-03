@@ -340,7 +340,7 @@ func currentConfig() *config.Config {
 }
 
 var (
-	probeSessID  string
+	probeSessID   string
 	probeSessOnce sync.Once
 )
 
