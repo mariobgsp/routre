@@ -164,14 +164,15 @@ func (h *Handlers) Status(w http.ResponseWriter, _ *http.Request) {
 		})
 	}
 	writeJSON(w, http.StatusOK, map[string]any{
-		"uptime_seconds":     int(time.Since(h.Start).Seconds()),
-		"cache_entries":      h.Cache.Len(),
-		"cache_bytes":        h.Cache.SizeBytes(),
-		"cache_miss_reasons": h.Metrics.CacheMissByReason(),
-		"rtk_enabled":        h.RTK.Enabled(),
-		"providers":          provs,
-		"cache_hit_ratio":    h.Metrics.CacheHitRatio(),
-		"rtk_applied":        h.Metrics.RTKAppliedCount(),
+		"uptime_seconds":         int(time.Since(h.Start).Seconds()),
+		"cache_entries":          h.Cache.Len(),
+		"cache_bytes":            h.Cache.SizeBytes(),
+		"cache_miss_reasons":     h.Metrics.CacheMissByReason(),
+		"rtk_enabled":            h.RTK.Enabled(),
+		"providers":              provs,
+		"cache_hit_ratio":        h.Metrics.CacheHitRatio(),
+		"rtk_applied":            h.Metrics.RTKAppliedCount(),
+		"discovery_last_success": h.Router.LastDiscoveryUnix(),
 	})
 }
 

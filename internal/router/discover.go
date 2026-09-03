@@ -48,6 +48,14 @@ func discoveryHTTPClient() *http.Client {
 // providers are skipped; each failure is reported via warn (may be nil).
 // Returns the number of providers successfully refreshed.
 func (r *Router) DiscoverModels(client *http.Client, warn func(provider string, err error)) int {
+	refreshed, _ := r.DiscoverModelsWithStats(client, warn)
+	return refreshed
+}
+
+// DiscoverModelsWithStats is DiscoverModels plus the count of newly added
+// model IDs. It also stamps the last-success timestamp (see
+// LastDiscoveryUnix) when at least one provider refreshed.
+func (r *Router) DiscoverModelsWithStats(client *http.Client, warn func(provider string, err error)) (refreshed, added int) {
 	r.mu.RLock()
 	snapshot := make([]*ProviderState, len(r.provs))
 	copy(snapshot, r.provs)
@@ -56,7 +64,6 @@ func (r *Router) DiscoverModels(client *http.Client, warn func(provider string, 
 	if client == nil {
 		client = discoveryHTTPClient()
 	}
-	refreshed := 0
 	for _, p := range snapshot {
 		ids, err := fetchModels(client, p.Provider)
 		if err != nil {
@@ -66,10 +73,17 @@ func (r *Router) DiscoverModels(client *http.Client, warn func(provider string, 
 			continue
 		}
 		refreshed++
-		r.mergeDiscovered(p, ids)
+		added += r.mergeDiscovered(p, ids)
 	}
-	return refreshed
+	if refreshed > 0 {
+		r.discTS.Store(time.Now().Unix())
+	}
+	return refreshed, added
 }
+
+// LastDiscoveryUnix returns the unix seconds of the last successful
+// discovery run (any provider refreshed), or 0 if never.
+func (r *Router) LastDiscoveryUnix() int64 { return r.discTS.Load() }
 
 // fetchModels GETs {base_url}/models (trailing slash tolerant) and returns
 // the deduplicated model IDs. The provider API key (from APIKeyEnv) is sent
@@ -113,18 +127,22 @@ func fetchModels(client *http.Client, p ProviderInfo) ([]string, error) {
 
 // mergeDiscovered adds ids that are not already in p's model list
 // (explicit config models are kept as the seed and never shadowed).
-func (r *Router) mergeDiscovered(p *ProviderState, ids []string) {
+// Returns the number of IDs actually added.
+func (r *Router) mergeDiscovered(p *ProviderState, ids []string) int {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	existing := make(map[string]struct{}, len(p.Provider.Models))
 	for _, m := range p.Provider.Models {
 		existing[m] = struct{}{}
 	}
+	added := 0
 	for _, id := range ids {
 		if _, ok := existing[id]; ok {
 			continue
 		}
 		p.Provider.Models = append(p.Provider.Models, id)
 		existing[id] = struct{}{}
+		added++
 	}
+	return added
 }

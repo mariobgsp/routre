@@ -342,7 +342,7 @@ opencode run --model <provider>/<model> "hello"
 Three layers, cheapest first:
 
 1. **`forward_unknown: true` (default)** — any model not in `config.json` is forwarded verbatim to every available provider in tier order. If one provider carries it, the request succeeds with no config edit; rejections (400/404) fail over automatically.
-2. **In-memory discovery** — at startup, every 6h, and on `SIGHUP`, each provider's `GET {base_url}/models` is fetched and merged additively into the live router. No restart needed, but not yet durable.
+2. **In-memory discovery** — at startup, every 6h (±5m jitter so a fleet never hammers providers in lockstep), and on `SIGHUP`, each provider's `GET {base_url}/models` is fetched and merged additively into the live router. No restart needed, but not yet durable. Every run logs `model discovery: refreshed N providers, +M models`; freshness is observable via `routre_discovery_last_success_timestamp_seconds` in `/metrics` and `discovery_last_success` in `/v1/status`.
 3. **`routre models sync`** — makes discovery durable by writing new IDs back into `config.json`:
 
    ```bash
@@ -351,7 +351,11 @@ Three layers, cheapest first:
    routre models sync --prune --dry-run --json     # scripting
    ```
 
-   Additive by default (never deletes). `--prune` drops models the provider no longer advertises. Unreachable providers are skipped with a warning and kept as-is. After a successful write the gateway is `SIGHUP`'d best-effort so the new list is live immediately.
+   Additive by default (never deletes). `--prune` drops models the provider no longer advertises. Unreachable providers are skipped with a warning and kept as-is. After a successful write the gateway is `SIGHUP`'d best-effort so the new list is live immediately. For set-and-forget durability, run sync on a schedule (additive = safe to automate):
+
+   ```cron
+   17 */6 * * * ~/.local/bin/routre models sync -config ~/routre/config.json >> ~/.routre/models-sync.log 2>&1
+   ```
 
 ### RTK token compression (≥90% on tool-heavy traffic)
 
