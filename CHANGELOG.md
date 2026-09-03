@@ -12,6 +12,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 > (2026-08-25). Sections marked `legacy` use the pre-rebrand
 > routre-cli numbering and are kept for history only.
 
+## [0.4.5] — 2026-09-03
+
+### Added
+
+- **Model-discovery polish (lean refresh)** — periodic `GET {base}/models` now runs on a jittered `6h ± 5m` timer (single timer, no per-provider goroutine, zero extra RAM — defeats fleet thundering herd), logs `model discovery: refreshed N providers, +M models` at info, and stamps freshness to `routre_discovery_last_success_timestamp_seconds` (`/metrics`) + `discovery_last_success` (`/v1/status`). `Router.DiscoverModelsWithStats` returns `(refreshed, added)`; `DiscoverModels` signature unchanged. README gains a cron one-liner for set-and-forget `models sync`.
+
 ## [0.4.4] — 2026-09-03
 
 ### Fixed

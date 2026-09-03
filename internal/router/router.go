@@ -16,6 +16,7 @@ import (
 	"fmt"
 	"strings"
 	"sync"
+	"sync/atomic"
 
 	"github.com/mariobgsp/routre/internal/config"
 	"time"
@@ -224,6 +225,7 @@ type ProviderInfo struct {
 // Router is a concurrency-safe tiered provider list with cooldowns.
 type Router struct {
 	mu     sync.RWMutex
+	discTS atomic.Int64     // last successful discovery unix seconds (0 = never)
 	provs  []*ProviderState // flattened in tier order
 	policy CooldownPolicy
 	now    func() time.Time // clock injection for tests

@@ -23,6 +23,7 @@ import (
 	"flag"
 	"fmt"
 	"log"
+	mathrand "math/rand/v2"
 	"net/http"
 	"os"
 	"os/signal"
@@ -179,28 +180,39 @@ func cmdServe(cfgPath, port string, logger *log.Logger, debug ...bool) error {
 	// startup, then refresh periodically and on SIGHUP reload. Additive
 	// and best-effort — an unreachable provider is skipped with a
 	// warning, never a crash.
+	// ponytail: one timer, no per-provider goroutine; ±5m jitter defeats
+	// fleet thundering herd with zero extra RAM.
+	var h *proxy.Handlers
 	discover := func() {
-		rtr.DiscoverModels(nil, func(name string, err error) {
+		refreshed, added := rtr.DiscoverModelsWithStats(nil, func(name string, err error) {
 			logger.Printf("model discovery failed for %q: %v", name, err)
 		})
+		logger.Printf("model discovery: refreshed %d providers, +%d models", refreshed, added)
+		if refreshed > 0 && h != nil {
+			h.Metrics.SetDiscoveryTimestamp(time.Now())
+		}
 	}
 	discover()
 	discoverStop := make(chan struct{})
 	defer close(discoverStop)
 	go func() {
-		tk := time.NewTicker(router.DiscoveryRefreshInterval)
-		defer tk.Stop()
+		t := time.NewTimer(jitteredDiscoveryInterval())
+		defer t.Stop()
 		for {
 			select {
-			case <-tk.C:
+			case <-t.C:
 				discover()
+				t.Reset(jitteredDiscoveryInterval())
 			case <-discoverStop:
 				return
 			}
 		}
 	}()
 
-	h := proxy.NewHandlers(st, rtr, cch, tk, logger, use)
+	h = proxy.NewHandlers(st, rtr, cch, tk, logger, use)
+	if ts := rtr.LastDiscoveryUnix(); ts > 0 {
+		h.Metrics.SetDiscoveryTimestamp(time.Unix(ts, 0))
+	}
 	// Request log path: the OnLoad callback only fires on reload, so set it
 	// explicitly for the initial config too.
 	reqlog.SetPath(cfg.RequestLog)
@@ -391,6 +403,16 @@ func buildRouter(cfg config.Config) *router.Router {
 	// providers (default true). Reset preserves this across reloads.
 	r.SetForwardUnknown(cfg.ForwardUnknown)
 	return r
+}
+
+// jitteredDiscoveryInterval spreads periodic model refresh over
+// DiscoveryRefreshInterval ± 5m so a fleet restarting together does not
+// hammer providers at the same instant. math/rand is fine here — jitter
+// is not security-sensitive (session tokens use crypto/rand).
+//
+//nolint:gosec // jitter only, not a secret
+func jitteredDiscoveryInterval() time.Duration {
+	return router.DiscoveryRefreshInterval + time.Duration(mathrand.Int64N(int64(10*time.Minute))) - 5*time.Minute
 }
 
 func totalProviders(c config.Config) int {

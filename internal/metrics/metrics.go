@@ -29,6 +29,7 @@ type Metrics struct {
 	cacheCrBy  map[string]int64 // per-provider creation tokens (provider -> tokens)
 	cacheSv    int64            // estimated prompt-cache savings tokens, global sum
 	cacheSvBy  map[string]int64 // per-provider net savings (provider -> net tokens)
+	discTS     int64            // last successful model-discovery unix seconds (0 = never)
 }
 
 // New creates an empty registry with start time now.
@@ -213,6 +214,23 @@ func (m *Metrics) WriteProm(w io.Writer) {
 	for _, k := range sortedKeys(m.cacheSvBy) {
 		fmt.Fprintf(w, "routre_cache_savings_tokens_total{provider=%q} %d\n", k, m.cacheSvBy[k])
 	}
+	fmt.Fprintf(w, "# HELP routre_discovery_last_success_timestamp_seconds unix time of last successful model discovery (0 = never)\n")
+	fmt.Fprintf(w, "# TYPE routre_discovery_last_success_timestamp_seconds gauge\n")
+	fmt.Fprintf(w, "routre_discovery_last_success_timestamp_seconds %d\n", m.discTS)
+}
+
+// SetDiscoveryTimestamp records the last successful model-discovery run.
+func (m *Metrics) SetDiscoveryTimestamp(t time.Time) {
+	m.mu.Lock()
+	m.discTS = t.Unix()
+	m.mu.Unlock()
+}
+
+// DiscoveryTimestamp returns the last successful discovery unix seconds.
+func (m *Metrics) DiscoveryTimestamp() int64 {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.discTS
 }
 
 // CacheMissByReason returns a copy of the per-reason miss counters.
