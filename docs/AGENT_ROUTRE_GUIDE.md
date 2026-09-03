@@ -53,8 +53,8 @@ For a **new custom provider** like `commandcode` (not built-in), you must also d
       "api": "openai-completions",
       "apiKey": "commandcode",
       "models": [
-        { "id": "deepseek/deepseek-v4-flash", "contextWindow": 1048576, "maxTokens": 384000 },
-        { "id": "deepseek/deepseek-v4-pro",    "contextWindow": 1048576, "maxTokens": 384000 },
+        { "id": "deepseek/deepseek-v4-flash", "contextWindow": 1048576, "maxTokens": 384000, "reasoning": true, "thinkingLevelMap": { "off": null, "low": "low", "high": "high", "max": "max" } },
+        { "id": "deepseek/deepseek-v4-pro",    "contextWindow": 1048576, "maxTokens": 384000, "reasoning": true, "thinkingLevelMap": { "off": null, "low": "low", "high": "high", "max": "max" } },
         { "id": "gpt-5.6-luna" },
         { "id": "claude-sonnet-5" }
       ]
@@ -70,21 +70,22 @@ For a **new custom provider** like `commandcode` (not built-in), you must also d
 - Do NOT point any provider at `https://...` directly while `routre` is running.
 - Verify: `cat ~/.pi/agent/models.json` → all `baseUrl` must be `http://127.0.0.1:20128/v1`. Then `pi --list-models | grep commandcode` must show models.
 
-### Context window: why a model shows 128K instead of 1M
+### Capability defaults: why a model shows 128K / no thinking instead of 1M / yes
 
-**Root cause:** routre never tells pi the model's context window — `/v1/models` returns bare `{"id"}` entries and requests carry no window field. The window is a **pi-side** number. When a provider in `~/.pi/agent/models.json` declares a model with only `{ "id": ... }` (no metadata), pi falls back to its documented defaults: `contextWindow` **128000**, `maxTokens` **16384**. So a bare `deepseek/deepseek-v4-flash` entry shows `128K / 16.4K` in `pi --list-models` even though the upstream really supports 1M / 384K.
+**Root cause:** routre never tells pi the model's capabilities (context window, reasoning, etc.) — `/v1/models` returns bare `{"id"}` entries and requests carry no capability fields. These are **pi-side** numbers. When a provider in `~/.pi/agent/models.json` declares a model with only `{ "id": ... }` (no metadata), pi falls back to its documented defaults: `contextWindow` **128000**, `maxTokens` **16384**, `reasoning` **false**. So a bare `deepseek/deepseek-v4-flash` entry shows `128K / 16.4K / no` in `pi --list-models` even though the upstream really supports 1M / 384K / thinking.
 
-**Fix:** declare `contextWindow` and `maxTokens` on each custom model entry (match the real upstream numbers, visible via `pi --list-models` on the built-in opencode/openrouter catalog):
+**Fix:** declare the full capability set on each custom model entry (copy the real values from the built-in catalog for the same model via `pi --list-models`, or from `~/.pi/agent/models-store.json`):
 
 ```json
-{ "id": "deepseek/deepseek-v4-flash", "contextWindow": 1048576, "maxTokens": 384000 }
+{ "id": "deepseek/deepseek-v4-flash", "contextWindow": 1048576, "maxTokens": 384000, "reasoning": true, "thinkingLevelMap": { "off": null, "low": "low", "high": "high", "max": "max" } }
 ```
 
 Notes:
 
+- `thinkingLevelMap` maps pi thinking levels (`off/low/medium/high/xhigh/max`) to the upstream's accepted values; `null` marks a level unsupported. Mirror the map from the matching built-in/extension model in `models-store.json` — copying a map the upstream rejects causes 4xx errors.
 - Settings live in `~/.pi/agent/models.json` (`settings.json` does NOT hold model metadata). Changes need a **pi restart** (resolved at startup) — SIGHUP/`/models` reload is not enough.
-- Alternatively use `modelOverrides` on a built-in provider that keeps pi's catalog, e.g. `"opencode": { "modelOverrides": { "deepseek-v4-flash": { "contextWindow": 1048576, "maxTokens": 384000 } } }` (see pi `docs/models.md` § Per-model Overrides). Unknown ids are ignored; a custom `models` entry with the same id shadows the built-in.
-- Verify with `pi --list-models | grep <model>` — the `context`/`max-out` columns must show `1M` / `384K`, not `128K` / `16.4K`.
+- Alternatively use `modelOverrides` on a built-in provider that keeps pi's catalog, e.g. `"opencode": { "modelOverrides": { "deepseek-v4-flash": { "contextWindow": 1048576, "maxTokens": 384000, "reasoning": true, "thinkingLevelMap": { "off": null, "low": "low", "high": "high", "max": "max" } } } }` (see pi `docs/models.md` § Per-model Overrides). Unknown ids are ignored; a custom `models` entry with the same id shadows the built-in.
+- Verify with `pi --list-models | grep <model>` — the `context`/`max-out`/`thinking` columns must show `1M` / `384K` / `yes`, not `128K` / `16.4K` / `no`.
 
 ## 3. Routre Side (`~/routre/config.json`)
 
