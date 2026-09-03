@@ -340,7 +340,7 @@ func isNativeResponsesBase(baseURL string) bool { return strings.Contains(baseUR
 
 var (
 	opencodeSessID   string
-	opencodeSessOnce  sync.Once
+	opencodeSessOnce sync.Once
 )
 
 func opencodeSessionID() string {
