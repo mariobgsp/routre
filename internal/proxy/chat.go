@@ -4,6 +4,8 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -313,6 +315,17 @@ func (h *Handlers) buildUpstreamRequest(ctx context.Context, baseURL, kind, path
 			req.Header.Set(hdr, v)
 		}
 	}
+	// Opencode session header: required by opencode.ai/zen from 09/06.
+	// Forward client's x-opencode-session if present, else inject a stable
+	// fallback so Go HTTP client / curl user-agents never error.
+	// ponytail: stable per-gateway instance, not per-request random, so a
+	// stable per-conversation ID without tracking conversations. Upgrade to
+	// per-client/per-conversation map if opencode optimizes on it.
+	if v := r.Header.Get("x-opencode-session"); v != "" {
+		req.Header.Set("x-opencode-session", v)
+	} else if isNativeResponsesBase(baseURL) {
+		req.Header.Set("x-opencode-session", opencodeSessionID())
+	}
 	return req, nil
 }
 
@@ -324,6 +337,23 @@ func (h *Handlers) buildUpstreamRequest(ctx context.Context, baseURL, kind, path
 // used for cross-kind streaming translation. retryAfter is the parsed
 // upstream Retry-After delay (0 when absent) on a non-2xx response.
 func isNativeResponsesBase(baseURL string) bool { return strings.Contains(baseURL, "opencode.ai") }
+
+var (
+	opencodeSessID   string
+	opencodeSessOnce  sync.Once
+)
+
+func opencodeSessionID() string {
+	opencodeSessOnce.Do(func() {
+		b := make([]byte, 16)
+		if _, err := rand.Read(b); err == nil {
+			opencodeSessID = hex.EncodeToString(b)
+		} else {
+			opencodeSessID = "routre-fallback-session"
+		}
+	})
+	return opencodeSessID
+}
 
 func (h *Handlers) relay(ctx context.Context, w http.ResponseWriter, baseURL string, r *http.Request, payload []byte, streaming bool, kind, apiKeyEnv string, from apiFormat, clientFmt apiFormat) (int, []byte, string, time.Duration, streamUsage, error) {
 	if streaming {

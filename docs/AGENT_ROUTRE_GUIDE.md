@@ -14,6 +14,8 @@
 
 If you add a new `responses`-only provider, extend `isNativeResponsesBase`.
 
+**Opencode session header (v0.4.4):** `opencode.ai` now requires `x-opencode-session` (stable per-conversation ID) from `09/06`. `routre` forwards the client's header when present, otherwise injects a stable gateway ID for every `opencode.ai` upstream (see `proxy/chat.go:opencodeSessionID` and `probe/probe.go:probeOpencodeSession`). No `config.json` change — `Go HTTP client` / `curl` UAs now pass.
+
 ## 2. Pi Side (`~/.pi/agent/models.json`)
 
 This is the ONLY place pi's base URLs are overridden. Edit this file, then **restart pi** (resolved at startup).
