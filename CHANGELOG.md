@@ -12,6 +12,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 > (2026-08-25). Sections marked `legacy` use the pre-rebrand
 > routre-cli numbering and are kept for history only.
 
+## [0.4.6] — 2026-09-03
+
+### Added
+
+- **CommandCode AI provider** — new `commandcode` tier (`https://api.commandcode.ai/provider/v1`, `kind: openai`, `COMMANDCODE_API_KEY=user_...`) with 19 models (`deepseek/deepseek-v4-flash`, `gpt-5.6-luna`, `claude-sonnet-5`, etc.). Tier is first so bare `deepseek/*` prefers `commandcode` over `opencode` free variants. Pi side: `~/.pi/agent/models.json` now documents custom-provider pattern (`api: openai-completions`, `apiKey: commandcode`, `models: [{id}]`) and `pi --list-models | grep commandcode` verification. Guide (`docs/AGENT_ROUTRE_GUIDE.md` §2-§3) updated with `commandcode` examples and `COMMANDCODE_API_KEY` in `routre.env`.
+
+### Fixed
+
+- **Provider-qualified routing hijack** — `commandcode/deepseek/deepseek-v4-flash` was still matched by `opencode-zen` via `freeVariantOf` tail (`deepseek-v4-flash` → `deepseek-v4-flash-free`) and sent to `opencode` with `400 Model is unavailable`. `Router.Candidates` now detects `qualifiedFor` (first segment equals a provider name) and skips all non-matching providers, so qualified `commandcode/<model>` isolates to `commandcode` only. Bare `deepseek/*` now correctly routes via tier order.
+
 ## [0.4.5] — 2026-09-03
 
 ### Added

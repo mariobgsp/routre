@@ -449,9 +449,22 @@ func (r *Router) Candidates(model string) []Candidate {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 	now := r.now()
+	// Detect provider-qualified model (e.g. "commandcode/deepseek/...").
+	// If qualified, only that provider should be considered — prevents
+	// free-variant tail matching from hijacking the request to other providers.
+	qualifiedFor := ""
+	for _, q := range r.provs {
+		if stripProviderPrefix(q.Provider.Name, model) != "" {
+			qualifiedFor = q.Provider.Name
+			break
+		}
+	}
 	var out []Candidate
 	for _, p := range r.provs {
 		if now.Before(p.until) {
+			continue
+		}
+		if qualifiedFor != "" && p.Provider.Name != qualifiedFor {
 			continue
 		}
 		// Explicit provider-qualified routing: "opencode-go/muse-spark-1.2-contributor"
