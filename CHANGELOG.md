@@ -12,6 +12,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 > (2026-08-25). Sections marked `legacy` use the pre-rebrand
 > routre-cli numbering and are kept for history only.
 
+## [0.4.7] — 2026-09-04
+
+### Fixed
+
+- **Whitelist `muse-spark-1.3-contributor-free`** — the model was absent from every provider list, so `forward_unknown` fanned every request out to all tiers (`commandcode` first, fail, then `opencode-zen` served `200`). Added to `opencode-zen` in `config.all.json` (and local `config.json`), so it routes direct with no wasted `commandcode` attempt.
+
 ## [0.4.6] — 2026-09-03
 
 ### Added
