@@ -14,7 +14,7 @@ routre models sync        # pull new provider models into config.json
 Point any agent at `http://127.0.0.1:20128` via `OPENAI_BASE_URL` /
 `ANTHROPIC_BASE_URL` — failover, compression, and caching come for free.
 
-### Latest (v0.4.4 — 2026-09-03)
+### Latest (v0.4.8 — 2026-09-06)
 
 - **Opencode session header** — every request to `opencode.ai` now carries `x-opencode-session` (forwarded when the client sends it, else a stable gateway-generated ID). Prevents the `09/06` `missing x-opencode-session` error for `Go HTTP client` / `curl` user-agents. Applied to relay + `doctor`/`probe`.
 - Native Responses passthrough and agent guide (v0.4.3) still included — see below.

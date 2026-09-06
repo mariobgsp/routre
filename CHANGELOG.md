@@ -12,6 +12,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 > (2026-08-25). Sections marked `legacy` use the pre-rebrand
 > routre-cli numbering and are kept for history only.
 
+## [0.4.8] — 2026-09-06
+
+### Changed
+
+- **Portfolio site rewritten in the Flat Blueprint / Technical Drawing style** (`docs/index.html`, GitHub Pages) — navy-void `#12101f` + gold `#ca8a04` theme, `Press Start 2P` + `VT323` type, hairline grid background, corner-clipped plates, LED/radar pulses, marquee, and a 10-section “LVL” layout (hero → what → quickstart → changelog → contact). Copy tightened to the product pitch — “Stop paying the token tax” — and fixed text that rendered as thin half-width columns on wide screens (removed `68ch`/`62ch` caps on `.sec-note` and `.about-text p`; paragraph text is now justified/full-bleed; the “What” section’s right-hand stat panel became a full-width 4-up stats strip).
+
+### Added
+
+- **Local dashboard (`/ui`) now shares the portfolio theme** (`internal/proxy/ui.go`) — the loopback settings page dropped the flat dark-red style for the same blueprint look: navy/gold palette, `Press Start 2P`/`VT323` fonts, corner-cut cards, chunky buttons, blueprint grid background, and LED status markers. All ids/classes used by the inline JS and the `/ui/api/*` endpoints are unchanged; `go vet` + the full `/ui` test suite pass.
+
 ## [0.4.7] — 2026-09-04
 
 ### Fixed

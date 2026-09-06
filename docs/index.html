@@ -3,17 +3,12 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width,initial-scale=1" />
-    <title>routre — The 10-MB gateway you forget is running</title>
+    <title>routre — Stop paying the token tax</title>
     <meta
       name="description"
       content="routre — one static binary (10 MiB, 10 MiB RAM) — failover, bench-gated 90% RTK token compression, cache, per-agent ledger."
     />
-    <link rel="preconnect" href="https://fonts.googleapis.com" />
-    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-    <link
-      href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;500;600&display=swap"
-      rel="stylesheet"
-    />
+    <meta name="theme-color" content="#12101f" />
     <link rel="icon" type="image/jpeg" href="icon/routre-hamster-256.jpeg" />
     <link
       rel="preload"
@@ -21,293 +16,2125 @@
       href="icon/routre-hamster-256.jpeg"
       imagesrcset="icon/routre-hamster-256.jpeg 1x"
     />
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Press+Start+2P&family=VT323&display=swap"
+      rel="stylesheet"
+    />
     <style>
+      /* ==========================================================================
+       PORTFOLIO — Flat Blueprint / Technical Drawing
+       Navy void, hairline borders, mono labels, orange accent.
+       Techy motion: typing terminal, LED pulses, radar pings, scanband sweep,
+       scroll progress, corner brackets. Decorative glossy bubbles.
+       Theme follows portfolio-3d; single-file build.
+       ========================================================================== */
+
+      /* ===== TOKENS ===== */
       :root {
-        --bg: #fdfdfc;
-        --fg: #2a2725;
-        --ink2: rgb(42 39 37 / 68%);
-        --ink3: rgb(42 39 37 / 52%);
-        --acc: #2563eb;
-        --acc-deep: #1d4ed8;
-        --teal: #91cbcc;
-        --peach: #ffb58e;
-        --cream: #fff6eb;
-        --card: #ffffff;
-        --bd: rgb(42 39 37 / 14%);
-        --hover: rgb(145 203 204 / 18%);
-        --mono: ui-monospace, Menlo, Consolas, monospace;
-        --sans:
-          Outfit, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+        --paper: #12101f;
+        --paper-2: #1b1830;
+        --paper-3: #0c0a18;
+        --ink: #f0e6d2;
+        --steel: #c9b896;
+        --steel-dim: #7d7466;
+        --hairline: #4a3f5c;
+        --hairline-soft: rgba(202, 138, 4, 0.3);
+        --accent: #ca8a04;
+        --accent-soft: rgba(202, 138, 4, 0.12);
+        --torch: #ff7a3d;
+        --ok: #7bc96f;
+        --px: "Press Start 2P", monospace;
+        --mono: "VT323", ui-monospace, monospace;
+        --sans: "VT323", ui-monospace, monospace;
+
+        --ease: 0.45s cubic-bezier(0.22, 1, 0.36, 1);
+
+        /* z-layers: bg 0 · content 1 · overlays 2 · nav 40 · menu 50 */
+        --z-content: 1;
+        --z-fx: 2;
+        --z-nav: 40;
+        --z-menu: 50;
       }
-      * {
+
+      /* ===== RESET & BASE ===== */
+      *,
+      *::before,
+      *::after {
+        margin: 0;
+        padding: 0;
         box-sizing: border-box;
       }
-      html,
-      body {
-        margin: 0;
-        background: var(--bg);
-        color: var(--fg);
-        font-family: var(--sans);
-        overflow-x: hidden;
+
+      html {
+        background: var(--paper);
+        scroll-padding-top: 76px;
       }
-      /* ambient glow — soft peach + teal on near-white, matching hamster */
-      body::before {
-        content: "";
+
+      @media (prefers-reduced-motion: no-preference) {
+        html {
+          scroll-behavior: smooth;
+        }
+      }
+
+      body {
+        font-family: var(--sans);
+        color: var(--ink);
+        line-height: 1.65;
+        overflow-x: hidden;
+        -webkit-font-smoothing: antialiased;
+        text-rendering: optimizeLegibility;
+      }
+
+      body.lock {
+        overflow: hidden;
+      }
+
+      a {
+        color: inherit;
+      }
+
+      ::selection {
+        background: var(--accent);
+        color: var(--paper);
+      }
+
+      :focus-visible {
+        outline: 2px solid var(--accent);
+        outline-offset: 3px;
+        border-radius: 4px;
+      }
+
+      ::-webkit-scrollbar {
+        width: 10px;
+      }
+      ::-webkit-scrollbar-track {
+        background: var(--paper);
+      }
+      ::-webkit-scrollbar-thumb {
+        background: var(--hairline);
+        border-radius: 999px;
+        border: 2px solid var(--paper);
+      }
+      ::-webkit-scrollbar-thumb:hover {
+        background: var(--accent);
+      }
+
+      /* ===== BACKGROUND LAYERS (z 0) ===== */
+      .bg-grid {
         position: fixed;
         inset: 0;
-        pointer-events: none;
         z-index: 0;
+        pointer-events: none;
+        background-image:
+          linear-gradient(rgba(42, 74, 127, 0.16) 1px, transparent 1px),
+          linear-gradient(90deg, rgba(42, 74, 127, 0.16) 1px, transparent 1px);
+        background-size: 44px 44px;
+        -webkit-mask-image: radial-gradient(
+          120% 100% at 50% 0%,
+          #000 30%,
+          transparent 92%
+        );
+        mask-image: radial-gradient(
+          120% 100% at 50% 0%,
+          #000 30%,
+          transparent 92%
+        );
+      }
+
+      /* simplified: bubbles/scanband/cue off except scanlines CRT; grid + terminal motion stays */
+      .bubbles,
+      .scanband,
+      .scroll-cue {
+        display: none;
+      }
+
+      /* pixel embers: torch sparks rising through the dungeon */
+      @media (prefers-reduced-motion: no-preference) {
+        .bubbles {
+          display: block;
+        }
+        .bubbles .bubble {
+          border: 0;
+          border-radius: 0;
+          background: var(--accent);
+          box-shadow: 0 0 8px 2px rgba(202, 138, 4, 0.55);
+          opacity: 0;
+          animation: ember-rise 9s linear infinite;
+        }
+        .bubbles .b2,
+        .bubbles .b5 {
+          background: var(--torch);
+          box-shadow: 0 0 8px 2px rgba(255, 122, 61, 0.55);
+        }
+        .bubbles .bubble::after,
+        .bubbles .bubble-ping::before {
+          display: none;
+        }
+        .bubbles .b1 {
+          width: 8px;
+          height: 8px;
+        }
+        .bubbles .b2 {
+          width: 5px;
+          height: 5px;
+          animation-delay: -3s;
+        }
+        .bubbles .b3 {
+          width: 4px;
+          height: 4px;
+          animation-delay: -5s;
+        }
+        .bubbles .b4 {
+          width: 7px;
+          height: 7px;
+          animation-delay: -7s;
+        }
+        .bubbles .b5 {
+          width: 5px;
+          height: 5px;
+          animation-delay: -2s;
+        }
+        .bubbles .b6 {
+          width: 6px;
+          height: 6px;
+          animation-delay: -6s;
+        }
+        .bubbles .b7 {
+          width: 4px;
+          height: 4px;
+          animation-delay: -4s;
+        }
+        .bubbles .b8 {
+          width: 9px;
+          height: 9px;
+          animation-delay: -8s;
+        }
+        @keyframes ember-rise {
+          0% {
+            transform: translateY(15vh);
+            opacity: 0;
+          }
+          15% {
+            opacity: 0.9;
+          }
+          100% {
+            transform: translateY(-60vh);
+            opacity: 0;
+          }
+        }
+      }
+
+      /* ===== GLOSSY BUBBLES ===== */
+      .bubbles {
+        position: fixed;
+        inset: 0;
+        z-index: 0;
+        pointer-events: none;
+        overflow: hidden;
+      }
+
+      .bubble {
+        position: absolute;
+        border-radius: 50%;
         background:
           radial-gradient(
-            700px 420px at 78% -6%,
-            rgb(255 181 142 / 24%),
-            transparent 68%
+            circle at 32% 26%,
+            rgba(255, 255, 255, 0.5),
+            rgba(255, 255, 255, 0.07) 40%,
+            transparent 72%
           ),
           radial-gradient(
-            900px 520px at 8% 115%,
-            rgb(145 203 204 / 20%),
-            transparent 72%
-          );
+            circle at 70% 80%,
+            rgba(126, 156, 201, 0.22),
+            transparent 60%
+          ),
+          rgba(14, 35, 71, 0.4);
+        border: 1px solid rgba(126, 156, 201, 0.38);
+        box-shadow:
+          inset 0 0 18px rgba(126, 156, 201, 0.28),
+          inset -4px -6px 14px rgba(4, 10, 24, 0.55),
+          0 10px 30px rgba(2, 6, 18, 0.35);
       }
-      nav,
-      main,
-      footer {
-        position: relative;
-        z-index: 1;
+
+      /* specular highlight */
+      .bubble::after {
+        content: "";
+        position: absolute;
+        top: 13%;
+        left: 20%;
+        width: 26%;
+        height: 13%;
+        border-radius: 50%;
+        background: rgba(255, 255, 255, 0.7);
+        transform: rotate(-18deg);
+        filter: blur(0.5px);
       }
-      a {
-        color: var(--fg);
-        text-decoration: none;
-        border-bottom: 1px solid var(--bd);
+
+      /* radar ping ring */
+      .bubble-ping::before {
+        content: "";
+        position: absolute;
+        inset: -2px;
+        border-radius: 50%;
+        border: 1px solid rgba(255, 122, 61, 0.55);
+        animation: ping 2.6s var(--ease) infinite;
       }
-      a:hover {
-        border-color: var(--ink2);
+
+      @keyframes ping {
+        0% {
+          transform: scale(0.65);
+          opacity: 0.9;
+        }
+        100% {
+          transform: scale(1.55);
+          opacity: 0;
+        }
       }
-      :focus-visible {
-        outline: 2px solid var(--fg);
-        outline-offset: 2px;
+
+      @media (prefers-reduced-motion: no-preference) {
+        .bubble {
+          animation: bubble-float 9s var(--ease) infinite alternate;
+        }
+        .b1 {
+          width: 150px;
+          height: 150px;
+          top: 16%;
+          right: 10%;
+          animation-duration: 11s;
+        }
+        .b2 {
+          width: 64px;
+          height: 64px;
+          top: 58%;
+          right: 30%;
+          animation-duration: 8s;
+          animation-delay: -2s;
+        }
+        .b3 {
+          width: 28px;
+          height: 28px;
+          top: 32%;
+          left: 6%;
+          animation-duration: 7s;
+          animation-delay: -1s;
+        }
+        .b4 {
+          width: 96px;
+          height: 96px;
+          top: 74%;
+          left: 12%;
+          animation-duration: 12s;
+          animation-delay: -4s;
+        }
+        .b5 {
+          width: 44px;
+          height: 44px;
+          top: 9%;
+          left: 34%;
+          animation-duration: 6.5s;
+          animation-delay: -3s;
+        }
+        .b6 {
+          width: 72px;
+          height: 72px;
+          bottom: 10%;
+          right: 5%;
+          animation-duration: 10s;
+          animation-delay: -5s;
+        }
+        .b7 {
+          width: 34px;
+          height: 34px;
+          top: 64%;
+          left: 3%;
+          animation-duration: 8.5s;
+          animation-delay: -6s;
+        }
+        .b8 {
+          width: 120px;
+          height: 120px;
+          top: 38%;
+          left: 40%;
+          opacity: 0.5;
+          animation-duration: 14s;
+          animation-delay: -7s;
+        }
       }
-      .wrap {
-        max-width: 1080px;
-        margin: 0 auto;
-        padding: 0 20px;
+
+      @keyframes bubble-float {
+        0% {
+          transform: translateY(0) translateX(0);
+        }
+        50% {
+          transform: translateY(-22px) translateX(6px);
+        }
+        100% {
+          transform: translateY(8px) translateX(-6px);
+        }
       }
-      .nav {
-        position: sticky;
+
+      /* ===== SCAN FX (z 2, fixed, pointer-events none) ===== */
+      .scanlines {
+        position: fixed;
+        inset: 0;
+        z-index: var(--z-fx);
+        pointer-events: none;
+        background: repeating-linear-gradient(
+          0deg,
+          rgba(255, 255, 255, 0.014) 0 1px,
+          transparent 1px 3px
+        );
+      }
+
+      .scanband {
+        position: fixed;
+        left: 0;
+        right: 0;
+        top: -160px;
+        height: 150px;
+        z-index: var(--z-fx);
+        pointer-events: none;
+        background: linear-gradient(
+          180deg,
+          transparent,
+          rgba(126, 156, 201, 0.07),
+          transparent
+        );
+      }
+
+      @media (prefers-reduced-motion: no-preference) {
+        .scanband {
+          animation: scan-sweep 11s linear infinite;
+        }
+      }
+
+      @keyframes scan-sweep {
+        to {
+          transform: translateY(calc(100vh + 320px));
+        }
+      }
+
+      /* ===== SCROLL PROGRESS (z 41) ===== */
+      .progress-track {
+        position: fixed;
         top: 0;
-        backdrop-filter: blur(12px);
-        background: rgb(253 253 252 / 88%);
-        border-bottom: 1px solid var(--bd);
-        box-shadow: 0 1px 12px rgb(42 39 37 / 6%);
-        z-index: 10;
+        left: 0;
+        right: 0;
+        height: 2px;
+        z-index: 41;
+        pointer-events: none;
       }
-      .nav .wrap {
+
+      .progress-bar {
+        height: 100%;
+        background: var(--accent);
+        transform: scaleX(0);
+        transform-origin: left;
+        will-change: transform;
+      }
+
+      /* ===== LAYOUT ===== */
+      .container {
+        position: relative;
+        z-index: var(--z-content);
+        max-width: 1120px;
+        margin: 0 auto;
+        padding: 0 28px;
+      }
+
+      main {
+        position: relative;
+        z-index: var(--z-content);
+      }
+
+      section {
+        padding: clamp(52px, 6vw, 76px) 0 clamp(60px, 7vw, 88px);
+      }
+
+      /* dungeon sheets — translucent so embers drift behind every section */
+      .sheet {
+        border-top: 1px solid var(--hairline-soft);
+        background: rgba(18, 16, 31, 0.82);
+      }
+
+      /* ===== SKIP LINK ===== */
+      .skip-link {
+        position: fixed;
+        top: 12px;
+        left: 12px;
+        z-index: 80;
+        padding: 10px 16px;
+        border-radius: 6px;
+        background: var(--accent);
+        color: var(--paper);
+        font-family: var(--mono);
+        font-size: 0.76rem;
+        letter-spacing: 0.08em;
+        text-transform: uppercase;
+        font-weight: 600;
+        text-decoration: none;
+        transform: translateY(-160%);
+        transition: transform 400ms var(--ease);
+      }
+
+      .skip-link:focus {
+        transform: none;
+      }
+
+      /* ===== TYPE PRIMITIVES ===== */
+      .fig-label {
+        display: inline-block;
+        font-family: var(--mono);
+        font-size: 0.66rem;
+        font-weight: 600;
+        letter-spacing: 0.22em;
+        text-transform: uppercase;
+        color: var(--steel);
+        border: 1px solid var(--hairline-soft);
+        padding: 6px 12px;
+        margin-bottom: 16px;
+      }
+
+      .fig-label .fig-num {
+        color: var(--accent);
+      }
+
+      .mono-tag {
+        font-family: var(--mono);
+        font-size: 0.64rem;
+        letter-spacing: 0.22em;
+        text-transform: uppercase;
+        color: var(--steel-dim);
+      }
+
+      .sheet-title {
+        font-size: clamp(2rem, 4.4vw, 3.1rem);
+        font-weight: 700;
+        letter-spacing: -0.025em;
+        line-height: 1.05;
+        margin-bottom: 18px;
+        text-wrap: balance;
+      }
+
+      .sheet-rule {
         display: flex;
         align-items: center;
-        justify-content: space-between;
-        padding: 14px 20px;
+        gap: 12px;
+        margin-bottom: clamp(20px, 3vw, 30px);
       }
-      .logo {
-        font-weight: 600;
-        letter-spacing: -0.02em;
+
+      .sheet-rule::before {
+        content: "";
+        flex: 1;
+        height: 1px;
+        background: var(--hairline-soft);
       }
-      .logo em {
-        font-style: normal;
-        color: var(--acc);
+
+      .sheet-rule::after {
+        content: "";
+        width: 9px;
+        height: 9px;
+        border: 1px solid var(--hairline);
+        transform: rotate(45deg);
       }
-      .logo .sub {
-        color: var(--ink3);
-        font-family: var(--mono);
-        font-weight: 400;
-        font-size: 0.8rem;
-        margin-left: 6px;
+
+      /* ===== TECHNICAL PLATE (corner brackets) ===== */
+      .plate {
+        position: relative;
+        border: 1px solid var(--hairline-soft);
+        background: rgba(14, 35, 71, 0.45);
       }
-      .btn {
-        display: inline-block;
-        border: 1px solid transparent;
-        background: var(--acc);
-        color: #ffffff;
-        padding: 9px 16px;
-        font-weight: 600;
-        font-size: 0.88rem;
-        font-family: var(--sans);
-        border-bottom: none;
-        border-radius: 999px;
+
+      .plate::before,
+      .plate::after {
+        content: "";
+        position: absolute;
+        width: 13px;
+        height: 13px;
+        border: 0 solid var(--accent);
         transition:
-          transform 0.35s cubic-bezier(0.22, 1, 0.36, 1),
-          background 0.2s ease;
+          width 0.5s var(--ease),
+          height 0.5s var(--ease);
+        pointer-events: none;
       }
-      .btn:hover {
-        background: var(--acc-deep);
-        color: #ffffff;
-        transform: translateY(-1px);
+
+      .plate::before {
+        top: -1px;
+        left: -1px;
+        border-top-width: 2px;
+        border-left-width: 2px;
       }
-      .btn.ghost {
-        background: transparent;
-        color: var(--fg);
-        border-color: var(--bd);
+      .plate::after {
+        bottom: -1px;
+        right: -1px;
+        border-bottom-width: 2px;
+        border-right-width: 2px;
       }
-      .btn.ghost:hover {
-        background: var(--hover);
-        border-color: var(--ink2);
+
+      .plate:hover::before,
+      .plate:hover::after {
+        width: 22px;
+        height: 22px;
       }
-      .hero {
-        padding: clamp(48px, 8vh, 96px) 0 32px;
-        display: grid;
-        grid-template-columns: 1.1fr 0.9fr;
-        gap: 28px;
+
+      /* ===== LED ===== */
+      .led {
+        display: inline-block;
+        width: 7px;
+        height: 7px;
+        border-radius: 50%;
+        flex-shrink: 0;
+      }
+
+      .led-green {
+        background: var(--ok);
+        animation: led-pulse 2.2s var(--ease) infinite;
+      }
+
+      @keyframes led-pulse {
+        0%,
+        100% {
+          box-shadow: 0 0 0 0 rgba(52, 211, 153, 0.5);
+        }
+        60% {
+          box-shadow: 0 0 0 7px rgba(52, 211, 153, 0);
+        }
+      }
+
+      /* ===== NAV (flat, edge-to-edge blueprint) ===== */
+      nav {
+        position: fixed;
+        top: 0;
+        left: 0;
+        right: 0;
+        z-index: var(--z-nav);
+        background: rgba(18, 16, 31, 0.94);
+        border-bottom: 1px solid transparent;
+        transition:
+          border-color var(--ease),
+          background-color var(--ease);
+      }
+
+      nav.scrolled {
+        background: rgba(8, 20, 44, 0.98);
+        border-bottom-color: var(--hairline);
+      }
+
+      .nav-inner {
+        max-width: 1120px;
+        margin: 0 auto;
+        padding: 0 28px;
+        height: 62px;
+        display: flex;
         align-items: center;
+        gap: 24px;
       }
-      .hero > * {
-        min-width: 0; /* let grid columns shrink below nowrap content */
+
+      .nav-logo {
+        font-family: var(--mono);
+        font-size: 0.98rem;
+        font-weight: 600;
+        text-decoration: none;
+        white-space: nowrap;
+      }
+
+      .logo-dot {
+        color: var(--accent);
+      }
+
+      .nav-status {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        font-family: var(--mono);
+        font-size: 0.62rem;
+        letter-spacing: 0.16em;
+        color: var(--steel);
+        text-transform: uppercase;
+        border: 1px solid var(--hairline-soft);
+        padding: 5px 10px;
+        margin-right: auto;
+      }
+
+      .nav-clock {
+        color: var(--ink);
+        font-variant-numeric: tabular-nums;
+      }
+
+      .nav-tz {
+        color: var(--steel-dim);
+      }
+
+      .nav-links {
+        list-style: none;
+        display: flex;
+        gap: 2px;
+      }
+
+      .nav-links a {
+        position: relative;
+        display: inline-flex;
+        align-items: baseline;
+        gap: 6px;
+        padding: 8px 12px;
+        font-family: var(--mono);
+        font-size: 0.7rem;
+        letter-spacing: 0.08em;
+        text-transform: uppercase;
+        text-decoration: none;
+        color: var(--steel);
+        transition:
+          color var(--ease),
+          background-color var(--ease);
+      }
+
+      .nav-links .link-idx {
+        font-size: 0.56rem;
+        color: var(--steel-dim);
+        transition: color var(--ease);
+      }
+
+      .nav-links a::after {
+        content: "";
+        position: absolute;
+        left: 12px;
+        right: 12px;
+        bottom: 3px;
+        height: 1px;
+        background: var(--accent);
+        transform: scaleX(0);
+        transform-origin: left;
+        transition: transform var(--ease);
+      }
+
+      .nav-links a:hover,
+      .nav-links a.active {
+        color: var(--accent);
+        background: var(--accent-soft);
+      }
+
+      .nav-links a:hover .link-idx,
+      .nav-links a.active .link-idx {
+        color: var(--accent);
+      }
+
+      .nav-links a:hover::after,
+      .nav-links a.active::after {
+        transform: scaleX(1);
+      }
+
+      .nav-hamburger {
+        display: none;
+        position: relative;
+        width: 40px;
+        height: 40px;
+        border-radius: 6px;
+        border: 1px solid var(--hairline);
+        background: transparent;
+        cursor: pointer;
+        transition:
+          border-color var(--ease),
+          background-color var(--ease);
+      }
+
+      .nav-hamburger:hover {
+        border-color: var(--accent);
+      }
+
+      .nav-hamburger span {
+        position: absolute;
+        left: 50%;
+        top: 50%;
+        width: 16px;
+        height: 1.5px;
+        background: var(--ink);
+        transition:
+          transform var(--ease),
+          opacity var(--ease);
+      }
+
+      .nav-hamburger span:first-child {
+        transform: translate(-50%, -3px);
+      }
+      .nav-hamburger span:last-child {
+        transform: translate(-50%, 2px);
+      }
+
+      .nav-hamburger.open span:first-child {
+        transform: translate(-50%, -0.5px) rotate(45deg);
+      }
+      .nav-hamburger.open span:last-child {
+        transform: translate(-50%, -0.5px) rotate(-45deg);
+      }
+
+      /* ===== HERO ===== */
+      #hero {
+        min-height: 100dvh;
+        display: flex;
+        align-items: center;
+        position: relative;
+      }
+
+      .hero-inner {
+        width: 100%;
+        padding-top: 56px;
+        display: grid;
+        grid-template-columns: minmax(0, 600px) minmax(0, 360px);
+        gap: 48px;
+        align-items: center;
+        justify-content: space-between;
       }
       @media (max-width: 860px) {
-        .hero {
+        .hero-inner {
           grid-template-columns: 1fr;
-          padding: 40px 0 28px;
         }
-        .logo .sub {
+        .hero-card {
           display: none;
         }
       }
-      @media (max-width: 420px) {
-        .nav .btn {
-          padding: 7px 11px;
-        }
+
+      .hero-frame {
+        max-width: 600px;
       }
-      /* prominent one-line installer in hero */
-      .install-pill {
+
+      .stamp {
+        display: inline-flex;
+        align-items: center;
+        gap: 8px;
+        font-family: var(--mono);
+        font-size: 0.66rem;
+        letter-spacing: 0.2em;
+        text-transform: uppercase;
+        color: var(--accent);
+        border: 1px solid var(--hairline-soft);
+        padding: 5px 12px;
+        margin-bottom: 22px;
+      }
+
+      .fig-tag {
+        display: block;
+        font-family: var(--mono);
+        font-size: 0.66rem;
+        letter-spacing: 0.24em;
+        text-transform: uppercase;
+        color: var(--steel-dim);
+        margin-bottom: 14px;
+      }
+
+      .hero-name {
+        font-size: clamp(2.7rem, 7vw, 4.6rem);
+        font-weight: 700;
+        letter-spacing: -0.035em;
+        line-height: 1.03;
+        margin-bottom: 18px;
+      }
+
+      .hero-title {
+        font-size: clamp(1.05rem, 1.7vw, 1.25rem);
+        font-weight: 600;
+        color: var(--accent);
+        margin-bottom: 14px;
+      }
+
+      .hero-sub {
+        color: var(--steel);
+        max-width: 500px;
+        margin-bottom: 18px;
+        text-wrap: balance;
+      }
+
+      /* ===== TERMINAL ===== */
+      .terminal {
+        max-width: 520px;
+        margin-bottom: 18px;
+        font-family: var(--mono);
+      }
+
+      .term-head {
         display: flex;
         align-items: center;
+        gap: 12px;
+        padding: 10px 14px;
+        background: var(--paper-2);
+        border-bottom: 1px solid var(--hairline-soft);
+      }
+
+      .term-dots {
+        display: flex;
+        gap: 6px;
+      }
+      .term-dots span {
+        width: 9px;
+        height: 9px;
+        border: 1px solid var(--hairline);
+        transform: rotate(45deg);
+      }
+      .term-dots span:first-child {
+        border-color: var(--accent);
+      }
+
+      .term-title {
+        font-size: 0.72rem;
+        color: var(--steel);
+        letter-spacing: 0.04em;
+      }
+
+      .term-tag {
+        margin-left: auto;
+        font-size: 0.62rem;
+        letter-spacing: 0.16em;
+        text-transform: uppercase;
+        color: var(--steel-dim);
+      }
+
+      .term-body {
+        padding: 14px 16px 16px;
+        background: var(--paper-3);
+        min-height: 64px;
+      }
+
+      .term-line {
+        font-size: 0.86rem;
+        line-height: 1.7;
+        display: flex;
+        align-items: baseline;
+        gap: 8px;
+      }
+
+      .term-prompt {
+        color: var(--accent);
+        font-weight: 600;
+      }
+
+      #typeTarget {
+        color: var(--ink);
+        word-break: break-word;
+      }
+
+      .term-cursor {
+        display: inline-block;
+        width: 8px;
+        height: 15px;
+        background: var(--accent);
+        animation: blink 1s steps(2, start) infinite;
+        transform: translateY(2px);
+      }
+
+      @keyframes blink {
+        50% {
+          opacity: 0;
+        }
+      }
+
+      .term-static {
+        margin-top: 8px;
+        font-size: 0.66rem;
+        letter-spacing: 0.14em;
+        text-transform: uppercase;
+        color: var(--steel-dim);
+      }
+
+      /* ===== BUTTONS (flat) ===== */
+      .hero-actions {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 12px;
+        margin-bottom: 22px;
+      }
+
+      .btn {
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+        font-family: var(--mono);
+        font-size: 0.76rem;
+        letter-spacing: 0.09em;
+        text-transform: uppercase;
+        text-decoration: none;
+        border: 1px solid var(--hairline);
+        color: var(--ink);
+        padding: 12px 22px;
+        background: transparent;
+        cursor: pointer;
+        position: relative;
+        transition:
+          border-color var(--ease),
+          color var(--ease),
+          background-color var(--ease),
+          transform var(--ease);
+      }
+
+      .btn::before {
+        content: "▸";
+        position: absolute;
+        left: 8px;
+        top: 50%;
+        transform: translateY(-50%);
+        font-size: 0.6rem;
+        color: var(--accent);
+        opacity: 0;
+        transition: opacity var(--ease);
+      }
+
+      .btn:hover {
+        border-color: var(--accent);
+        color: var(--accent);
+        background: var(--accent-soft);
+        padding-left: 26px;
+      }
+      .btn:hover::before {
+        opacity: 1;
+      }
+      .btn:active {
+        transform: translateY(1px);
+      }
+
+      .ext {
+        font-size: 0.72rem;
+        opacity: 0.7;
+        transition:
+          opacity var(--ease),
+          transform var(--ease);
+      }
+      .btn:hover .ext {
+        opacity: 1;
+        transform: translate(1px, -1px);
+      }
+
+      .btn-primary {
+        background: var(--accent);
+        border-color: var(--accent);
+        color: var(--paper);
+        font-weight: 600;
+      }
+
+      .btn-primary:hover {
+        background: transparent;
+        color: var(--accent);
+        padding-left: 26px;
+      }
+
+      .btn-primary::before {
+        opacity: 0;
+      }
+
+      /* ===== HUD ROW ===== */
+      .hud-row {
+        display: flex;
+        flex-wrap: wrap;
         gap: 10px;
-        margin: 26px 0 8px;
-        background: var(--cream);
-        border: 1px solid rgb(37 99 235 / 40%);
-        border-radius: 999px;
-        padding: 13px 20px;
-        min-width: 0;
       }
-      .install-pill::before {
-        content: "$";
-        font: 600 14px var(--mono);
-        color: var(--acc);
+
+      .hud-item {
+        display: inline-flex;
+        align-items: center;
+        gap: 7px;
+        font-family: var(--mono);
+        font-size: 0.62rem;
+        letter-spacing: 0.14em;
+        text-transform: uppercase;
+        color: var(--steel-dim);
+        border: 1px solid var(--hairline-soft);
+        padding: 6px 10px;
       }
-      .install-pill code {
-        font: 13px/1.5 var(--mono);
-        white-space: nowrap;
-        overflow-x: auto;
-        scrollbar-width: none;
-        flex: 1;
-        min-width: 0;
+
+      .hud-item b {
+        color: var(--ink);
+        font-weight: 500;
+        font-variant-numeric: tabular-nums;
       }
-      .kicker {
-        color: var(--ink3);
-        font: 500 0.78rem/1.4 var(--mono);
+
+      /* ===== SCROLL CUE ===== */
+      .scroll-cue {
+        position: absolute;
+        left: 50%;
+        bottom: 26px;
+        transform: translateX(-50%);
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        gap: 8px;
       }
-      .h1 {
-        font-weight: 600;
-        font-size: clamp(2.2rem, 5vw, 3.4rem);
-        line-height: 1.05;
-        letter-spacing: -0.03em;
-        margin: 0.45em 0;
+
+      .cue-label {
+        font-family: var(--mono);
+        font-size: 0.6rem;
+        letter-spacing: 0.3em;
+        text-transform: uppercase;
+        color: var(--steel-dim);
       }
-      .lead {
-        color: var(--ink2);
-        font-size: 1.08rem;
-        font-weight: 300;
-        line-height: 1.65;
-        max-width: 42em;
+
+      .cue-line {
+        width: 1px;
+        height: 40px;
+        background: var(--hairline);
+        position: relative;
+        overflow: hidden;
       }
-      .lead b {
-        color: var(--fg);
-        font-weight: 600;
+
+      .cue-line::after {
+        content: "";
+        position: absolute;
+        inset: 0;
+        background: var(--accent);
+        transform: translateY(-100%);
+        animation: cue-drop 2s var(--ease) infinite;
       }
-      .code {
-        background: #ffffff;
-        border: 1px solid var(--bd);
-        border-radius: 10px;
-        padding: 16px 18px;
-        font: 13px/1.75 var(--mono);
-        overflow-x: auto;
-        margin: 0;
-        box-shadow: 0 1px 10px rgb(42 39 37 / 4%);
+
+      @keyframes cue-drop {
+        0% {
+          transform: translateY(-100%);
+        }
+        55% {
+          transform: translateY(0);
+        }
+        100% {
+          transform: translateY(100%);
+        }
       }
-      .grid {
+
+      /* ===== ABOUT ===== */
+      .about-grid {
         display: grid;
-        grid-template-columns: repeat(3, 1fr);
-        gap: 14px;
-        margin: 26px auto;
+        grid-template-columns: 1fr;
+        gap: 26px;
       }
-      @media (max-width: 860px) {
-        .grid {
+
+      .about-text p {
+        margin-bottom: 18px;
+        text-align: justify;
+        hyphens: auto;
+      }
+
+      .about-text strong {
+        color: var(--accent);
+        font-weight: 600;
+      }
+
+      .spec-stats {
+        display: grid;
+        grid-template-columns: repeat(4, 1fr);
+        overflow: hidden;
+      }
+
+      .spec-row {
+        display: grid;
+        grid-template-columns: 1fr;
+        grid-template-areas:
+          "value"
+          "label"
+          "note";
+        gap: 4px;
+        padding: 16px 18px;
+        border-bottom: 0;
+        border-left: 1px solid var(--hairline-soft);
+        transition: background-color var(--ease);
+      }
+
+      .spec-row:first-child {
+        border-left: 0;
+      }
+
+      .spec-row:hover {
+        background: var(--accent-soft);
+      }
+
+      .spec-value {
+        grid-area: value;
+        font-size: 1.5rem;
+        font-weight: 700;
+        color: var(--accent);
+        font-variant-numeric: tabular-nums;
+      }
+
+      .spec-accent {
+        color: var(--accent);
+      }
+      .spec-label {
+        grid-area: label;
+        font-weight: 600;
+      }
+      .spec-note {
+        grid-area: note;
+        font-family: var(--mono);
+        font-size: 0.68rem;
+        color: var(--steel-dim);
+        letter-spacing: 0.08em;
+        text-transform: uppercase;
+        font-variant-numeric: tabular-nums;
+      }
+
+      /* ===== EXPERIENCE ===== */
+      .stagger {
+        display: flex;
+        flex-direction: column;
+        gap: 18px;
+      }
+
+      .exp-item {
+        position: relative;
+        display: grid;
+        grid-template-columns: 168px 1fr;
+        gap: 26px;
+        padding: 20px 0 20px 28px;
+        border: 1px solid transparent;
+        border-radius: 4px;
+        transition:
+          border-color var(--ease),
+          background-color var(--ease);
+      }
+
+      .exp-item:hover {
+        border-color: var(--hairline-soft);
+        background: rgba(14, 35, 71, 0.4);
+      }
+
+      .rev-rail {
+        position: absolute;
+        left: 8px;
+        top: 8px;
+        bottom: 8px;
+        width: 2px;
+        background: linear-gradient(180deg, var(--accent), var(--hairline));
+      }
+
+      .rev-rail::before {
+        content: "";
+        position: absolute;
+        left: 50%;
+        top: 8px;
+        width: 10px;
+        height: 10px;
+        transform: translateX(-50%) rotate(45deg);
+        border: 1px solid var(--accent);
+        background: var(--paper);
+      }
+
+      .exp-date {
+        font-family: var(--mono);
+        font-size: 0.76rem;
+        color: var(--steel);
+        letter-spacing: 0.04em;
+        font-variant-numeric: tabular-nums;
+        padding-top: 4px;
+      }
+
+      .exp-role {
+        font-size: 1.16rem;
+        margin-bottom: 2px;
+        text-wrap: balance;
+      }
+      .exp-company {
+        color: var(--accent);
+        font-weight: 600;
+        margin-bottom: 10px;
+        font-size: 0.95rem;
+      }
+      .exp-loc {
+        color: var(--steel-dim);
+        font-weight: 400;
+        font-family: var(--mono);
+        font-size: 0.7rem;
+        letter-spacing: 0.04em;
+      }
+
+      .exp-list {
+        list-style: none;
+      }
+
+      .exp-list li {
+        position: relative;
+        padding-left: 16px;
+        margin-bottom: 6px;
+        color: var(--steel);
+        font-size: 0.94rem;
+      }
+
+      .exp-list li::before {
+        content: "";
+        position: absolute;
+        left: 0;
+        top: 0.68em;
+        width: 6px;
+        height: 6px;
+        border: 1px solid var(--accent);
+        transform: rotate(45deg);
+      }
+
+      .exp-list strong {
+        color: var(--ink);
+        font-weight: 600;
+      }
+
+      /* ===== PROJECTS ===== */
+      .projects-grid {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 18px;
+      }
+
+      .project-card {
+        display: flex;
+        flex-direction: column;
+        gap: 12px;
+        padding: 24px 24px 20px;
+        text-decoration: none;
+        overflow: hidden;
+        transition:
+          border-color var(--ease),
+          background-color var(--ease),
+          transform var(--ease);
+      }
+
+      .project-card:hover {
+        border-color: var(--accent);
+        background: rgba(14, 35, 71, 0.7);
+        transform: translateY(-2px);
+      }
+
+      .prj-index {
+        font-family: var(--mono);
+        font-size: 0.64rem;
+        letter-spacing: 0.18em;
+        color: var(--steel-dim);
+      }
+
+      .prj-name {
+        font-size: 1.22rem;
+        letter-spacing: -0.01em;
+        text-wrap: balance;
+      }
+
+      .prj-desc {
+        color: var(--steel);
+        font-size: 0.92rem;
+        line-height: 1.6;
+        text-wrap: pretty;
+      }
+
+      .prj-meta {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 10px;
+        align-items: center;
+        margin-top: auto;
+      }
+
+      .prj-lang {
+        display: inline-flex;
+        align-items: center;
+        gap: 7px;
+        font-family: var(--mono);
+        font-size: 0.68rem;
+        color: var(--steel);
+      }
+
+      .lang-dot {
+        width: 8px;
+        height: 8px;
+        border-radius: 50%;
+        display: inline-block;
+      }
+      .lang-ts {
+        background: #3178c6;
+      }
+      .lang-js {
+        background: #f7df1e;
+      }
+      .lang-go {
+        background: #00add8;
+      }
+      .lang-py {
+        background: #ffd343;
+      }
+      .lang-fork {
+        background: #7e9cc9;
+      }
+
+      /* ===== GITHUB PANEL ===== */
+      .gh-panel {
+        padding: 18px 20px;
+        margin: 18px 0 0;
+        overflow: hidden;
+      }
+      .gh-head {
+        display: flex;
+        align-items: center;
+        gap: 14px;
+        margin-bottom: 16px;
+      }
+      .gh-avatar {
+        width: 46px;
+        height: 46px;
+        border: 1px solid var(--hairline);
+      }
+      .gh-name {
+        font-weight: 700;
+      }
+      .gh-handle {
+        font-family: var(--mono);
+        font-size: 0.72rem;
+        color: var(--steel);
+        text-decoration: none;
+      }
+      .gh-handle:hover {
+        color: var(--accent);
+      }
+      .gh-all {
+        margin-left: auto;
+        font-family: var(--mono);
+        font-size: 0.68rem;
+        letter-spacing: 0.1em;
+        text-transform: uppercase;
+        color: var(--steel);
+        text-decoration: none;
+        border: 1px solid var(--hairline-soft);
+        padding: 8px 14px;
+        white-space: nowrap;
+      }
+      .gh-all:hover {
+        color: var(--accent);
+        border-color: var(--accent);
+      }
+      .gh-chart {
+        display: block;
+        width: 100%;
+        height: auto;
+        border: 1px solid var(--hairline-soft);
+        background: var(--paper-3);
+      }
+      .gh-act-title {
+        margin: 16px 0 8px;
+      }
+      .gh-cols {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 4px 28px;
+        margin-top: 16px;
+      }
+      .gh-cols .gh-act-title {
+        margin-top: 0;
+      }
+      @media (max-width: 760px) {
+        .gh-cols {
           grid-template-columns: 1fr;
         }
       }
-      .card {
-        background: var(--card);
-        border: 1px solid var(--bd);
-        border-radius: 14px;
+      .gh-act-list {
+        list-style: none;
+        font-size: 0.86rem;
+      }
+      .gh-act-list li {
+        display: flex;
+        gap: 8px;
+        align-items: baseline;
+        padding: 7px 0;
+        border-bottom: 1px solid rgba(42, 74, 127, 0.35);
+        color: var(--steel);
+      }
+      .gh-act-list li:last-child {
+        border-bottom: 0;
+      }
+      .gh-act-list a {
+        color: var(--ink);
+        text-decoration: none;
+      }
+      .gh-act-list a:hover {
+        color: var(--accent);
+      }
+      .gh-act {
+        font-family: var(--mono);
+        font-size: 0.68rem;
+        text-transform: uppercase;
+        letter-spacing: 0.08em;
+        color: var(--accent);
+        white-space: nowrap;
+      }
+      .gh-when {
+        margin-left: auto;
+        font-family: var(--mono);
+        font-size: 0.66rem;
+        color: var(--steel-dim);
+        white-space: nowrap;
+      }
+      .prj-featured {
+        border-color: rgba(202, 138, 4, 0.6);
+      }
+
+      /* ===== PIXEL MEDIEVAL SKIN (council reskin: fonts, tokens, chunk) ===== */
+      body {
+        font-size: 20px;
+      }
+      .bg-grid {
+        background-image:
+          linear-gradient(rgba(202, 138, 4, 0.14) 1px, transparent 1px),
+          linear-gradient(90deg, rgba(202, 138, 4, 0.14) 1px, transparent 1px);
+      }
+      .sheet-title,
+      .hero-name,
+      .prj-name,
+      .exp-role,
+      .tb-name,
+      .gh-name,
+      .edu-degree,
+      .cluster-title,
+      .fig-label,
+      .fig-tag,
+      .stamp {
+        font-family: var(--px);
+      }
+      .hero-name {
+        font-size: clamp(1.4rem, 4.5vw, 2.4rem);
+        line-height: 1.55;
+        letter-spacing: 0;
+      }
+      .sheet-title {
+        font-size: clamp(0.95rem, 2.6vw, 1.4rem);
+        line-height: 1.7;
+      }
+      .prj-name {
+        font-size: 0.9rem;
+        line-height: 1.7;
+      }
+      .exp-role {
+        font-size: 0.8rem;
+        line-height: 1.7;
+      }
+      .tb-name {
+        font-size: clamp(0.95rem, 2.4vw, 1.3rem);
+        line-height: 1.7;
+      }
+      .fig-label,
+      .fig-tag,
+      .stamp {
+        font-size: 0.58rem;
+        line-height: 1.9;
+      }
+      .cluster-title {
+        font-size: 0.6rem;
+        line-height: 1.9;
+      }
+      .mono-tag,
+      .prj-tag,
+      .hud-item,
+      .term-tag,
+      .spec-note,
+      .gh-act,
+      .gh-when,
+      .nav-links a {
+        font-size: 0.85rem;
+      }
+      .hero-sub,
+      .prj-desc {
+        font-size: 1.05rem;
+      }
+      .exp-list li,
+      .edu-thesis,
+      .cert-name,
+      .about-text p {
+        font-size: 1rem;
+      }
+      .term-line {
+        font-size: 1.1rem;
+      }
+      .plate::before,
+      .plate::after {
+        display: none;
+      }
+      .plate {
+        border: 3px solid #000;
+        box-shadow: inset 0 0 0 2px var(--hairline);
+        clip-path: polygon(
+          0 8px,
+          8px 8px,
+          8px 0,
+          calc(100% - 8px) 0,
+          calc(100% - 8px) 8px,
+          100% 8px,
+          100% calc(100% - 8px),
+          calc(100% - 8px) calc(100% - 8px),
+          calc(100% - 8px) 100%,
+          8px 100%,
+          8px calc(100% - 8px),
+          0 calc(100% - 8px)
+        );
+      }
+      .btn {
+        border: 3px solid #000;
+        box-shadow: 0 4px 0 #000;
+      }
+      .btn:active {
+        transform: translateY(4px);
+        box-shadow: 0 0 0 #000;
+      }
+
+      /* ===== HERO CHARACTER CARD ===== */
+      .hero-card {
         padding: 20px;
         text-align: center;
-        box-shadow: 0 2px 20px rgb(42 39 37 / 6%);
-        transition:
-          transform 0.6s cubic-bezier(0.22, 1, 0.36, 1),
-          border-color 0.3s ease,
-          background 0.3s ease,
-          box-shadow 0.3s ease;
       }
-      .card:hover {
-        transform: translateY(-4px);
-        border-color: rgb(37 99 235 / 28%);
-        background: #ffffff;
-        box-shadow: 0 8px 32px rgb(42 39 37 / 10%);
+      .hc-head {
+        display: flex;
+        justify-content: space-between;
+        font-family: var(--px);
+        font-size: 0.55rem;
+        color: var(--steel);
+        margin-bottom: 14px;
       }
-      .card.hot {
-        border-color: rgb(255 181 142 / 65%);
-        box-shadow: 0 2px 14px rgb(255 181 142 / 18%);
+      .hc-lv {
+        color: var(--accent);
       }
-      .card.hot:hover {
-        border-color: rgb(255 181 142 / 95%);
-        background: rgb(255 181 142 / 10%);
+      .hc-avatar {
+        width: 132px;
+        height: 132px;
+        image-rendering: pixelated;
+        border: 3px solid #000;
+        background: var(--paper-3);
       }
-      .card h3 {
-        margin: 0 0 8px;
-        font-weight: 600;
-        font-size: 1rem;
-        letter-spacing: -0.01em;
+      .hc-name {
+        font-family: var(--px);
+        font-size: 0.85rem;
+        margin: 12px 0 2px;
       }
-      .card p {
-        margin: 0;
-        color: var(--ink2);
-        font-size: 0.9rem;
-        font-weight: 300;
-        line-height: 1.6;
+      .hc-class {
+        font-size: 0.95rem;
+        color: var(--steel);
+        margin-bottom: 14px;
       }
-      .section {
-        padding: 36px 0;
-        border-top: 1px solid var(--bd);
+      .hc-bar {
+        display: grid;
+        grid-template-columns: 34px 1fr 34px;
+        gap: 8px;
+        align-items: center;
+        font-size: 0.85rem;
+        margin-bottom: 8px;
+        text-align: left;
       }
-      .h2 {
-        font-weight: 600;
-        font-size: clamp(1.5rem, 3vw, 2rem);
-        letter-spacing: -0.02em;
-        margin: 0 0 20px;
+      .hc-tag {
+        color: var(--steel);
       }
-      .mono {
+      .hc-num {
+        color: var(--steel-dim);
+        text-align: right;
+      }
+      .hc-track {
+        height: 10px;
+        border: 2px solid #000;
+        background: var(--paper-3);
+      }
+      .hc-fill {
+        display: block;
+        height: 100%;
+        width: 0;
+        transition: width 1.2s var(--ease);
+      }
+      .hero-card.visible .hp {
+        width: 94%;
+        background: var(--ok);
+      }
+      .hero-card.visible .mp {
+        width: 68%;
+        background: #4f9cf0;
+      }
+      .hero-card.visible .xp {
+        width: 45%;
+        background: var(--accent);
+      }
+      .hc-status {
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        gap: 8px;
+        margin-top: 14px;
+        font-size: 0.85rem;
+        color: var(--steel);
+      }
+      .hc-flame {
+        width: 8px;
+        height: 8px;
+        background: var(--torch);
+        box-shadow: 0 0 10px 3px rgba(255, 122, 61, 0.6);
+      }
+      @media (prefers-reduced-motion: no-preference) {
+        .hc-flame {
+          animation: flick 1s steps(2) infinite;
+        }
+        @keyframes flick {
+          0% {
+            transform: scale(1);
+            opacity: 1;
+          }
+          50% {
+            transform: scale(0.75) translateY(1px);
+            opacity: 0.7;
+          }
+          100% {
+            transform: scale(1.1);
+            opacity: 1;
+          }
+        }
+      }
+
+      .prj-tag {
         font-family: var(--mono);
+        font-size: 0.62rem;
+        letter-spacing: 0.08em;
+        text-transform: uppercase;
+        color: var(--steel);
+        border: 1px solid var(--hairline-soft);
+        padding: 2px 8px;
+        transition:
+          color var(--ease),
+          border-color var(--ease);
       }
-      .mut {
-        color: var(--ink2);
+
+      .project-card:hover .prj-tag {
+        color: var(--accent);
+        border-color: rgba(255, 122, 61, 0.5);
       }
-      .acc {
-        color: var(--acc);
+
+      .prj-go {
+        margin-left: auto;
+        color: var(--steel-dim);
+        font-size: 0.9rem;
+        transition:
+          color var(--ease),
+          transform var(--ease);
       }
-      /* marquee */
+
+      .project-card:hover .prj-go {
+        color: var(--accent);
+        transform: translate(2px, -2px);
+      }
+
+      /* ===== SKILLS ===== */
+      .skills-layout {
+        display: grid;
+        grid-template-columns: 1.1fr 0.9fr;
+        gap: clamp(36px, 5vw, 60px);
+        align-items: start;
+      }
+
+      .spec-cluster {
+        margin-bottom: 34px;
+      }
+
+      .cluster-title {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        font-family: var(--mono);
+        font-size: 0.7rem;
+        letter-spacing: 0.18em;
+        text-transform: uppercase;
+        color: var(--accent);
+        margin-bottom: 14px;
+      }
+
+      .cluster-title::before {
+        content: "";
+        width: 16px;
+        height: 1px;
+        background: var(--accent);
+        opacity: 0.6;
+      }
+
+      .cluster-list {
+        list-style: none;
+      }
+
+      .cluster-item {
+        display: flex;
+        gap: 10px;
+        align-items: baseline;
+        margin-bottom: 8px;
+        font-size: 0.94rem;
+        color: var(--steel);
+      }
+
+      .cluster-item b {
+        color: var(--ink);
+        font-weight: 600;
+      }
+
+      .check {
+        color: var(--accent);
+        font-size: 0.72rem;
+      }
+
+      .edu-block {
+        padding: 22px 24px;
+        overflow: hidden;
+      }
+
+      .edu-degree {
+        font-size: 1.08rem;
+        font-weight: 700;
+        margin-top: 10px;
+      }
+      .edu-school {
+        color: var(--accent);
+        font-weight: 600;
+        margin-bottom: 4px;
+      }
+      .edu-date {
+        font-family: var(--mono);
+        font-size: 0.7rem;
+        color: var(--steel-dim);
+        margin-bottom: 10px;
+        letter-spacing: 0.04em;
+      }
+      .edu-thesis {
+        color: var(--steel);
+        font-size: 0.9rem;
+        line-height: 1.6;
+        text-wrap: pretty;
+      }
+
+      .cert-panel {
+        padding: 6px 24px;
+        overflow: hidden;
+      }
+
+      .cert-item {
+        display: flex;
+        gap: 14px;
+        padding: 12px 4px;
+        border-bottom: 1px solid rgba(42, 74, 127, 0.35);
+        transition:
+          padding var(--ease),
+          background-color var(--ease);
+      }
+
+      .cert-item:last-child {
+        border-bottom: 0;
+      }
+
+      .cert-item:hover {
+        padding-left: 12px;
+        background: var(--accent-soft);
+      }
+
+      .cert-year {
+        font-family: var(--mono);
+        font-size: 0.72rem;
+        color: var(--accent);
+        flex-shrink: 0;
+        padding-top: 2px;
+        font-variant-numeric: tabular-nums;
+      }
+
+      .cert-name {
+        font-size: 0.9rem;
+        line-height: 1.5;
+      }
+      .cert-issuer {
+        color: var(--steel-dim);
+        font-size: 0.84rem;
+      }
+
+      /* ===== FOOTER ===== */
+      footer {
+        position: relative;
+        z-index: var(--z-content);
+        border-top: 1px solid var(--hairline-soft);
+        background: rgba(8, 20, 44, 0.96);
+        padding: clamp(44px, 6vw, 68px) 0 32px;
+      }
+
+      .title-block {
+        padding: clamp(24px, 4vw, 40px);
+        overflow: hidden;
+      }
+
+      .tb-title {
+        display: flex;
+        justify-content: space-between;
+        align-items: flex-start;
+        gap: 20px;
+        flex-wrap: wrap;
+        margin-bottom: 26px;
+      }
+
+      .tb-name {
+        font-size: clamp(1.6rem, 3.2vw, 2.2rem);
+        font-weight: 700;
+        letter-spacing: -0.02em;
+        line-height: 1.1;
+      }
+
+      .tb-rev {
+        font-family: var(--mono);
+        font-size: 0.64rem;
+        letter-spacing: 0.2em;
+        text-transform: uppercase;
+        color: var(--steel-dim);
+        padding-top: 6px;
+      }
+
+      .tb-grid {
+        display: grid;
+        grid-template-columns: repeat(4, 1fr);
+        gap: 20px;
+        border-top: 1px solid var(--hairline-soft);
+        border-bottom: 1px solid var(--hairline-soft);
+        padding: 24px 0;
+      }
+
+      .tb-label {
+        font-family: var(--mono);
+        font-size: 0.6rem;
+        letter-spacing: 0.2em;
+        text-transform: uppercase;
+        color: var(--steel-dim);
+        margin-bottom: 6px;
+      }
+
+      .tb-value {
+        font-size: 0.96rem;
+      }
+
+      .tb-value a {
+        text-decoration: none;
+        transition: color var(--ease);
+      }
+
+      .tb-value a:hover {
+        color: var(--accent);
+      }
+
+      .copy-btn {
+        font-family: var(--mono);
+        font-size: 0.6rem;
+        font-weight: 600;
+        letter-spacing: 0.14em;
+        text-transform: uppercase;
+        color: var(--steel-dim);
+        background: transparent;
+        border: 1px solid var(--hairline-soft);
+        padding: 3px 9px;
+        margin-left: 10px;
+        cursor: pointer;
+        vertical-align: middle;
+        transition:
+          color var(--ease),
+          border-color var(--ease),
+          background-color var(--ease);
+      }
+
+      .copy-btn:hover {
+        color: var(--accent);
+        border-color: var(--accent);
+      }
+
+      .copy-btn.copied {
+        color: var(--paper);
+        background: var(--accent);
+        border-color: var(--accent);
+      }
+
+      .tb-foot {
+        display: flex;
+        justify-content: space-between;
+        flex-wrap: wrap;
+        gap: 10px;
+        margin-top: 20px;
+        font-family: var(--mono);
+        font-size: 0.64rem;
+        letter-spacing: 0.1em;
+        text-transform: uppercase;
+        color: var(--steel-dim);
+      }
+
+      .tb-status {
+        display: inline-flex;
+        align-items: center;
+        gap: 8px;
+        color: var(--steel);
+      }
+
+      /* ===== ENTRY / SCROLL REVEALS (flat, no blur) ===== */
+      @media (prefers-reduced-motion: no-preference) {
+        .js .reveal {
+          opacity: 0;
+          transform: translateY(20px);
+          transition:
+            opacity 0.75s var(--ease),
+            transform 0.75s var(--ease);
+        }
+
+        .js .reveal.visible {
+          opacity: 1;
+          transform: none;
+        }
+
+        .js .stagger > * {
+          opacity: 0;
+          transform: translateY(16px);
+          transition:
+            opacity 0.7s var(--ease),
+            transform 0.7s var(--ease);
+        }
+
+        .js .stagger.visible > * {
+          opacity: 1;
+          transform: none;
+        }
+        .js .stagger.visible > *:nth-child(1) {
+          transition-delay: 60ms;
+        }
+        .js .stagger.visible > *:nth-child(2) {
+          transition-delay: 130ms;
+        }
+        .js .stagger.visible > *:nth-child(3) {
+          transition-delay: 200ms;
+        }
+        .js .stagger.visible > *:nth-child(4) {
+          transition-delay: 270ms;
+        }
+        .js .stagger.visible > *:nth-child(5) {
+          transition-delay: 340ms;
+        }
+      }
+
+      /* ===== RESPONSIVE ===== */
+      @media (max-width: 960px) {
+        .about-grid,
+        .skills-layout {
+          grid-template-columns: 1fr;
+          gap: 34px;
+        }
+        .tb-grid {
+          grid-template-columns: repeat(2, 1fr);
+        }
+      }
+
+      @media (max-width: 860px) {
+        .nav-links {
+          display: none;
+        }
+        .nav-hamburger {
+          display: block;
+        }
+        .nav-status {
+          margin-right: 0;
+        }
+
+        .nav-links.open {
+          display: flex;
+          position: fixed;
+          top: 62px;
+          left: 0;
+          right: 0;
+          flex-direction: column;
+          gap: 0;
+          background: rgba(8, 20, 44, 0.99);
+          border-bottom: 1px solid var(--hairline);
+          padding: 10px 20px 16px;
+          z-index: var(--z-menu);
+        }
+
+        .nav-links.open a {
+          padding: 12px 8px;
+        }
+      }
+
+      @media (max-width: 760px) {
+        .container {
+          padding: 0 20px;
+        }
+        section {
+          padding: 44px 0 52px;
+        }
+
+        .nav-status-label,
+        .nav-tz {
+          display: none;
+        }
+
+        .projects-grid {
+          grid-template-columns: 1fr;
+        }
+
+        .spec-stats {
+          grid-template-columns: repeat(2, 1fr);
+        }
+        .spec-row:nth-child(odd) {
+          border-left: 0;
+        }
+        .spec-row:nth-child(n + 3) {
+          border-top: 1px solid var(--hairline-soft);
+        }
+
+        .exp-item {
+          grid-template-columns: 1fr;
+          gap: 8px;
+          padding: 16px 0 16px 26px;
+        }
+
+        .hero-actions {
+          flex-direction: column;
+          align-items: stretch;
+        }
+        .btn {
+          justify-content: center;
+        }
+
+        .scroll-cue {
+          display: none;
+        }
+
+        .tb-grid {
+          grid-template-columns: 1fr 1fr;
+          gap: 16px;
+        }
+      }
+
+      /* ===== REDUCED MOTION ===== */
+      @media (prefers-reduced-motion: reduce) {
+        html {
+          scroll-behavior: auto;
+        }
+
+        *,
+        *::before,
+        *::after {
+          animation-duration: 0.01ms !important;
+          animation-iteration-count: 1 !important;
+          transition-duration: 0.01ms !important;
+        }
+
+        .js .reveal,
+        .js .stagger > * {
+          opacity: 1 !important;
+          transform: none !important;
+        }
+
+        .project-card:hover,
+        .btn:hover {
+          transform: none;
+        }
+      }
+    </style>
+    <style>
+      /* ===== ROUTRE SUPPLEMENT (content pieces the portfolio has no equivalent for) ===== */
       .marquee {
         overflow: hidden;
-        border-top: 1px solid var(--bd);
-        border-bottom: 1px solid var(--bd);
+        border-top: 1px solid var(--hairline-soft);
+        border-bottom: 1px solid var(--hairline-soft);
         padding: 14px 0;
+        position: relative;
+        z-index: var(--z-content);
+        background: rgba(18, 16, 31, 0.82);
+        -webkit-mask-image: linear-gradient(
+          90deg,
+          transparent,
+          #000 12%,
+          #000 88%,
+          transparent
+        );
         mask-image: linear-gradient(
           90deg,
           transparent,
@@ -321,19 +2148,19 @@
         gap: 48px;
         width: max-content;
         animation: slide 30s linear infinite;
-        animation-delay: -15s; /* start mid-flow — no dead space at load */
+        animation-delay: -15s;
       }
       .marquee:hover .marquee-track {
         animation-play-state: paused;
       }
       .marquee-track span {
-        color: var(--ink3);
-        font: 500 0.85rem var(--mono);
+        color: var(--steel-dim);
+        font-size: 1.05rem;
         white-space: nowrap;
       }
       .marquee-track i {
         font-style: normal;
-        color: var(--acc);
+        color: var(--accent);
       }
       @keyframes slide {
         to {
@@ -344,132 +2171,63 @@
         .marquee-track {
           animation: none;
         }
-        * {
-          transition: none !important;
-        }
+      }
+      .codeblock {
+        margin: 0;
+        padding: 16px 18px;
+        background: var(--paper-3);
+        font-size: 1.05rem;
+        line-height: 1.7;
+        overflow-x: auto;
+        color: var(--ink);
+      }
+      .codeblock .c {
+        color: var(--steel-dim);
       }
       .tablewrap {
         overflow-x: auto;
-        border-radius: 10px;
-        border: 1px solid var(--bd);
+        border: 3px solid #000;
+        box-shadow: inset 0 0 0 2px var(--hairline);
+        background: var(--paper-3);
       }
       .table {
         width: 100%;
         border-collapse: collapse;
-        font-size: 0.88rem;
+        font-size: 1rem;
       }
       .table th,
       .table td {
-        border-bottom: 1px solid var(--bd);
-        padding: 8px 10px;
+        border-bottom: 1px solid var(--hairline-soft);
+        padding: 10px 12px;
         text-align: left;
       }
       .table tr:last-child td {
         border-bottom: none;
       }
       .table th {
-        background: var(--card);
-        font-weight: 500;
+        color: var(--accent);
+        font-weight: 400;
       }
-      .table tbody tr {
-        transition: background 0.25s ease;
+      .table td {
+        color: var(--steel);
       }
-      .table tbody tr:hover {
-        background: var(--hover);
+      .table td:first-child {
+        color: var(--ink);
       }
-      .stat {
-        font-weight: 600;
-        font-size: 2.4rem;
-        letter-spacing: -0.02em;
-        margin: 6px 0;
-        line-height: 1;
-      }
-      .stats {
-        display: flex;
-        flex-wrap: wrap;
-        gap: 12px;
-        margin-top: 12px;
-      }
-      .stats .card {
-        min-width: 120px;
-        flex: 1;
-        display: flex;
-        flex-direction: column;
-        gap: 3px;
-        text-align: left;
-      }
-      .lbl {
-        color: var(--ink3);
-        font-family: var(--mono);
-        font-size: 0.72rem;
-        text-transform: uppercase;
-        letter-spacing: 0.06em;
-      }
-      /* giant CTA — hamster watermark + cream tint */
-      .cta {
-        text-align: center;
-        padding: 56px 0;
-        border-top: 1px solid var(--bd);
-        position: relative;
-        overflow: hidden;
-        background: radial-gradient(
-          800px 400px at 50% 0%,
-          rgb(255 181 142 / 14%),
-          transparent 70%
-        );
-      }
-      .cta::before {
-        content: "";
-        position: absolute;
-        inset: auto 50% 0 50%;
-        width: 700px;
-        height: 700px;
-        transform: translateX(-50%) translateY(38%);
-        background: url("icon/routre-hamster.jpeg") center / contain no-repeat;
-        opacity: 0.07;
-        pointer-events: none;
-      }
-      .cta .wrap {
-        position: relative;
-        z-index: 1;
-      }
-      .cta h2 {
-        font-weight: 600;
-        font-size: clamp(2.2rem, 6.5vw, 4.4rem);
-        letter-spacing: -0.03em;
-        line-height: 1.05;
-        margin: 0 0 28px;
-      }
-      .cta h2 .word {
-        display: inline-block;
-        will-change: transform, opacity;
-      }
-      .cta .btn {
-        font-size: 1rem;
-        padding: 13px 26px;
-      }
-      .foot {
-        padding: 32px 0 40px;
-        color: var(--ink2);
-        font-size: 0.85rem;
-        border-top: 1px solid var(--bd);
-      }
-      /* windows + ai prompt extras */
       .pill {
         display: inline-block;
-        font: 500 0.72rem var(--mono);
+        font-size: 0.85rem;
         letter-spacing: 0.06em;
         text-transform: uppercase;
-        color: var(--ink3);
-        border: 1px solid var(--bd);
-        border-radius: 999px;
-        padding: 4px 8px;
-        margin-bottom: 8px;
+        color: var(--steel);
+        border: 1px solid var(--hairline-soft);
+        padding: 4px 10px;
+        margin-bottom: 10px;
       }
       .cols {
         display: grid;
         grid-template-columns: 1fr 1fr;
-        gap: 14px;
+        gap: 18px;
       }
       .cols > * {
         min-width: 0;
@@ -479,271 +2237,492 @@
           grid-template-columns: 1fr;
         }
       }
-          @media (max-width: 760px){ #what div[style*="grid-template-columns:repeat(3,1fr)"]{grid-template-columns:1fr!important} #goals div[style*="grid-template-columns:repeat(3,1fr)"]{grid-template-columns:1fr!important} }
+      .sec-note {
+        color: var(--steel);
+        font-size: 1rem;
+        max-width: none;
+        text-wrap: balance;
+      }
+      .sec-note strong {
+        color: var(--accent);
+        font-weight: 400;
+      }
+      .how-link {
+        font-size: 0.9rem;
+        color: var(--accent);
+        text-decoration: none;
+      }
+      .how-link:hover {
+        text-decoration: underline;
+      }
+      /* routre layout: centered hero, no side card; terminals fully fit */
+      .hero-inner {
+        grid-template-columns: minmax(0, 960px);
+        justify-content: center;
+      }
+      .hero-frame {
+        max-width: 960px;
+        margin: 0 auto;
+        text-align: center;
+      }
+      .hero-sub {
+        margin-left: auto;
+        margin-right: auto;
+      }
+      .hero-actions,
+      .hud-row {
+        justify-content: center;
+      }
+      .terminal {
+        max-width: none;
+        text-align: left;
+      }
     </style>
+    <script>
+      document.documentElement.classList.add("js");
+    </script>
   </head>
   <body>
-    <nav class="nav">
-      <div class="wrap">
-        <div class="logo" style="display: flex; align-items: center; gap: 10px">
-          <img
-            src="icon/routre-hamster-256.jpeg"
-            alt="routre hamster"
-            width="36"
-            height="36"
-            style="
-              border-radius: 10px;
-              object-fit: cover;
-              border: 1px solid var(--bd);
-            "
-          />
-          routre<span class="sub">10-MB gateway</span>
-        </div>
-        <div style="display: flex; gap: 8px">
-          <a class="btn ghost" href="https://github.com/mariobgsp/routre"
-            >GitHub</a
+    <a href="#main-content" class="skip-link">Skip to content</a>
+
+    <!-- background layers -->
+    <div class="bg-grid" aria-hidden="true"></div>
+    <div class="bubbles" aria-hidden="true">
+      <span class="bubble b1 bubble-ping"></span>
+      <span class="bubble b2"></span>
+      <span class="bubble b3"></span>
+      <span class="bubble b4 bubble-ping"></span>
+      <span class="bubble b5"></span>
+      <span class="bubble b6"></span>
+      <span class="bubble b7"></span>
+      <span class="bubble b8"></span>
+    </div>
+    <div class="scanlines" aria-hidden="true"></div>
+    <div class="scanband" aria-hidden="true"></div>
+
+    <!-- scroll progress -->
+    <div class="progress-track" aria-hidden="true">
+      <div class="progress-bar" id="progressBar"></div>
+    </div>
+
+    <!-- ===== NAV ===== -->
+    <nav id="navbar" aria-label="Primary">
+      <div class="nav-inner">
+        <a href="#hero" class="nav-logo"
+          >routre<span class="logo-dot">.</span></a
+        >
+        <div class="nav-status">
+          <span class="led led-green" aria-hidden="true"></span>
+          <span class="nav-status-label">GATEWAY LIVE</span>
+          <span class="nav-clock" id="navClock" aria-label="Local time"
+            >--:--:--</span
           >
-          <a class="btn" href="#install">Install</a>
+          <span class="nav-tz">WIB</span>
         </div>
+        <ul class="nav-links" id="navLinks">
+          <li>
+            <a href="#what"><span class="link-idx">01</span>What</a>
+          </li>
+          <li>
+            <a href="#install"><span class="link-idx">02</span>Install</a>
+          </li>
+          <li>
+            <a href="#windows"><span class="link-idx">03</span>Windows</a>
+          </li>
+          <li>
+            <a href="#ai-install"><span class="link-idx">04</span>AI Setup</a>
+          </li>
+          <li>
+            <a href="#quickstart"><span class="link-idx">05</span>Start</a>
+          </li>
+        </ul>
+        <button
+          class="nav-hamburger"
+          id="navToggle"
+          aria-label="Toggle navigation menu"
+          aria-expanded="false"
+        >
+          <span></span><span></span>
+        </button>
       </div>
     </nav>
 
-    <div class="wrap hero">
-      <div>
-        <div class="kicker">
-          For everyone — works with Claude Code, Codex, opencode, Cursor
-        </div>
-        <h1 class="h1">
-          Your AI apps, <span class="acc">cheaper</span> &amp; always online.<br /><span style="font-weight:300;font-size:.62em;color:var(--ink2)">The 10-MB gateway you forget is running.</span>
-        </h1>
-        <p class="lead" id="lead">
-          Routre sits between your apps and AI providers — like a smart power strip.<br />One address, less cost, stays online when a provider is busy. 10&nbsp;MiB, runs quietly on your computer.
-        </p>
-        <div class="install-pill">
-          <code
-            >curl -fsSL
-            https://raw.githubusercontent.com/mariobgsp/routre/main/install.sh |
-            sh &amp;&amp; routre setup --detect &amp;&amp; routre serve</code
-          >
-        </div>
-        <p class="mut mono" style="font-size: 0.78rem; margin-top: 10px">
-          Copy → paste → done. Detects agents, starts gateway on
-          127.0.0.1:20128.
-        </p>
-        <p class="mut mono" style="font-size: 0.8rem; margin-top: 14px">
-          Not 80 MB + leak. Not Python/Postgres GBs. Just Go.
-        </p>
-      </div>
-      <div>
-        <div class="card hot" style="text-align: left">
-          <div class="lbl">Bench — tool reduction</div>
-          <div class="stat">
-            <span id="gate">91.2</span>%
-            <span class="mut" style="font-size: 1rem; font-weight: 300"
-              >pass 90% gate</span
+    <main id="main-content">
+      <!-- ===== HERO ===== -->
+      <section id="hero">
+        <div class="container hero-inner">
+          <div class="hero-frame">
+            <span class="stamp"
+              ><span class="led led-green" aria-hidden="true"></span> SYS ONLINE
+              · v0.4.8</span
             >
-          </div>
-          <div
-            class="mono"
-            style="font-size: 0.8rem; line-height: 1.7; color: var(--ink2)"
-          >
-            build-output 90.8% · git-diff 90.3%<br />git-log 92.8% · grep 92.0%
-            · tree-ls 90.3%
-          </div>
-          <div class="mut" style="font-size: 0.8rem; margin-top: 10px">
-            <span class="mono">go run . bench -target 90</span> — fails build on
-            regress
+            <span class="fig-tag">FOR EVERYONE</span>
+            <h1 class="hero-name">Stop paying<br />the token tax</h1>
+            <p class="hero-title">
+              routre — the 10-MB gateway you forget is running
+            </p>
+            <p class="hero-sub">
+              Routre sits between your apps and AI providers — like a smart
+              power strip. One address, less cost, stays online when a provider
+              is busy. 10 MiB, runs quietly on your computer.
+            </p>
+            <div class="terminal plate reveal" aria-label="Install command">
+              <div class="term-head">
+                <span class="term-dots" aria-hidden="true"
+                  ><span></span><span></span><span></span
+                ></span>
+                <span class="term-title">you@gateway: ~</span>
+                <span class="term-tag">bash</span>
+              </div>
+              <div class="term-body">
+                <p class="term-line">
+                  <span class="term-prompt">$</span>
+                  <span id="typeTarget" aria-hidden="true"></span>
+                  <span
+                    class="term-cursor"
+                    id="termCursor"
+                    aria-hidden="true"
+                  ></span>
+                </p>
+                <p class="term-static" aria-hidden="true">
+                  — copy → paste → done —
+                </p>
+              </div>
+            </div>
+            <div class="hero-actions reveal">
+              <a href="#install" class="btn btn-primary">Install routre</a>
+              <a
+                href="https://github.com/mariobgsp/routre"
+                target="_blank"
+                rel="noopener"
+                class="btn"
+                >GitHub <span class="ext" aria-hidden="true">↗</span></a
+              >
+            </div>
+            <div class="hud-row reveal">
+              <span class="hud-item"
+                ><span class="led led-green" aria-hidden="true"></span>LIVE ·
+                <b>127.0.0.1:20128</b></span
+              >
+              <span class="hud-item">UPTIME <b id="uptime">00:00:00</b></span>
+              <span class="hud-item">BENCH <b>91.5%</b></span>
+            </div>
           </div>
         </div>
-        <div class="stats">
-          <div class="card">
-            <div class="lbl">RAM idle</div>
-            <div style="font-weight: 600">10 MiB</div>
-          </div>
-          <div class="card">
-            <div class="lbl">Binary</div>
-            <div style="font-weight: 600">10.6 MiB</div>
-          </div>
-          <div class="card">
-            <div class="lbl">Proxy overhead</div>
-            <div style="font-weight: 600">~11 ms</div>
-          </div>
+        <div class="scroll-cue" aria-hidden="true">
+          <span class="cue-label">[ scroll ]</span>
+          <span class="cue-line"></span>
+        </div>
+      </section>
+
+      <div class="marquee" aria-hidden="true">
+        <div class="marquee-track" id="mq">
+          <span>opencode</span><i>·</i><span>Claude Code</span><i>·</i
+          ><span>Codex</span><i>·</i><span>Cursor</span><i>·</i
+          ><span>any OpenAI CLI</span><i>·</i><span>any Anthropic CLI</span
+          ><i>·</i>
         </div>
       </div>
-    </div>
 
-    <div class="marquee" aria-hidden="true">
-      <div class="marquee-track" id="mq">
-        <span>opencode</span><i>·</i><span>Claude Code</span><i>·</i
-        ><span>Codex</span><i>·</i><span>Cursor</span><i>·</i
-        ><span>any OpenAI CLI</span><i>·</i><span>any Anthropic CLI</span
-        ><i>·</i>
-      </div>
-    </div>
+      <!-- ===== WHAT ===== -->
+      <section id="what" class="sheet">
+        <div class="container">
+          <div class="fig-label reveal">
+            <span class="fig-num">LVL 02</span> · Manual
+          </div>
+          <h2 class="sheet-title reveal">What is routre, in plain words?</h2>
+          <div class="sheet-rule reveal"></div>
+          <div class="about-grid">
+            <div class="about-text reveal">
+              <p>
+                Your AI tools (Claude Code, Codex, Cursor…) normally talk
+                directly to an AI provider.
+                <strong>Routre sits in the middle on your computer</strong> and
+                does three simple things: it
+                <strong>remembers answers</strong> so you don't pay twice, it
+                <strong>shrinks sent data</strong>
+                without losing meaning, and it
+                <strong>switches providers</strong> automatically if one is
+                busy.
+              </p>
+              <p>
+                You change one line in your app — point it to
+                <strong>http://127.0.0.1:20128</strong> — and everything else is
+                automatic. Not 80 MB + leak. Not Python/Postgres GBs. Just Go.
+              </p>
+            </div>
+            <div class="spec-stats plate reveal">
+              <div class="spec-row">
+                <span class="spec-value">10</span>
+                <span class="spec-label">MiB RAM, idle</span>
+                <span class="spec-note">stdlib only</span>
+              </div>
+              <div class="spec-row">
+                <span class="spec-value spec-accent">10.6</span>
+                <span class="spec-label">MiB single binary</span>
+                <span class="spec-note">6 platforms</span>
+              </div>
+              <div class="spec-row">
+                <span class="spec-value">~11</span>
+                <span class="spec-label">ms proxy overhead</span>
+                <span class="spec-note">per request</span>
+              </div>
+              <div class="spec-row">
+                <span class="spec-value">91.5%</span>
+                <span class="spec-label">Bench, tool reduction</span>
+                <span class="spec-note">pass 90% gate</span>
+              </div>
+            </div>
+          </div>
+          <div class="projects-grid stagger" style="margin-top: 18px">
+            <div class="project-card plate">
+              <span class="prj-index">QST-01</span>
+              <h3 class="prj-name">Pay less</h3>
+              <p class="prj-desc">
+                Remembers identical asks &amp; compresses tool output — ≥90%
+                less on repetitive tasks. See savings in routre list.
+              </p>
+              <div class="prj-meta">
+                <a class="how-link" href="#why">How? →</a>
+              </div>
+            </div>
+            <div class="project-card plate">
+              <span class="prj-index">QST-02</span>
+              <h3 class="prj-name">Stay online</h3>
+              <p class="prj-desc">
+                If a provider says “overloaded” (common on free models), routre
+                tries the next one instantly. No error shown if another works.
+              </p>
+              <div class="prj-meta">
+                <a class="how-link" href="#quickstart">How? →</a>
+              </div>
+            </div>
+            <div class="project-card plate prj-featured">
+              <span class="prj-index">QST-03</span>
+              <h3 class="prj-name">Failover · RTK · Cache</h3>
+              <p class="prj-desc">
+                Tiered providers with cooldown 2s→30m. Heuristic tool_result
+                filter — no LM, no DB. sha256 LRU cache + per-agent token/cost
+                ledger.
+              </p>
+              <div class="prj-meta">
+                <span class="prj-tag">Failover</span>
+                <span class="prj-tag">RTK 90%</span>
+                <span class="prj-tag">Ledger</span>
+              </div>
+            </div>
+            <div class="project-card plate">
+              <span class="prj-index">QST-04</span>
+              <h3 class="prj-name">See what you spend</h3>
+              <p class="prj-desc">
+                Built-in ledger per app — tokens, cost, cache hits. Doctor
+                checks each provider. All on http://127.0.0.1:20128/ui.
+              </p>
+              <div class="prj-meta">
+                <a class="how-link" href="#quickstart">How? →</a>
+              </div>
+            </div>
+          </div>
+        </div>
+      </section>
 
-    <div class="wrap grid">
-      <div class="card">
-        <h3>Automatic failover</h3>
-        <p>
-          Tiered providers, exponential cooldown 2s→30m, retry only before first
-          stream byte. No mid-SSE duplication.
-        </p>
-      </div>
-      <div class="card hot">
-        <h3>RTK 90% compression</h3>
-        <p>
-          Heuristic tool_result filter (git-diff/log/grep/tree/build) — no LM,
-          no DB. Fail-open, never grows.
-        </p>
-      </div>
-      <div class="card">
-        <h3>Cache + ledger</h3>
-        <p>
-          Exact-match sha256 LRU with prefix ordering, per-agent token/cost
-          ledger. <span class="mono">list</span> shows saved $.
-        </p>
-      </div>
-    </div>
+      <!-- ===== GOALS ===== -->
+      <section id="goals" class="sheet">
+        <div class="container">
+          <div class="fig-label reveal">
+            <span class="fig-num">LVL 03</span> · Directives
+          </div>
+          <h2 class="sheet-title reveal">Our goals</h2>
+          <div class="sheet-rule reveal"></div>
+          <div class="cert-panel plate reveal">
+            <div class="cert-item">
+              <span class="cert-year">01</span
+              ><span class="cert-name"
+                >Save you money
+                <span class="cert-issuer"
+                  >— every repeated question and large tool result is made
+                  smaller before billing. Cache + RTK, measured by a build gate
+                  (&gt;90%).</span
+                ></span
+              >
+            </div>
+            <div class="cert-item">
+              <span class="cert-year">02</span
+              ><span class="cert-name"
+                >Never block you
+                <span class="cert-issuer"
+                  >— free-tier “overloaded” is not your fault. Fail over so your
+                  work continues.</span
+                ></span
+              >
+            </div>
+            <div class="cert-item">
+              <span class="cert-year">03</span
+              ><span class="cert-name"
+                >Stay light &amp; forgettable
+                <span class="cert-issuer"
+                  >— one 10-MB binary, ~10 MB RAM idle, stdlib only. No cloud,
+                  no account. Dashboard for non-programmers — no JSON
+                  editing.</span
+                ></span
+              >
+            </div>
+          </div>
+          <p class="sec-note reveal" style="margin-top: 16px">
+            Analogy: like a travel adapter — one plug you trust, it picks the
+            best socket behind the scenes.
+          </p>
+        </div>
+      </section>
 
-    
-    <!-- Plain-language intro for non-IT -->
-    <div class="wrap section" id="what">
-      <h2 class="h2">What is routre, in plain words?</h2>
-      <p style="font-size:1.06rem;line-height:1.7;max-width:780px;color:var(--ink2)">
-        Your AI tools (Claude Code, Codex, Cursor…) normally talk directly to an AI provider.
-        <strong style="color:var(--fg)">Routre sits in the middle on your computer</strong> and does three simple things:
-        it <strong>remembers answers</strong> so you don't pay twice, it <strong>shrinks sent data</strong> without losing meaning, and it <strong>switches providers</strong> automatically if one is busy.
-        You change one line in your app — point it to <span class="mono" style="background:var(--cream);padding:2px 6px;border-radius:6px">http://127.0.0.1:20128</span> — and everything else is automatic.
-      </p>
-      <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:14px;margin-top:18px">
-        <div class="card" style="text-align:left"><div style="font-size:1.4rem">💰</div><h3>Pay less</h3><p>Remembers identical asks &amp; compresses tool output — <strong>≥90% less</strong> on repetitive tasks. See savings in <span class="mono">routre list</span>.</p><a href="#rtk-token-compression--90-on-tool-heavy-traffic" style="font-size:.82rem">How? →</a></div>
-        <div class="card" style="text-align:left"><div style="font-size:1.4rem">🛡️</div><h3>Stay online</h3><p>If a provider says “overloaded” (common on free models), routre tries the next one instantly. No error shown if another works.</p><a href="#architecture" style="font-size:.82rem">How? →</a></div>
-        <div class="card" style="text-align:left"><div style="font-size:1.4rem">📊</div><h3>See what you spend</h3><p>Built-in ledger per app — tokens, cost, cache hits. Doctor checks each provider. All on <span class="mono">http://127.0.0.1:20128/ui</span>.</p><a href="#response-cache" style="font-size:.82rem">How? →</a></div>
-      </div>
-    </div>
-
-    <div class="wrap section" id="goals" style="background:var(--cream);border:1px solid var(--bd);border-radius:18px;padding:22px 20px">
-      <h2 class="h2" style="margin-top:0">Our goals</h2>
-      <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:16px">
-        <div><strong>1. Save you money</strong><br /><span style="color:var(--ink2)">Every repeated question and every large tool result is made smaller before billing. Cache + RTK together cut real costs, measured by a build gate (&gt;90%).</span></div>
-        <div><strong>2. Never block you</strong><br /><span style="color:var(--ink2)">Free-tier “overloaded” is not your fault. We explain it briefly — “free-tier capacity, not routre” — and fail over so your work continues.</span></div>
-        <div><strong>3. Stay light &amp; forgettable</strong><br /><span style="color:var(--ink2)">One 10-MB binary, ~10 MB RAM idle, stdlib only, bench-gated. No cloud, no account. Dashboard for non-programmers — no JSON editing.</span></div>
-      </div>
-      <p style="margin:12px 0 0;color:var(--ink3);font-size:.86rem">Analogy: like a travel adapter — one plug you trust, it picks the best socket behind the scenes.</p>
-    </div>
-
-    <div style="max-width:780px;margin:14px auto 0;padding:0 20px;color:var(--ink3);font-size:.84rem;text-align:center">👩‍💻 Are you an engineer? Details below stay collapsed — click “How?” above or scroll for full tech spec.</div>
-    <div class="wrap section" id="install">
-      <h2 class="h2">Install</h2>
-      <div class="cols">
-        <div>
-          <div class="pill">macOS · Linux</div>
-          <pre class="code">
-curl -fsSL https://raw.githubusercontent.com/mariobgsp/routre/main/install.sh | sh
+      <!-- ===== INSTALL ===== -->
+      <section id="install" class="sheet">
+        <div class="container">
+          <div class="fig-label reveal">
+            <span class="fig-num">LVL 04</span> · Deployment
+          </div>
+          <h2 class="sheet-title reveal">Install</h2>
+          <div class="sheet-rule reveal"></div>
+          <div class="stagger">
+            <div class="terminal plate">
+              <div class="term-head">
+                <span class="term-dots" aria-hidden="true"
+                  ><span></span><span></span><span></span
+                ></span>
+                <span class="term-title">macOS · Linux</span>
+                <span class="term-tag">bash</span>
+              </div>
+              <pre
+                class="codeblock"
+              >curl -fsSL https://raw.githubusercontent.com/mariobgsp/routre/main/install.sh | sh
 routre version
-routre setup --detect   # writes config.json + routre.env (0600)
-routre serve            # gateway on 127.0.0.1:20128
+routre setup              <span class="c"># wizard: providers + keys → config.json + routre.env (0600)</span>
+routre serve            <span class="c"># gateway on 127.0.0.1:20128</span>
 
-# point any agent at it:
+<span class="c"># point any agent at it:</span>
 export OPENAI_BASE_URL=http://127.0.0.1:20128
 export ANTHROPIC_BASE_URL=http://127.0.0.1:20128</pre>
-        </div>
-        <div>
-          <div class="pill">Windows (PowerShell) — see details below</div>
-          <pre class="code">
-# download from Releases → unzip → add to PATH →
-routre setup --detect
-routre serve   # http://127.0.0.1:20128  ·  dashboard /ui</pre>
-          <p class="mut" style="font-size: 0.85rem; margin-top: 8px">
-            Full Windows steps in the next section. Or let your AI do it —
-            <a href="#ai-install">AI prompt</a> below.
+            </div>
+            <div class="terminal plate" style="margin-top: 18px">
+              <div class="term-head">
+                <span class="term-dots" aria-hidden="true"
+                  ><span></span><span></span><span></span
+                ></span>
+                <span class="term-title">Windows · PowerShell</span>
+                <span class="term-tag">ps1</span>
+              </div>
+              <pre
+                class="codeblock"
+              ><span class="c"># download from Releases → unzip → add to PATH →</span>
+routre setup
+routre serve   <span class="c"># http://127.0.0.1:20128  ·  dashboard /ui</span></pre>
+            </div>
+          </div>
+          <p class="sec-note reveal" style="margin-top: 16px">
+            Self-update built in: <strong>routre update</strong> verifies sha256
+            — or let your AI do it.
           </p>
         </div>
-      </div>
-      <p class="mut" style="font-size: 0.9rem; margin-top: 12px">
-        Self-update built in:
-        <span class="mono">routre update</span> verifies sha256 and atomically
-        replaces the binary. Old <span class="mono">routre-cli</span> installs
-        still work (alias). npm distribution is deprecated.
-      </p>
-    </div>
+      </section>
 
-    <div class="wrap section" id="windows">
-      <h2 class="h2">Windows</h2>
-      <p class="mut" style="font-size: 0.95rem; margin-top: -6px">
-        No installer, no admin rights. One zip, one folder, one PATH entry.
-      </p>
-      <div class="pill">Option A — manual (2 min)</div>
-      <pre class="code">
-# 1. Download the zip for your CPU from Releases:
-#    https://github.com/mariobgsp/routre/releases/latest
-#    routre_windows_amd64.zip  (Intel/AMD)  or  routre_windows_arm64.zip  (ARM)
+      <!-- ===== WINDOWS ===== -->
+      <section id="windows" class="sheet">
+        <div class="container">
+          <div class="fig-label reveal">
+            <span class="fig-num">LVL 05</span> · Deployment
+          </div>
+          <h2 class="sheet-title reveal">Windows</h2>
+          <div class="sheet-rule reveal"></div>
+          <p class="sec-note reveal">
+            No installer, no admin rights. One zip, one folder, one PATH entry.
+          </p>
+          <div class="reveal" style="margin-top: 18px">
+            <span class="pill">Option A — manual (2 min)</span>
+            <div class="terminal plate">
+              <div class="term-head">
+                <span class="term-dots" aria-hidden="true"
+                  ><span></span><span></span><span></span
+                ></span>
+                <span class="term-title">PowerShell</span>
+                <span class="term-tag">ps1</span>
+              </div>
+              <pre
+                class="codeblock"
+              ><span class="c"># 1. Download the zip for your CPU from Releases:</span>
+<span class="c">#    https://github.com/mariobgsp/routre/releases/latest</span>
 
-# 2. Unzip to a permanent folder:
+<span class="c"># 2. Unzip to a permanent folder:</span>
 Expand-Archive .\routre_windows_amd64.zip -DestinationPath $HOME\routre
 
-# 3. Add to PATH for this user (no admin):
+<span class="c"># 3. Add to PATH for this user (no admin):</span>
 $dir = "$HOME\routre"
 [Environment]::SetEnvironmentVariable("Path", $env:Path + ";$dir", "User")
-$env:Path += ";$dir"   # also for this shell
+$env:Path += ";$dir"   <span class="c"># also for this shell</span>
 
-# 4. Setup + run:
+<span class="c"># 4. Setup + run:</span>
 routre version
-routre setup --detect   # writes config.json + routre.env (0600) next to the exe
-routre serve            # gateway + dashboard at http://127.0.0.1:20128/ui
+routre setup              <span class="c"># wizard → config.json + routre.env (0600) next to the exe</span>
+routre serve            <span class="c"># gateway + dashboard at http://127.0.0.1:20128/ui</span>
 
-# Verify:
-curl http://127.0.0.1:20128/healthz   # → ok
-routre check            # validates config + keys
-routre list             # providers + savings + BUDGET HIT</pre>
-      <div class="pill" style="margin-top: 16px">
-        Option B — PowerShell one-liner (auto PATH)
-      </div>
-      <pre class="code">
-irm https://raw.githubusercontent.com/mariobgsp/routre/main/install.ps1 | iex
-# (falls back to manual zip if ps1 is not yet published — same 3 steps above)</pre>
-      <div class="cols" style="margin-top: 14px">
-        <div class="card" style="text-align: left">
-          <h3 style="font-size: 0.9rem">Notes</h3>
-          <p style="text-align: left">
-            SmartScreen may warn on first run — click
-            <span class="mono">More info → Run anyway</span> (binary is
-            unsigned, sha256-verified on update). Windows Defender: no
-            Python/Postgres/Node, just one exe (~11 MiB, ~10 MiB RAM).
+<span class="c"># Verify:</span>
+curl http://127.0.0.1:20128/healthz   <span class="c"># → ok</span>
+routre check            <span class="c"># validates config + keys</span>
+routre list             <span class="c"># providers + savings + BUDGET HIT</span></pre>
+            </div>
+          </div>
+          <div class="reveal" style="margin-top: 18px">
+            <span class="pill"
+              >Option B — PowerShell one-liner (auto PATH)</span
+            >
+            <div class="terminal plate">
+              <div class="term-head">
+                <span class="term-dots" aria-hidden="true"
+                  ><span></span><span></span><span></span
+                ></span>
+                <span class="term-title">PowerShell</span>
+                <span class="term-tag">ps1</span>
+              </div>
+              <pre
+                class="codeblock"
+              >irm https://raw.githubusercontent.com/mariobgsp/routre/main/install.ps1 | iex
+<span class="c"># (falls back to manual zip if ps1 is not yet published — same 3 steps above)</span></pre>
+            </div>
+          </div>
+          <p class="sec-note reveal" style="margin-top: 18px">
+            SmartScreen: More info → Run anyway · one exe, autostart needs no
+            admin.
           </p>
         </div>
-        <div class="card" style="text-align: left">
-          <h3 style="font-size: 0.9rem">Run at startup</h3>
-          <p style="text-align: left">
-            <span class="mono">routre start --autostart</span> registers a
-            Scheduled Task (logon trigger).
-            <span class="mono">routre stop --autostart</span> removes it. No
-            service install, no admin.
-          </p>
-        </div>
-      </div>
-      <p class="mut mono" style="font-size: 0.8rem; margin-top: 10px">
-        Alias: <span class="mono">routre.exe</span> still launches the same
-        binary. Config lives next to the exe:
-        <span class="mono">config.json</span> +
-        <span class="mono">routre.env</span>.
-      </p>
-    </div>
+      </section>
 
-    <div class="wrap section" id="ai-install">
-      <h2 class="h2">Install with an AI prompt</h2>
-      <p class="mut" style="font-size: 0.95rem; margin-top: -6px">
-        Paste one prompt into Claude Code, Codex, Cursor, or opencode — the
-        agent runs the same commands you would.
-      </p>
-      <div class="pill">Copy → paste into your agent</div>
-      <pre class="code">
-# Prompt for Claude Code / Codex / opencode / Cursor:
+      <!-- ===== AI INSTALL ===== -->
+      <section id="ai-install" class="sheet">
+        <div class="container">
+          <div class="fig-label reveal">
+            <span class="fig-num">LVL 06</span> · Deployment
+          </div>
+          <h2 class="sheet-title reveal">Install with an AI prompt</h2>
+          <div class="sheet-rule reveal"></div>
+          <p class="sec-note reveal">
+            Paste one prompt into Claude Code, Codex, Cursor, or opencode — the
+            agent runs the same commands you would.
+          </p>
+          <div class="reveal" style="margin-top: 18px">
+            <span class="pill">Copy → paste into your agent</span>
+            <div class="terminal plate">
+              <div class="term-head">
+                <span class="term-dots" aria-hidden="true"
+                  ><span></span><span></span><span></span
+                ></span>
+                <span class="term-title">agent prompt</span>
+                <span class="term-tag">txt</span>
+              </div>
+              <pre class="codeblock">
 Install routre (github.com/mariobgsp/routre) on this machine:
 
 1. Detect OS/CPU, fetch the latest release asset for this platform
    (curl install.sh on macOS/Linux, zip from Releases on Windows), verify sha256, and put the binary on PATH as routre (keep routre-cli as alias).
-2. Run: routre setup --detect   (non-interactive if keys already in env)
+2. Run: routre setup   (wizard; non-interactive if keys already in env)
    If OPENCODE_GO_API_KEY / OPENROUTER_API_KEY / ANTHROPIC_API_KEY are missing, ask me once and write them to routre.env (0600).
 3. Start the gateway: routre serve (or routre start --autostart for boot).
 4. Point this agent at it:
@@ -753,115 +2732,257 @@ Install routre (github.com/mariobgsp/routre) on this machine:
 6. Open the dashboard: http://127.0.0.1:20128/ui
 
 Keep it stdlib-only, ~10 MiB RAM. Do not install Python/Postgres/Node.</pre>
-      <div class="cols" style="margin-top: 14px">
-        <div>
-          <div class="pill">Non-interactive one-shot</div>
-          <pre class="code">
-# If your agent supports tool use, this single line is enough:
-curl -fsSL https://raw.githubusercontent.com/mariobgsp/routre/main/install.sh | sh && routre setup --detect && routre serve</pre>
-        </div>
-        <div>
-          <div class="pill">Windows prompt variant</div>
-          <pre class="code">
+            </div>
+          </div>
+          <div class="stagger" style="margin-top: 18px">
+            <div>
+              <span class="pill">Non-interactive one-shot</span>
+              <div class="terminal plate">
+                <div class="term-head">
+                  <span class="term-dots" aria-hidden="true"
+                    ><span></span><span></span><span></span
+                  ></span>
+                  <span class="term-title">you@gateway: ~</span>
+                  <span class="term-tag">bash</span>
+                </div>
+                <pre class="codeblock">
+curl -fsSL https://raw.githubusercontent.com/mariobgsp/routre/main/install.sh | sh &amp;&amp; routre setup &amp;&amp; routre serve</pre>
+              </div>
+            </div>
+            <div style="margin-top: 18px">
+              <span class="pill">Windows prompt variant</span>
+              <div class="terminal plate">
+                <div class="term-head">
+                  <span class="term-dots" aria-hidden="true"
+                    ><span></span><span></span><span></span
+                  ></span>
+                  <span class="term-title">agent prompt</span>
+                  <span class="term-tag">txt</span>
+                </div>
+                <pre class="codeblock">
 Install routre on Windows (PowerShell):
-download routre_windows_amd64.zip from Releases, expand to $HOME\routre, add to user PATH, then run routre setup --detect and routre serve. Verify with curl http://127.0.0.1:20128/healthz.</pre>
+download routre_windows_amd64.zip from Releases, expand to $HOME\routre, add to user PATH, then run routre setup and routre serve. Verify with curl http://127.0.0.1:20128/healthz.</pre>
+              </div>
+            </div>
+          </div>
+          <p class="sec-note reveal" style="margin-top: 16px">
+            Tip: after setup, open <strong>http://127.0.0.1:20128/ui</strong> —
+            keys + config without JSON.
+          </p>
         </div>
-      </div>
-      <p class="mut" style="font-size: 0.85rem; margin-top: 12px">
-        Tip: after the AI finishes, open
-        <span class="mono">http://127.0.0.1:20128/ui</span> to edit
-        providers/keys without touching JSON — loopback-only, Host-checked,
-        &lt;2 MiB after use.
-      </p>
-    </div>
+      </section>
 
-    <div class="wrap section">
-      <h2 class="h2">Why not X?</h2>
-      <div class="tablewrap">
-        <table class="table mono">
-          <tr>
-            <th></th>
-            <th>RAM idle</th>
-            <th>Install</th>
-            <th>90% claim</th>
-          </tr>
-          <tr>
-            <td>routre</td>
-            <td>10 MiB</td>
-            <td>curl one-liner / zip, 6 platforms · AI prompt</td>
-            <td>bench-gated, build fails on regress</td>
-          </tr>
-          <tr>
-            <td>9router</td>
-            <td>80 MiB, leak to 4.8 GB</td>
-            <td>Node/Next.js</td>
-            <td>unbenchmarked, walked back</td>
-          </tr>
-          <tr>
-            <td>LiteLLM / Portkey</td>
-            <td>GBs (Python/Postgres/Redis)</td>
-            <td>full stack</td>
-            <td>price discount / input-only</td>
-          </tr>
-        </table>
-      </div>
-    </div>
-
-    <div class="wrap section">
-      <h2 class="h2">Quick start</h2>
-      <pre class="code">
-routre check              # validate config + keys
-routre list               # providers + savings banner + BUDGET HIT
-routre start --autostart  # systemd/launchd/Scheduled Task daemon
-routre logs -f            # tail request log
-go run . bench -target 90     # honest metric</pre>
-      <p class="mut" style="font-size: 0.9rem; margin-top: 12px">
-        Endpoints:
-        <span class="mono"
-          >/v1/chat/completions · /v1/responses · /v1/messages · /v1/models ·
-          /v1/status · /v1/usage · /healthz · /metrics · /ui (dashboard)</span
-        >
-      </p>
-    </div>
-
-    <div class="cta">
-      <div class="wrap">
-        <h2>Stop paying<br />the token tax.</h2>
-        <a class="btn" href="#install">Install routre</a>
-      </div>
-    </div>
-
-    <footer>
-      <div class="wrap foot">
-        <div>
-          MIT ·
-          <a href="https://github.com/mariobgsp/routre"
-            >github.com/mariobgsp/routre</a
-          >
-          ·
-          <a href="https://github.com/mariobgsp/routre/releases">Releases</a>
-          · <a href="SPEC.md">SPEC</a>
+      <!-- ===== WHY ===== -->
+      <section id="why" class="sheet">
+        <div class="container">
+          <div class="fig-label reveal">
+            <span class="fig-num">LVL 07</span> · Bestiary
+          </div>
+          <h2 class="sheet-title reveal">Why not X?</h2>
+          <div class="sheet-rule reveal"></div>
+          <div class="tablewrap reveal">
+            <table class="table">
+              <tr>
+                <th></th>
+                <th>RAM idle</th>
+                <th>Install</th>
+                <th>90% claim</th>
+              </tr>
+              <tr>
+                <td>routre</td>
+                <td>10 MiB</td>
+                <td>curl one-liner / zip, 6 platforms · AI prompt</td>
+                <td>bench-gated, build fails on regress</td>
+              </tr>
+              <tr>
+                <td>9router</td>
+                <td>80 MiB, leak to 4.8 GB</td>
+                <td>Node/Next.js</td>
+                <td>unbenchmarked, walked back</td>
+              </tr>
+              <tr>
+                <td>LiteLLM / Portkey</td>
+                <td>GBs (Python/Postgres/Redis)</td>
+                <td>full stack</td>
+                <td>price discount / input-only</td>
+              </tr>
+            </table>
+          </div>
         </div>
-        <div class="mut" style="margin-top: 6px">
-          routre · stdlib only · deletion over addition
+      </section>
+
+      <!-- ===== QUICKSTART ===== -->
+      <section id="quickstart" class="sheet">
+        <div class="container">
+          <div class="fig-label reveal">
+            <span class="fig-num">LVL 08</span> · Quick Start
+          </div>
+          <h2 class="sheet-title reveal">Quick start</h2>
+          <div class="sheet-rule reveal"></div>
+          <div class="terminal plate reveal">
+            <div class="term-head">
+              <span class="term-dots" aria-hidden="true"
+                ><span></span><span></span><span></span
+              ></span>
+              <span class="term-title">you@gateway: ~</span>
+              <span class="term-tag">bash</span>
+            </div>
+            <pre
+              class="codeblock"
+            >routre setup              <span class="c"># wizard: providers, URLs, keys, prices</span>
+routre check              <span class="c"># validate config + keys</span>
+routre serve              <span class="c"># gateway on 127.0.0.1:20128</span>
+routre start --autostart  <span class="c"># daemon + boot auto-start</span>
+routre list               <span class="c"># providers + token/cost ledger</span>
+routre doctor             <span class="c"># probe every provider</span>
+routre models sync        <span class="c"># persist new provider models to config.json</span>
+routre logs -f            <span class="c"># tail request log</span>
+routre bench -target 90   <span class="c"># gated metric, fails build on regress</span></pre>
+          </div>
+          <p class="sec-note reveal" style="margin-top: 16px">
+            Endpoints:
+            <strong
+              >/v1/chat/completions · /v1/responses · /v1/messages · /v1/models
+              · /v1/status · /v1/usage · /healthz · /metrics · /ui
+              (dashboard)</strong
+            >
+          </p>
+          <p class="sec-note reveal" style="margin-top: 12px">
+            No CLI needed: open <strong>http://127.0.0.1:20128/ui</strong>
+            to set keys and edit the full config in the browser (loopback-only).
+          </p>
+          <p class="sec-note reveal" style="margin-top: 8px">
+            Need every model at once? Copy
+            <strong>config.all.json</strong> over config.json — 506 models
+            through one endpoint.
+          </p>
+        </div>
+      </section>
+      <!-- ===== CHANGELOG ===== -->
+      <section id="changelog" class="sheet">
+        <div class="container">
+          <div class="fig-label reveal">
+            <span class="fig-num">LVL 09</span> · Changelog
+          </div>
+          <h2 class="sheet-title reveal">Latest</h2>
+          <div class="sheet-rule reveal"></div>
+          <div class="cert-panel plate reveal">
+            <div class="cert-item">
+              <span class="cert-year">v0.4.8</span
+              ><span class="cert-name"
+                >Blueprint UI + dashboard
+                <span class="cert-issuer"
+                  >— portfolio redesigned in Flat Blueprint style; /ui dashboard
+                  now matches the same navy/gold theme.</span
+                ></span
+              >
+            </div>
+            <div class="cert-item">
+              <span class="cert-year">v0.4.4</span
+              ><span class="cert-name"
+                >Opencode session header
+                <span class="cert-issuer"
+                  >— every opencode.ai request carries x-opencode-session. Ends
+                  the missing-header error for Go/curl clients.</span
+                ></span
+              >
+            </div>
+            <div class="cert-item">
+              <span class="cert-year">v0.4.3</span
+              ><span class="cert-name"
+                >Native Responses passthrough
+                <span class="cert-issuer"
+                  >— /v1/responses proxied natively for opencode upstreams;
+                  agent guide so the 500 never recurs.</span
+                ></span
+              >
+            </div>
+            <div class="cert-item">
+              <span class="cert-year">v0.3.4</span
+              ><span class="cert-name"
+                >Models sync
+                <span class="cert-issuer"
+                  >— routre models sync persists new provider models to
+                  config.json. Additive, --prune to drop retired ones.</span
+                ></span
+              >
+            </div>
+          </div>
+          <p class="sec-note reveal" style="margin-top: 16px">
+            Full history in <strong>CHANGELOG.md</strong> — bench-gated ≥90%
+            tool-token savings, 10.6 MiB binary, ~10 MiB idle.
+          </p>
+        </div>
+      </section>
+    </main>
+
+    <!-- ===== FOOTER / CONTACT ===== -->
+    <footer id="contact">
+      <div class="container">
+        <div class="fig-label reveal">
+          <span class="fig-num">LVL 10</span> · Tavern
+        </div>
+        <div class="title-block plate reveal">
+          <div class="tb-title">
+            <span class="tb-name">Stop paying<br />the token tax</span>
+            <span class="tb-rev">Save File · 2026</span>
+          </div>
+          <div class="tb-grid">
+            <div class="tb-cell">
+              <div class="tb-label">Install</div>
+              <div class="tb-value">
+                curl … | sh
+                <button
+                  type="button"
+                  class="copy-btn"
+                  id="copyInstallBtn"
+                  aria-label="Copy install command to clipboard"
+                >
+                  Copy
+                </button>
+              </div>
+            </div>
+            <div class="tb-cell">
+              <div class="tb-label">Gateway</div>
+              <div class="tb-value">127.0.0.1:20128 /ui</div>
+            </div>
+            <div class="tb-cell">
+              <div class="tb-label">GitHub</div>
+              <div class="tb-value">
+                <a
+                  href="https://github.com/mariobgsp/routre"
+                  target="_blank"
+                  rel="noopener"
+                  >mariobgsp/routre ↗</a
+                >
+              </div>
+            </div>
+            <div class="tb-cell">
+              <div class="tb-label">Releases</div>
+              <div class="tb-value">
+                <a
+                  href="https://github.com/mariobgsp/routre/releases"
+                  target="_blank"
+                  rel="noopener"
+                  >download ↗</a
+                >
+              </div>
+            </div>
+          </div>
+          <div class="tb-foot">
+            <span class="tb-status"
+              ><span class="led led-green" aria-hidden="true"></span> GATEWAY
+              LIVE</span
+            >
+            <span>&copy; 2026 routre · MIT</span>
+            <span class="tb-sheet-num">STDLIB ONLY — ALL RIGHTS RESERVED</span>
+          </div>
         </div>
       </div>
     </footer>
 
-    <script
-      defer
-      src="https://cdn.jsdelivr.net/npm/gsap@3.12.5/dist/gsap.min.js"
-      integrity="sha256-KAM+RJox68w5blvosTtjFSvwMJQoj7WGcDQyGSe84Ic="
-      crossorigin="anonymous"
-    ></script>
-    <script
-      defer
-      src="https://cdn.jsdelivr.net/npm/gsap@3.12.5/dist/ScrollTrigger.min.js"
-      integrity="sha256-rTPC35raimY8IUc1eCj5gNC3ynMe8z6zxuTzJ8OyzaU="
-      crossorigin="anonymous"
-    ></script>
     <script>
-      // duplicate marquee content for seamless -50% loop (no innerHTML) — no GSAP dep, runs immediately
+      // duplicate marquee content for seamless -50% loop (no innerHTML)
       (function () {
         var mq = document.getElementById("mq");
         if (!mq) return;
@@ -871,134 +2992,236 @@ go run . bench -target 90     # honest metric</pre>
       })();
     </script>
     <script>
-      // GSAP animations — deferred GSAP may not be loaded yet when this inline script runs during parsing,
-      // so wait for it. Keeps hero/CTA entrance and lead scrub working while still deferring the CDN for faster first paint.
-      (function () {
-        function initGSAP() {
-          if (!window.gsap || !window.ScrollTrigger) {
-            setTimeout(initGSAP, 40);
-            return;
-          }
-          gsap.registerPlugin(ScrollTrigger);
+      /* nav, reveals, tech FX (clock, uptime, progress, typing) — same system as the portfolio */
+      const SECTION_IDS = [
+        "what",
+        "goals",
+        "install",
+        "windows",
+        "ai-install",
+        "why",
+        "quickstart",
+        "contact",
+      ];
 
-          // scrubbing lead reveal — words fade 0.15 -> 1 as you scroll
-          var lead = document.getElementById("lead");
-          var frag = document.createDocumentFragment();
-          Array.prototype.slice.call(lead.childNodes).forEach(function (node) {
-            if (node.nodeType === 3) {
-              node.textContent.split(/(\s+)/).forEach(function (tok) {
-                if (!tok) return;
-                if (/^\s+$/.test(tok)) {
-                  frag.appendChild(document.createTextNode(tok));
-                } else {
-                  var s = document.createElement("span");
-                  s.className = "w";
-                  s.textContent = tok;
-                  frag.appendChild(s);
-                }
-              });
-            } else {
-              frag.appendChild(node); // keep <b> intact
+      function getScrollProgress() {
+        const doc = document.documentElement;
+        const max = doc.scrollHeight - window.innerHeight;
+        if (max <= 0) return 0;
+        return Math.min(1, Math.max(0, window.scrollY / max));
+      }
+
+      /* ===== Nav: scroll state, active link, mobile menu ===== */
+      function initNav() {
+        const navbar = document.getElementById("navbar");
+        const navToggle = document.getElementById("navToggle");
+        const navLinks = document.getElementById("navLinks");
+        const linkEls = {};
+        document.querySelectorAll(".nav-links a").forEach((a) => {
+          linkEls[a.getAttribute("href").slice(1)] = a;
+        });
+
+        let ticking = false;
+        const onScroll = () => {
+          if (ticking) return;
+          ticking = true;
+          requestAnimationFrame(() => {
+            navbar.classList.toggle("scrolled", window.scrollY > 24);
+            const y = window.scrollY + 130;
+            let current = "what";
+            for (const id of SECTION_IDS) {
+              const el = document.getElementById(id);
+              if (el && el.offsetTop <= y) current = id;
             }
+            document
+              .querySelectorAll(".nav-links a")
+              .forEach((a) => a.classList.remove("active"));
+            if (linkEls[current]) linkEls[current].classList.add("active");
+            ticking = false;
           });
-          lead.textContent = "";
-          lead.appendChild(frag);
-          var words = lead.querySelectorAll(".w");
-          gsap.fromTo(
-            words,
-            { opacity: 0.15 },
-            {
-              opacity: 1,
-              stagger: 0.05,
-              ease: "none",
-              scrollTrigger: {
-                trigger: lead,
-                start: "top 85%",
-                end: "top 40%",
-                scrub: true,
-              },
-            },
-          );
+        };
+        window.addEventListener("scroll", onScroll, { passive: true });
+        onScroll();
 
-          // cards + sections — subtle rise
-          gsap.utils.toArray(".grid .card, .section").forEach(function (el) {
-            gsap.from(el, {
-              y: 24,
-              autoAlpha: 0,
-              duration: 0.75,
-              ease: "power3.out",
-              scrollTrigger: { trigger: el, start: "top 90%", once: true },
-            });
-          });
+        function closeMenu() {
+          navToggle.classList.remove("open");
+          navToggle.setAttribute("aria-expanded", "false");
+          navLinks.classList.remove("open");
+          document.body.classList.remove("lock");
+        }
 
-          // CTA — word-by-word reveal + elastic button
-          var ctaH2 = document.querySelector(".cta h2");
-          if (ctaH2 && !ctaH2.querySelector(".word")) {
-            // wrap each word in <span class="word"> without innerHTML (textContent-safe)
-            var frag = document.createDocumentFragment();
-            Array.prototype.slice.call(ctaH2.childNodes).forEach(function (node) {
-              if (node.nodeType === 1 && node.tagName === "BR") {
-                frag.appendChild(node.cloneNode());
-              } else if (node.nodeType === 3) {
-                node.textContent.split(/(\s+)/).forEach(function (tok) {
-                  if (!tok) return;
-                  if (/^\s+$/.test(tok)) {
-                    frag.appendChild(document.createTextNode(tok));
-                  } else {
-                    var sp = document.createElement("span");
-                    sp.className = "word";
-                    sp.textContent = tok;
-                    frag.appendChild(sp);
-                  }
-                });
-              } else {
-                frag.appendChild(node.cloneNode(true));
+        navToggle.addEventListener("click", () => {
+          const open = navLinks.classList.toggle("open");
+          navToggle.classList.toggle("open", open);
+          navToggle.setAttribute("aria-expanded", String(open));
+          document.body.classList.toggle("lock", open);
+        });
+
+        navLinks
+          .querySelectorAll("a")
+          .forEach((link) => link.addEventListener("click", closeMenu));
+
+        document.addEventListener("keydown", (e) => {
+          if (e.key === "Escape") closeMenu();
+        });
+
+        window.addEventListener("resize", () => {
+          if (window.innerWidth > 860) closeMenu();
+        });
+      }
+
+      /* ===== Scroll reveals + stagger ===== */
+      function initReveals() {
+        const targets = document.querySelectorAll(".reveal, .stagger");
+        if (!("IntersectionObserver" in window)) {
+          targets.forEach((el) => el.classList.add("visible"));
+          return;
+        }
+        const observer = new IntersectionObserver(
+          (entries) => {
+            entries.forEach((entry) => {
+              if (entry.isIntersecting) {
+                entry.target.classList.add("visible");
+                observer.unobserve(entry.target);
               }
             });
-            ctaH2.textContent = "";
-            ctaH2.appendChild(frag);
-          }
-          var ctaWords = document.querySelectorAll(".cta h2 .word");
-          if (ctaWords.length) {
-            gsap.from(ctaWords, {
-              y: 56,
-              rotationX: -18,
-              autoAlpha: 0,
-              duration: 0.85,
-              stagger: 0.07,
-              ease: "power3.out",
-              scrollTrigger: { trigger: ".cta", start: "top 82%", once: true },
-            });
-          }
-          gsap.from(".cta .btn", {
-            y: 22,
-            scale: 0.88,
-            autoAlpha: 0,
-            duration: 0.75,
-            delay: 0.45,
-            ease: "back.out(1.7)",
-            scrollTrigger: { trigger: ".cta .btn", start: "top 95%", once: true },
-          });
+          },
+          { threshold: 0.12, rootMargin: "0px 0px -40px 0px" },
+        );
+        targets.forEach((el) => observer.observe(el));
+      }
 
-          // bench gate count-up
-          var gate = document.getElementById("gate");
-          var o = { v: 80 };
-          gsap.to(o, {
-            v: 91.2,
-            duration: 1.6,
-            ease: "power2.out",
-            onUpdate: function () {
-              gate.textContent = o.v.toFixed(1);
-            },
-            scrollTrigger: { trigger: gate, start: "top 90%", once: true },
-          });
+      /* ===== Tech FX: live clock, uptime, progress bar, typing terminal ===== */
+      const TERM_LINES = [
+        "curl -fsSL .../install.sh | sh",
+        "routre setup — ok",
+        "routre serve — 127.0.0.1:20128",
+        "gate 91.5% — pass 90%",
+        "cache hit — saved $0.42",
+      ];
+
+      function initTech() {
+        const reduceMotion = window.matchMedia(
+          "(prefers-reduced-motion: reduce)",
+        ).matches;
+
+        // ---- live clock (WIB) ----
+        const clockEl = document.getElementById("navClock");
+        const pad = (n) => String(n).padStart(2, "0");
+        const tickClock = () => {
+          const d = new Date();
+          clockEl.textContent = `${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
+        };
+        tickClock();
+        if (!reduceMotion) setInterval(tickClock, 1000);
+
+        // ---- uptime since load ----
+        const uptimeEl = document.getElementById("uptime");
+        const started = Date.now();
+        const tickUptime = () => {
+          const t = Math.floor((Date.now() - started) / 1000);
+          uptimeEl.textContent = `${pad(Math.floor(t / 3600))}:${pad(Math.floor(t / 60) % 60)}:${pad(t % 60)}`;
+        };
+        tickUptime();
+        if (!reduceMotion) setInterval(tickUptime, 1000);
+
+        // ---- scroll progress bar ----
+        const bar = document.getElementById("progressBar");
+        let ticking = false;
+        const updateProgress = () => {
+          bar.style.transform = `scaleX(${getScrollProgress()})`;
+          ticking = false;
+        };
+        const onScroll = () => {
+          if (reduceMotion || ticking) return;
+          ticking = true;
+          requestAnimationFrame(updateProgress);
+        };
+        window.addEventListener("scroll", onScroll, { passive: true });
+        updateProgress();
+
+        // ---- typing terminal ----
+        const target = document.getElementById("typeTarget");
+        const cursor = document.getElementById("termCursor");
+        if (!target) return;
+
+        if (reduceMotion || !("requestAnimationFrame" in window)) {
+          target.textContent = TERM_LINES[TERM_LINES.length - 1];
+          if (cursor) cursor.style.display = "none";
+          return;
         }
-        if (document.readyState === "loading") {
-          document.addEventListener("DOMContentLoaded", initGSAP);
-        } else {
-          initGSAP();
+
+        let lineIdx = 0;
+        let charIdx = 0;
+        let deleting = false;
+        const TYPE_SPEED = 42;
+        const HOLD = 1500;
+
+        function step() {
+          const line = TERM_LINES[lineIdx];
+
+          if (!deleting) {
+            target.textContent = line.slice(0, charIdx + 1);
+            charIdx += 1;
+            if (charIdx === line.length) {
+              deleting = true;
+              setTimeout(step, HOLD);
+              return;
+            }
+            setTimeout(step, TYPE_SPEED);
+            return;
+          }
+
+          target.textContent = line.slice(0, charIdx - 1);
+          charIdx -= 1;
+          if (charIdx === 0) {
+            deleting = false;
+            lineIdx = (lineIdx + 1) % TERM_LINES.length;
+            setTimeout(step, 350);
+            return;
+          }
+          setTimeout(step, TYPE_SPEED / 3);
         }
-      })();
+        setTimeout(step, 400);
+      }
+
+      /* ===== Copy install command to clipboard ===== */
+      function initCopy() {
+        const copyBtn = document.getElementById("copyInstallBtn");
+        if (!copyBtn) return;
+        const cmd =
+          "curl -fsSL https://raw.githubusercontent.com/mariobgsp/routre/main/install.sh | sh";
+        copyBtn.addEventListener("click", async () => {
+          try {
+            await navigator.clipboard.writeText(cmd);
+          } catch (err) {
+            const ta = document.createElement("textarea");
+            ta.value = cmd;
+            ta.setAttribute("readonly", "");
+            ta.style.position = "fixed";
+            ta.style.opacity = "0";
+            document.body.appendChild(ta);
+            ta.select();
+            try {
+              document.execCommand("copy");
+            } catch (e) {
+              /* noop */
+            }
+            ta.remove();
+          }
+          copyBtn.textContent = "Copied";
+          copyBtn.classList.add("copied");
+          setTimeout(() => {
+            copyBtn.textContent = "Copy";
+            copyBtn.classList.remove("copied");
+          }, 1600);
+        });
+      }
+
+      initNav();
+      initReveals();
+      initTech();
+      initCopy();
     </script>
   </body>
 </html>
