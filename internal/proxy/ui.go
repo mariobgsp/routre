@@ -33,56 +33,72 @@ const uiHTML = `<!doctype html>
 <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>routre — Local Settings</title>
 <style>
-:root{--bg:#0a0a0a;--fg:#fff;--ink2:rgb(255 255 255/56%);--ink3:rgb(255 255 255/40%);--acc:#ff3b30;--card:rgb(255 255 255/4%);--bd:rgb(255 255 255/11%);--hover:rgb(255 255 255/9%);--mono:ui-monospace,Menlo,Consolas,monospace;--sans:Inter,system-ui,sans-serif}
-*{box-sizing:border-box}html,body{margin:0;background:var(--bg);color:var(--fg);font-family:var(--sans)}
-a{color:var(--fg);text-decoration:none;border-bottom:1px solid var(--bd)}a:hover{border-color:var(--ink2)}
+@import url('https://fonts.googleapis.com/css2?family=Press+Start+2P&family=VT323&display=swap');
+:root{--paper:#12101f;--paper-2:#1b1830;--paper-3:#0c0a18;--ink:#f0e6d2;--steel:#c9b896;--steel-dim:#7d7466;--hairline:#4a3f5c;--accent:#ca8a04;--torch:#ff7a3d;--ok:#7bc96f;--acc:#ca8a04;--ink2:#c9b896;--ink3:#7d7466;--bg:#12101f;--fg:#f0e6d2;--card:#1b1830;--bd:#4a3f5c;--hover:rgba(202,138,4,.12);--mono:"VT323",ui-monospace,Menlo,Consolas,monospace;--sans:"VT323",ui-monospace,monospace;--px:"Press Start 2P",monospace}
+*{box-sizing:border-box}html,body{margin:0;background:var(--paper);color:var(--ink);font-family:var(--sans);font-size:20px}
+body{background-image:linear-gradient(rgba(202,138,4,.13) 1px,transparent 1px),linear-gradient(90deg,rgba(202,138,4,.13) 1px,transparent 1px);background-size:44px 44px}
+::selection{background:var(--accent);color:var(--paper)}
+a{color:var(--accent);text-decoration:none;border-bottom:1px solid var(--hairline)}a:hover{color:var(--ink);border-color:var(--accent)}
 .wrap{max-width:960px;margin:0 auto;padding:0 20px}
-.nav{position:sticky;top:0;backdrop-filter:blur(8px);background:rgb(10 10 10/80%);border-bottom:1px solid var(--bd);padding:12px 0}
-.logo{font-weight:600;letter-spacing:-.02em}.logo em{font-style:normal;color:var(--acc)}
-.card{background:var(--card);border:1px solid var(--bd);border-radius:14px;padding:16px}
+.nav{position:sticky;top:0;z-index:10;background:rgba(18,16,31,.95);border-bottom:1px solid var(--hairline);padding:12px 0}
+.logo{font-family:var(--px);font-size:.72rem}.logo-dot{color:var(--accent)}
+.led{display:inline-block;width:7px;height:7px;border-radius:50%;background:var(--ok);animation:ledp 2.2s ease infinite}
+@keyframes ledp{0%,100%{box-shadow:0 0 0 0 rgba(123,201,111,.5)}60%{box-shadow:0 0 0 7px rgba(123,201,111,0)}}
+.stamp{display:inline-flex;align-items:center;gap:8px;font-size:.85rem;letter-spacing:.15em;text-transform:uppercase;color:var(--accent);border:1px solid var(--hairline);padding:5px 12px}
+.card{background:rgba(27,24,48,.92);border:3px solid #000;box-shadow:inset 0 0 0 2px var(--hairline);padding:16px;clip-path:polygon(0 8px,8px 8px,8px 0,calc(100% - 8px) 0,calc(100% - 8px) 8px,100% 8px,100% calc(100% - 8px),calc(100% - 8px) calc(100% - 8px),calc(100% - 8px) 100%,8px 100%,8px calc(100% - 8px),0 calc(100% - 8px))}
 .grid{display:grid;grid-template-columns:repeat(3,1fr);gap:12px;margin:16px 0}
 @media(max-width:700px){.grid{grid-template-columns:1fr}}
-table{width:100%;border-collapse:collapse;font-size:.88rem}th,td{border:1px solid var(--bd);padding:8px 10px;text-align:left}th{background:var(--card);font-weight:500}
-textarea{width:100%;min-height:340px;background:var(--card);color:var(--fg);border:1px solid var(--bd);border-radius:10px;padding:12px;font:12px/1.6 var(--mono)}
-.btn{display:inline-block;background:var(--fg);color:var(--bg);border:none;border-radius:999px;padding:9px 16px;font-weight:600;font-size:.88rem;cursor:pointer}
-.btn:hover{background:rgb(255 255 255/88%)}.btn.ghost{background:transparent;color:var(--fg);border:1px solid var(--bd)}.btn.ghost:hover{background:var(--hover)}
-.mono{font-family:var(--mono)}.mut{color:var(--ink2)}h2{font-size:1.15rem;margin:20px 0 10px;letter-spacing:-.02em}
-label{font-size:.85rem;color:var(--ink2)}input{width:100%;background:var(--card);color:var(--fg);border:1px solid var(--bd);border-radius:8px;padding:8px 10px;font:13px var(--mono)}
+.lbl{font-size:.85rem;text-transform:uppercase;letter-spacing:.15em}.sub{font-size:.85rem}.stat-v{font-family:var(--px);font-size:.78rem;line-height:1.7;color:var(--accent);margin:8px 0}
+table{width:100%;border-collapse:collapse;font-size:1rem;background:var(--paper-3);border:3px solid #000;box-shadow:inset 0 0 0 2px var(--hairline)}
+th,td{border-bottom:1px solid var(--hairline);padding:10px 12px;text-align:left}
+th{color:var(--accent);font-weight:400;font-size:.85rem;letter-spacing:.1em;text-transform:uppercase}
+td{color:var(--steel)}td:first-child{color:var(--ink)}
+.dot-ok{color:var(--ok)}.dot-miss{color:var(--torch)}
+textarea{width:100%;min-height:340px;background:var(--paper-3);color:var(--ink);border:3px solid #000;box-shadow:inset 0 0 0 2px var(--hairline);padding:12px;font:1rem/1.6 var(--mono)}
+textarea:focus{outline:2px solid var(--accent);outline-offset:2px}
+.btn{display:inline-flex;align-items:center;gap:6px;font-size:.85rem;letter-spacing:.09em;text-transform:uppercase;text-decoration:none;border:3px solid #000;box-shadow:0 4px 0 #000;background:var(--accent);color:var(--paper);font-weight:600;padding:10px 20px;cursor:pointer}
+.btn:hover{background:transparent;color:var(--accent)}
+.btn:active{transform:translateY(4px);box-shadow:0 0 0 #000}
+.btn.ghost{background:transparent;color:var(--ink)}
+.btn.ghost:hover{color:var(--accent)}
+.mono{font-family:var(--mono)}.mut{color:var(--steel)}h2{font-family:var(--px);font-size:.85rem;line-height:1.8;margin:30px 0 12px}
+label{font-size:.85rem;color:var(--steel);text-transform:uppercase;letter-spacing:.08em}input{width:100%;background:var(--paper-3);color:var(--ink);border:1px solid var(--hairline);padding:8px 10px;font:1rem var(--mono)}
+input:focus{outline:2px solid var(--accent);outline-offset:1px}
 .kv{display:grid;grid-template-columns:1fr 1fr;gap:10px}
 @media(max-width:700px){.kv{grid-template-columns:1fr}}
 </style>
 </head><body>
 <nav class="nav"><div class="wrap" style="display:flex;justify-content:space-between;align-items:center">
-<div class="logo">routre<em>-cli</em> <span class="mono mut" style="font-weight:400;font-size:.8rem">local settings</span></div>
-<div style="display:flex;gap:8px"><a class="btn ghost mono" href="/">API</a><a class="btn ghost mono" href="https://github.com/mariobgsp/routre">GitHub</a></div>
+<div class="logo">routre<span class="logo-dot">.</span> <span class="mono mut" style="font-size:.85rem;letter-spacing:.15em;text-transform:uppercase">Local Settings</span></div>
+<div style="display:flex;gap:10px;align-items:center"><span class="stamp"><span class="led"></span>Live</span><a class="btn ghost mono" href="/">API</a><a class="btn ghost mono" href="https://github.com/mariobgsp/routre">GitHub</a></div>
 </div></nav>
 <main class="wrap" style="padding:20px 20px 40px">
-<p class="mut" style="font-size:.9rem">Runs on <span class="mono">{{.Listen}}</span> · only reachable from this machine (127.0.0.1). Changes save to <span class="mono">{{.ConfigPath}}</span> and take effect immediately.</p>
+<p class="mut" style="font-size:1rem">Runs on <span class="mono">{{.Listen}}</span> · only reachable from this machine (127.0.0.1). Changes save to <span class="mono">{{.ConfigPath}}</span> and take effect immediately.</p>
 
 <div class="grid">
-<div class="card"><div class="mono mut" style="font-size:.72rem;text-transform:uppercase;letter-spacing:.06em">RTK</div><div style="font-weight:600">{{if .RTKEnabled}}enabled · {{.RTKLevel}}{{else}}disabled{{end}}</div><div class="mut mono" style="font-size:.78rem">{{.RTKMin}}–{{.RTKMax}} bytes</div></div>
-<div class="card"><div class="mono mut" style="font-size:.72rem;text-transform:uppercase;letter-spacing:.06em">Cache</div><div style="font-weight:600">{{if .CacheEnabled}}enabled · {{.CacheEntries}} entries{{else}}disabled{{end}}</div><div class="mut mono" style="font-size:.78rem">TTL {{.CacheTTL}}s · {{.CacheBytes}} bytes</div></div>
-<div class="card"><div class="mono mut" style="font-size:.72rem;text-transform:uppercase;letter-spacing:.06em">Uptime</div><div style="font-weight:600">{{.Uptime}}s</div><div class="mut mono" style="font-size:.78rem">{{.ProviderCount}} providers · {{.TierCount}} tiers</div></div>
+<div class="card"><div class="mono mut lbl">RTK</div><div class="stat-v">{{if .RTKEnabled}}ON · {{.RTKLevel}}{{else}}OFF{{end}}</div><div class="mut mono sub">{{.RTKMin}}–{{.RTKMax}} bytes</div></div>
+<div class="card"><div class="mono mut lbl">Cache</div><div class="stat-v">{{if .CacheEnabled}}ON · {{.CacheEntries}} entries{{else}}OFF{{end}}</div><div class="mut mono sub">TTL {{.CacheTTL}}s · {{.CacheBytes}} bytes</div></div>
+<div class="card"><div class="mono mut lbl">Uptime</div><div class="stat-v">{{.Uptime}}s</div><div class="mut mono sub">{{.ProviderCount}} providers · {{.TierCount}} tiers</div></div>
 </div>
 
 <h2>Providers</h2>
 <table class="mono"><tr><th>Tier</th><th>Provider</th><th>Kind</th><th>Models</th><th>Key</th></tr>
-{{range .Tiers}}{{ $tier := .Name }}{{range .Providers}}<tr><td>{{$tier}}</td><td>{{.Name}}</td><td>{{.Kind}}</td><td style="max-width:260px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">{{join .Models ", "}}</td><td>{{.APIKeyEnv}} {{if index $.KeysPresent .APIKeyEnv}}<span style="color:#4ade80">● set</span>{{else}}<span style="color:var(--acc)">○ missing</span>{{end}}</td></tr>{{end}}{{end}}
+{{range .Tiers}}{{ $tier := .Name }}{{range .Providers}}<tr><td>{{$tier}}</td><td>{{.Name}}</td><td>{{.Kind}}</td><td style="max-width:260px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">{{join .Models ", "}}</td><td>{{.APIKeyEnv}} {{if index $.KeysPresent .APIKeyEnv}}<span class="dot-ok">● set</span>{{else}}<span class="dot-miss">○ missing</span>{{end}}</td></tr>{{end}}{{end}}
 </table>
 {{if not .Tiers}}<p class="mut">No providers configured yet — add one below or edit the JSON.</p>{{end}}
 
 <h2>Set API key</h2>
 <div class="card"><div class="kv"><div><label>Env var (e.g. OPENCODE_GO_API_KEY)</label><input id="envKey" placeholder="OPENCODE_GO_API_KEY"></div><div><label>Value</label><input id="envVal" type="password" placeholder="sk-..."></div></div>
-<div style="margin-top:10px;display:flex;gap:8px;align-items:center"><button class="btn" onclick="setKey()">Save key</button><span id="keyMsg" class="mono mut" style="font-size:.82rem"></span></div>
-<p class="mut mono" style="font-size:.78rem;margin-top:8px">Saved to <span class="mono">{{.EnvPath}}</span> (0600). Takes effect immediately.</p></div>
+<div style="margin-top:10px;display:flex;gap:8px;align-items:center"><button class="btn" onclick="setKey()">Save key</button><span id="keyMsg" class="mono mut" style="font-size:.85rem"></span></div>
+<p class="mut mono" style="font-size:.85rem;margin-top:8px">Saved to <span class="mono">{{.EnvPath}}</span> (0600). Takes effect immediately.</p></div>
 
 <h2>Configuration (JSON)</h2>
-<p class="mut" style="font-size:.85rem">Edit and save — the gateway validates before writing. Invalid JSON is rejected and the previous config is kept.</p>
+<p class="mut" style="font-size:1rem">Edit and save — the gateway validates before writing. Invalid JSON is rejected and the previous config is kept.</p>
 <textarea id="cfg" spellcheck="false">{{.ConfigJSON}}</textarea>
-<div style="margin-top:10px;display:flex;gap:8px;align-items:center"><button class="btn" onclick="saveCfg()">Save config</button><span id="cfgMsg" class="mono" style="font-size:.82rem"></span></div>
+<div style="margin-top:10px;display:flex;gap:8px;align-items:center"><button class="btn" onclick="saveCfg()">Save config</button><span id="cfgMsg" class="mono" style="font-size:.85rem"></span></div>
 
 <h2>Tips</h2>
-<ul class="mut" style="font-size:.9rem;line-height:1.6">
+<ul class="mut" style="font-size:1rem;line-height:1.6">
 <li>Point any agent at <span class="mono">http://{{.Listen}}</span> via <span class="mono">OPENAI_BASE_URL</span> / <span class="mono">ANTHROPIC_BASE_URL</span>.</li>
 <li>Run <span class="mono">routre check</span> to validate keys, <span class="mono">routre list</span> for the token ledger.</li>
 <li>RAM impact of this page: ~0 at idle, &lt;2 MiB after use — see <a href="https://github.com/mariobgsp/routre#benchmarks">Benchmarks</a>.</li>
