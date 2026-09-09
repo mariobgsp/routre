@@ -94,6 +94,11 @@ type runnerResult struct {
 	Response *Response
 	TryLog   []failures.Outcome
 	OK       bool
+	// Emitted is true when the runner stopped because a streaming attempt
+	// already committed bytes to the client (mid-stream abort / committed
+	// non-retryable failure). The caller must not render an all-failed
+	// response on top of the committed output.
+	Emitted  bool
 	Phases   *Phases
 }
 
@@ -123,7 +128,7 @@ func (r *candidateRunner) Run(ctx context.Context, cands []router.Candidate, eva
 			// committed bytes (Err != nil, Emitted == true). In both
 			// cases we must not failover.
 			if res.OK {
-				return runnerResult{OK: res.Err == nil, Response: res.Response, TryLog: tryLog, Phases: res.Phases}
+				return runnerResult{OK: res.Err == nil, Emitted: res.Emitted, Response: res.Response, TryLog: tryLog, Phases: res.Phases}
 			}
 			// Once a streaming eval emitted bytes, failover would
 			// duplicate output. Stop trying immediately. The current
