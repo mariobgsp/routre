@@ -98,8 +98,8 @@ type runnerResult struct {
 	// already committed bytes to the client (mid-stream abort / committed
 	// non-retryable failure). The caller must not render an all-failed
 	// response on top of the committed output.
-	Emitted  bool
-	Phases   *Phases
+	Emitted bool
+	Phases  *Phases
 }
 
 // Run iterates over cands, invoking eval once per attempt per candidate.
