@@ -12,6 +12,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 > (2026-08-25). Sections marked `legacy` use the pre-rebrand
 > routre-cli numbering and are kept for history only.
 
+## [0.4.9] — 2026-09-09
+
+### Fixed
+
+- **Retry storms on unserved models** (`internal/router/router.go`, `internal/router/router_test.go`, `internal/router/retry_storm_test.go`) — a model no provider serves (e.g. `muse-spark-1.3-contributor-free`, whitelisted on `opencode-zen` in `config.all.json` since 0.4.7) caused 3 providers × 3 attempts of hard rejections. Root cause: a 401 whose body names an unknown model ("…not supported", `unsupported_model`) stayed `ErrAuth` (retryable), so the auth-refresh/retry cascade replayed on every candidate. `ClassifyStatusBody` now refines model-unknown bodies (on 400/401/404) to `ErrClient`, and `ErrCredits` is deterministic — fail over once, no same-candidate retry. The runner fails over once per provider and the all-client reshape surfaces a terminal `404 model_not_found` after a single clean pass. No config change required.
+- **Superfluous WriteHeader over committed streams** (`internal/proxy/chat.go`, `internal/proxy/pipeline.go`, `internal/proxy/runner.go`) — a mid-stream abort (bytes already committed to the client) could still trigger the all-failed `503` render, and `streamRelay` committed the `200` eagerly before the first body byte, so a pre-first-byte failover ended in a `503` over an already-committed `200`. `runnerResult` now carries `Emitted` (the stream path skips the all-failed render once output is committed) and the relay commits its status lazily on the first body byte. Normal stream path is wire-identical.
+
 ## [0.4.8] — 2026-09-06
 
 ### Changed

@@ -131,11 +131,22 @@ func ClassifyStatus(status int) ErrClass {
 
 // ClassifyStatusBody maps an HTTP status plus a response body to a class,
 // refining 401s that are actually billing failures (opencode-zen returns
-// 401 CreditsError when the account balance is exhausted) and 5xx/429
-// that are actually transient "overloaded" responses (Anthropic 529 with
-// overloaded_error, OpenAI "model is currently overloaded", etc.).
+// 401 CreditsError when the account balance is exhausted), 401s/403s that
+// actually say the MODEL is unknown (an auth-shaped status for a
+// model-level problem), and 5xx/429 that are actually transient
+// "overloaded" responses (Anthropic 529 with overloaded_error, OpenAI
+// "model is currently overloaded", etc.).
 func ClassifyStatusBody(status int, body []byte) ErrClass {
 	c := ClassifyStatus(status)
+	if (c == ErrAuth || c == ErrCredits) && bodySaysModelUnknown(body) {
+		// The rejection is about the model ("does not exist", "not a
+		// valid model"), not the key or the balance: no credential
+		// refresh or same-cand retry can make an unserved model work.
+		// ErrClient makes the runner fail over without the auth
+		// machinery and lets the all-client reshape surface a terminal
+		// model_not_found (404) instead of a retryable-looking 502/503.
+		return ErrClient
+	}
 	if c == ErrAuth && bodyHasCredits(body) {
 		return ErrCredits
 	}
@@ -153,6 +164,42 @@ func ClassifyStatusBody(status int, body []byte) ErrClass {
 func bodyHasCredits(body []byte) bool {
 	low := strings.ToLower(string(body))
 	return strings.Contains(low, "credit") || strings.Contains(low, "insufficient balance") || strings.Contains(low, "balance")
+}
+
+// modelUnknownPhrases are high-precision markers that an error body is
+// rejecting the MODEL (unknown / unsupported / invalid / nonexistent), not
+// the key or the balance. Deliberately narrow: an auth body that merely
+// mentions "model" in passing never matches. Evaluated on 401/403/402 only.
+var modelUnknownPhrases = []string{
+	"not exist", // DeepSeek "Model Not Exist", OpenAI "does not exist", Spark, iFlytek
+	"model not found",
+	"model not_found",
+	"model_not_found",
+	"not a valid model",
+	"invalid model",
+	"unknown model",
+	"model not supported",
+	"model is not supported",
+	"is not supported", // "Model <name> is not supported" (name between words); covers opencode-zen 401
+	"model not available",
+	"does not support model",
+	"no endpoints found for the model",
+}
+
+// bodySaysModelUnknown reports whether an error body names an unknown or
+// unsupported model. Substring match is bounded to the first 4KiB (error
+// bodies are already capped upstream at maxUpstreamError).
+func bodySaysModelUnknown(body []byte) bool {
+	if len(body) > 4096 {
+		body = body[:4096]
+	}
+	low := strings.ToLower(string(body))
+	for _, p := range modelUnknownPhrases {
+		if strings.Contains(low, p) {
+			return true
+		}
+	}
+	return false
 }
 
 // bodyHasOverloaded reports whether an error body describes a transient

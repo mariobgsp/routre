@@ -485,7 +485,12 @@ func (h *Handlers) streamRelay(w http.ResponseWriter, resp *http.Response, from,
 		}
 	}
 	w.Header().Set("X-Llrouter-Streaming", "true")
-	w.WriteHeader(resp.StatusCode)
+	// Commit the status lazily, on the first body byte, instead of eagerly:
+	// a 2xx upstream stream that dies before its first byte is documented as
+	// retryable/failover-able, and only genuinely is while no header has
+	// reached the client. Committing 200 up front made the final all-failed
+	// 503 a superfluous WriteHeader over an already-committed 200.
+	cap.pending = resp.StatusCode
 
 	flusher, _ := w.(http.Flusher)
 
@@ -569,12 +574,23 @@ var syntheticFinishChunk = []byte(`data: {"object":"chat.completion.chunk","choi
 // relay's flusher lookup keeps working through the wrapper.
 type captureWriter struct {
 	http.ResponseWriter
-	buf    []byte
-	max    int
-	failed bool
+	buf     []byte
+	max     int
+	failed  bool
+	pending int // status to commit on first write/flush (0 = none)
+}
+
+// commit sends the deferred WriteHeader exactly once, before the first body
+// byte (or flush) reaches the client.
+func (c *captureWriter) commit() {
+	if c.pending != 0 {
+		c.ResponseWriter.WriteHeader(c.pending)
+		c.pending = 0
+	}
 }
 
 func (c *captureWriter) Write(p []byte) (int, error) {
+	c.commit()
 	n, err := c.ResponseWriter.Write(p)
 	if err != nil {
 		c.failed = true // client gone: never cache a truncated stream
@@ -591,6 +607,7 @@ func (c *captureWriter) Write(p []byte) (int, error) {
 }
 
 func (c *captureWriter) Flush() {
+	c.commit()
 	if f, ok := c.ResponseWriter.(http.Flusher); ok {
 		f.Flush()
 	}

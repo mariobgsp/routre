@@ -165,7 +165,12 @@ func (p *Pipeline) Stream(ctx context.Context, req Request, w http.ResponseWrite
 	result := runner.Run(ctx, cands, func(ctx context.Context, cand router.Candidate, attempt int) evalResult {
 		return p.streamEval(ctx, cand, attempt, w, header, api, requested, body, processed, client, rtkSaved, clientFmt)
 	})
-	if result.OK {
+	if result.OK || result.Emitted {
+		// OK: a candidate succeeded. Emitted: the runner stopped because a
+		// streaming attempt already committed bytes (mid-stream abort) —
+		// rendering a 503 all_failed here would be a superfluous
+		// WriteHeader over the committed response (and append error JSON
+		// to the client's partial stream).
 		return nil
 	}
 	allOverloaded := len(result.TryLog) > 0
@@ -273,6 +278,16 @@ func (p *Pipeline) streamEval(ctx context.Context, cand router.Candidate, _ int,
 	if class == router.ErrAuth {
 		// Auth-refresh-and-retry: the runner will call refreshFn
 		// on ErrAuth and re-invoke eval.
+		return evalResult{Err: fmt.Errorf("provider %s: status %d (%v)", cand.Provider.Provider.Name, status, class), Class: class, Retryable: false}
+	}
+	if class == router.ErrCredits {
+		// A billing rejection is deterministic: the balance does not
+		// heal in 500ms, so a same-cand retry just burns a second full
+		// wall-clock attempt. Fail over to the next candidate once.
+		// ReportFailure is a cooldown no-op for ErrCredits (the
+		// provider may still serve free variants).
+		p.metrics.Failure(cand.Provider.Provider.Name, class.String())
+		p.router.ReportFailureWithBackoff(cand.Provider, class, retryAfter)
 		return evalResult{Err: fmt.Errorf("provider %s: status %d (%v)", cand.Provider.Provider.Name, status, class), Class: class, Retryable: false}
 	}
 	if !router.IsRetryableClass(class) {
@@ -471,15 +486,21 @@ func (p *Pipeline) processInternal(ctx context.Context, req Request) (Response, 
 		// provider doesn't serve this model), the user should see a
 		// 404 model_not_found, not a 503 outage. If every candidate
 		// returned 401/403, the user should see a 502 (their keys are
-		// bad for this model), not a 503. Only the mixed / server-side
-		// case stays as 503.
-		allClient, allAuth := true, true
+		// bad for this model), not a 503. If every candidate hit a
+		// billing rejection, the user should see a terminal 402
+		// (credits exhausted) rather than a retryable-looking 503 that
+		// makes clients retry the same losing round. Only the mixed /
+		// server-side case stays as 503.
+		allClient, allAuth, allCredits := true, true, true
 		for _, e := range tryLog {
 			if e.Class != router.ErrClient.String() {
 				allClient = false
 			}
 			if e.Class != router.ErrAuth.String() {
 				allAuth = false
+			}
+			if e.Class != router.ErrCredits.String() {
+				allCredits = false
 			}
 		}
 		switch {
@@ -496,6 +517,14 @@ func (p *Pipeline) processInternal(ctx context.Context, req Request) (Response, 
 			body := []byte(fmt.Sprintf(`{"error":{"message":"all configured providers rejected the request (auth). check API keys and model access.","type":"all_providers_unauthorized","model":%q,"attempts":%s}}`,
 				requested, mustJSON(tryLog)))
 			return Response{StatusCode: 502, Body: body, Header: http.Header{"Content-Type": []string{"application/json"}}, Provider: tryLog[0].Provider}, nil
+		case allCredits && len(tryLog) > 0:
+			// Every provider reported a billing rejection (401
+			// CreditsError / 402): the balance is exhausted on all of
+			// them. 402 is terminal — the client must top up or pick
+			// another account, not retry.
+			body := []byte(fmt.Sprintf(`{"error":{"message":"all configured providers rejected the request (insufficient credits). top up the account or use a model the provider serves for free.","type":"all_providers_insufficient_credits","model":%q,"attempts":%s}}`,
+				requested, mustJSON(tryLog)))
+			return Response{StatusCode: 402, Body: body, Header: http.Header{"Content-Type": []string{"application/json"}}, Provider: tryLog[0].Provider}, nil
 		}
 		// Mixed classes (some 5xx, some 4xx, some auth) — genuine
 		// outage. Surface as 503 with the per-provider breakdown.
@@ -604,6 +633,16 @@ func (p *Pipeline) tryEval(ctx context.Context, cand router.Candidate, req Reque
 	if class == router.ErrAuth {
 		// Auth-refresh-and-retry: runner calls refreshFn on
 		// ErrAuth and re-invokes eval.
+		return evalResult{Err: fmt.Errorf("provider %s: status %d (%v)", cand.Provider.Provider.Name, status, class), Class: class, Retryable: false}
+	}
+	if class == router.ErrCredits {
+		// A billing rejection is deterministic: the balance does not
+		// heal in 500ms, so a same-cand retry just burns a second full
+		// wall-clock attempt. Fail over to the next candidate once.
+		// ReportFailure is a cooldown no-op for ErrCredits (the
+		// provider may still serve free variants).
+		p.metrics.Failure(cand.Provider.Provider.Name, class.String())
+		p.router.ReportFailureWithBackoff(cand.Provider, class, retryAfter)
 		return evalResult{Err: fmt.Errorf("provider %s: status %d (%v)", cand.Provider.Provider.Name, status, class), Class: class, Retryable: false}
 	}
 	if !router.IsRetryableClass(class) {

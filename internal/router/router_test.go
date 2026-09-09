@@ -364,6 +364,38 @@ func TestClassifyStatusBodyCredits(t *testing.T) {
 	}
 }
 
+// TestClassifyStatusBodyModelUnknown: an auth-shaped status (401/403/402)
+// whose body rejects the MODEL (not the key, not the balance) must classify
+// as ErrClient — the retry-storm guard. Refreshing credentials or retrying
+// the same candidate can never make an unserved model work; ErrClient makes
+// the runner fail over and lets the all-client reshape surface a terminal
+// model_not_found instead of a retryable-looking auth failure.
+func TestClassifyStatusBodyModelUnknown(t *testing.T) {
+	cases := []struct {
+		status int
+		body   string
+		want   ErrClass
+		desc   string
+	}{
+		{401, `{"error":{"message":"The model 'muse-spark-1.3-contributor-free' does not exist or you do not have access to it."}}`, ErrClient, "OpenAI-style 401 quoting a nonexistent model"},
+		{403, `{"error":{"type":"ModelNotSupported","message":"model not supported"}}`, ErrClient, "Azure-style 403 model not supported"},
+		{401, `{"error":{"type":"CreditsError","message":"model not exist on this account"}}`, ErrClient, "credits-flavored body naming a nonexistent model"},
+		{402, `{"error":{"message":"not a valid model for this endpoint"}}`, ErrClient, "402 invalid model"},
+		{400, `{"error":{"type":"invalid_request_error","message":"The model does not exist"}}`, ErrClient, "400 model does not exist (already client)"},
+		// Guards: auth/credits bodies that do NOT name the model must not
+		// be swept into ErrClient.
+		{401, `{"type":"error","error":{"type":"CreditsError","message":"Insufficient balance"}}`, ErrCredits, "plain credits 401 stays ErrCredits"},
+		{401, `{"error":"bad key"}`, ErrAuth, "plain auth 401 stays ErrAuth"},
+		{401, `{"error":{"message":"account not found"}}`, ErrAuth, "auth body mentioning a missing account stays ErrAuth"},
+	}
+	for _, c := range cases {
+		got := ClassifyStatusBody(c.status, []byte(c.body))
+		if got != c.want {
+			t.Errorf("%s: status=%d body=%q: got %v, want %v", c.desc, c.status, c.body, got, c.want)
+		}
+	}
+}
+
 // TestClassifyStatusBodyOverloaded: 5xx/429 with an overloaded-shaped
 // body must classify as ErrOverloaded so the cooldown policy doesn't
 // lock the provider out for minutes on a single blip. Plain 5xx
