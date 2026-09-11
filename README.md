@@ -24,9 +24,15 @@ routre models sync        # pull new provider models into config.json
 Point any agent at `http://127.0.0.1:20128` via `OPENAI_BASE_URL` /
 `ANTHROPIC_BASE_URL` — failover, compression, and caching come for free.
 
-### Latest (v0.4.10 — 2026-09-11)
+### Latest (v0.4.11 — 2026-09-11)
 
-- **Plain-English readability pass, no behavior change** — README opens with an "In plain English" intro and collapses heavy internals into expandable sections; `/ui` dashboard copy rewritten for non-programmers; architecture diagram carries a "For everyone" guide. See [CHANGELOG.md](CHANGELOG.md).
+- **README rendering fix** — an unclosed `<details>` had collapsed the whole README and all three diagrams into one raw-HTML block. Fixed, and the How-it-works content is visible again (summaries kept as lead-ins). See [CHANGELOG.md](CHANGELOG.md).
+
+<details><summary>Previous — v0.4.10</summary>
+
+- **Plain-English readability pass, no behavior change** — "In plain English" intro, rewritten `/ui` dashboard copy, architecture diagram guide. See [CHANGELOG.md](CHANGELOG.md).
+
+</details>
 
 <details><summary>Previous — v0.4.8</summary>
 
