@@ -12,6 +12,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 > (2026-08-25). Sections marked `legacy` use the pre-rebrand
 > routre-cli numbering and are kept for history only.
 
+## [0.4.10] — 2026-09-11
+
+### Changed
+
+- **Plain-English readability pass, no behavior change** (`README.md`, `internal/proxy/ui.go`, `docs/architecture.puml/png`) — README opens with an "In plain English" 3-bullet intro plus a one-line request-flow sketch, and all 7 heavy internals sections are collapsed into `<details>` with short summaries (anchors intact, nothing deleted). The `/ui` dashboard copy is rewritten for non-programmers (Token saver / Memory / Status cards, numbered Steps 2–3, "What to do next" tips) and the inline blob is deepened into `uiCSS`/`uiHTML`/`uiJS` consts with dead CSS vars dropped. `isNativeResponsesBase` is now a one-line wrapper over `isNativeResponses` (single source of truth). Architecture diagram carries a "For everyone" 4-step guide box; PNG regenerated.
+
 ## [0.4.9] — 2026-09-09
 
 ### Fixed
