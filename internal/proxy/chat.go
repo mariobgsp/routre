@@ -41,8 +41,8 @@ const attemptTimeout = 30 * time.Second
 // per-phase histogram (latency survey #13) shows the real p99.
 const firstByteTimeout = 30 * time.Second
 
-// firstByteBody wraps a streaming response body so the relay's first
-// successful Read signals `firstByte`, cancelling the firstByteTimeout
+// firstByteBody is a first-byte signal wrapper: the relay's first
+// successful Read closes `firstByte`, cancelling the firstByteTimeout
 // timer in relayStream. After the first byte, reads pass through
 // unchanged; the relay runs unbounded for the rest of the stream. If
 // the timer fires first, relayStream closes the body, in-flight Reads
@@ -336,7 +336,9 @@ func (h *Handlers) buildUpstreamRequest(ctx context.Context, baseURL, kind, path
 // router.StreamAborted() after the first byte. from is the client's dialect,
 // used for cross-kind streaming translation. retryAfter is the parsed
 // upstream Retry-After delay (0 when absent) on a non-2xx response.
-func isNativeResponsesBase(baseURL string) bool { return strings.Contains(baseURL, "opencode.ai") }
+// isNativeResponsesBase is the legacy name for isNativeResponses (pipeline.go).
+// Single source of truth lives in isNativeResponses — this wrapper keeps old call sites readable.
+func isNativeResponsesBase(baseURL string) bool { return isNativeResponses(baseURL) }
 
 var (
 	opencodeSessID   string

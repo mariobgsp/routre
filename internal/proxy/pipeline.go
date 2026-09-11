@@ -306,6 +306,8 @@ func (p *Pipeline) streamEval(ctx context.Context, cand router.Candidate, _ int,
 // prompt-cache injection. Pulled out of the per-attempt evals so
 // streaming and non-streaming share the same per-cand prep.
 // isNativeResponses reports whether an upstream speaks /v1/responses natively.
+// New name; isNativeResponsesBase in chat.go is the legacy duplicate of this
+// same strings.Contains(baseURL, "opencode.ai") heuristic — keep in sync.
 // opencode.ai/zen does; openrouter/others don't. ponytail: heuristic on baseURL.
 func isNativeResponses(baseURL string) bool { return strings.Contains(baseURL, "opencode.ai") }
 

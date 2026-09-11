@@ -1,4 +1,8 @@
 @startuml routre-arch
+' Plain-English reading guide (for everyone):
+' Your app talks to ONE address (routre on your computer).
+' routre picks a healthy provider, shrinks waste, remembers repeats.
+' If a provider fails, it tries the next — you just get the answer.
 !pragma layout smetana
 !theme plain
 skinparam backgroundColor #FFFFFF
@@ -28,7 +32,15 @@ skinparam nodesep 55
 skinparam ranksep 75
 skinparam linetype ortho
 
-title routre — LLM API Gateway (OpenAI / Anthropic / Gemini) — System Overview
+title routre — One address, every provider (System Overview)
+
+note as PlainEnglish
+  **For everyone:**
+  1 app address -> routre picks healthy provider
+  2 shrinks repeat tool text (saves cost)
+  3 remembers identical answers (cache)
+  4 auto-retries next provider on failure
+end note
 
 left to right direction
 
