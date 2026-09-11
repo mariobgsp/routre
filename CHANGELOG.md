@@ -12,6 +12,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 > (2026-08-25). Sections marked `legacy` use the pre-rebrand
 > routre-cli numbering and are kept for history only.
 
+## [0.4.11] — 2026-09-11
+
+### Fixed
+
+- **README rendered as one collapsed block** (`README.md`) — the v0.4.8 changelog entry opened a `<details>` that was never closed (4 opens / 3 closes), so GitHub swallowed every following line and the whole README plus all three diagrams rendered as a single collapsed raw-HTML block. Closing tag added; the 7 `click to expand` wrappers around the How-it-works content are gone too, so the plain-English summaries now sit above **visible** content instead of hiding it. No documentation content was removed (0 original lines lost).
+
 ## [0.4.10] — 2026-09-11
 
 ### Changed
