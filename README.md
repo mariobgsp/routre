@@ -1,5 +1,15 @@
 # routre
 
+> **In plain English:** routre is a tiny helper on your computer that sits between your AI apps and AI providers.
+>
+> - **Saves money** — shrinks repetitive tool output before it is billed (≥90% on tool-heavy traffic).
+> - **Stays online** — if one provider is busy or down, it automatically tries the next one.
+> - **Easy to use** — set it up once with `routre setup`, or open the settings page below with no terminal needed.
+>
+> ```text
+> Your app → routre (one address) → cheapest healthy provider → answer back
+> ```
+
 The 10-MB gateway you forget is running. One static binary (~10 MiB, ~10 MiB RAM idle, bench-gated ≥90% tool-token savings) that gives every OpenAI/Anthropic-compatible CLI — opencode, Claude Code, Codex, Cursor, … — automatic provider failover, RTK token compression (≥90% on tool-heavy traffic), response caching, and a per-agent token/cost ledger. A localhost dashboard at `http://127.0.0.1:20128/ui` lets non-programmers configure it without editing JSON.
 
 ```bash
@@ -14,7 +24,11 @@ routre models sync        # pull new provider models into config.json
 Point any agent at `http://127.0.0.1:20128` via `OPENAI_BASE_URL` /
 `ANTHROPIC_BASE_URL` — failover, compression, and caching come for free.
 
-### Latest (v0.4.8 — 2026-09-06)
+### Latest (v0.4.10 — 2026-09-11)
+
+- **Plain-English readability pass, no behavior change** — README opens with an "In plain English" intro and collapses heavy internals into expandable sections; `/ui` dashboard copy rewritten for non-programmers; architecture diagram carries a "For everyone" guide. See [CHANGELOG.md](CHANGELOG.md).
+
+<details><summary>Previous — v0.4.8</summary>
 
 - **Opencode session header** — every request to `opencode.ai` now carries `x-opencode-session` (forwarded when the client sends it, else a stable gateway-generated ID). Prevents the `09/06` `missing x-opencode-session` error for `Go HTTP client` / `curl` user-agents. Applied to relay + `doctor`/`probe`.
 - Native Responses passthrough and agent guide (v0.4.3) still included — see below.
@@ -252,6 +266,10 @@ opencode run --model <provider>/<model> "hello"
 
 *Sources: [`docs/architecture.puml`](docs/architecture.puml) · rendered with PlantUML `smetana` (no Graphviz). All three diagrams are versioned as `.puml` + `.png` in [`docs/`](docs/).*
 
+> Pipeline in one breath: detect format → compress tool output (RTK) → cache lookup → tiered route → retry/refresh → translate dialect → relay. Details live in [`docs/SPEC.md`](docs/SPEC.md); start with Quick start above and come back when you need internals.
+
+<details><summary>Step-by-step table (7 steps) — click to expand</summary>
+
 <!-- markdownlint-disable MD060 -->
 | Step | What happens | Where in code |
 |------|--------------|---------------|
@@ -264,6 +282,8 @@ opencode run --model <provider>/<model> "hello"
 | **7 — Relay** | `http.Transport` tuned (MaxConns 64, H2, `firstByteTimeout 30s` kills p99 stalls) | `internal/proxy/` |
 <!-- markdownlint-enable MD060 -->
 
+</details>
+
 > **Observability** (left out of the hot path): per-phase `dial_ms / headers_ms / ttfb_ms / total_ms` → JSONL, `GET /metrics` (Prometheus), `routre doctor` + `probe`. **Footprint**: 10.6 MiB binary, ~10 MiB idle RSS, ~11 ms overhead (see *Benchmarks*).
 
 ---
@@ -274,6 +294,10 @@ opencode run --model <provider>/<model> "hello"
 
 *Source: [`docs/request-lifecycle.puml`](docs/request-lifecycle.puml)*
 
+> Per request: ingest → RTK compress → cache lookup (hit replays immediately) → tiered candidates → failover loop (retry once, refresh auth once, honor `Retry-After`) → honest error if all fail. Full policy in [`docs/SPEC.md`](docs/SPEC.md).
+
+<details><summary>Full request lifecycle walkthrough — click to expand</summary>
+
 **Read it left → right, top → bottom:**
 
 1. **Ingest & compress** — body → format detect → RTK (strictly never grows).
@@ -281,6 +305,8 @@ opencode run --model <provider>/<model> "hello"
 3. **Candidate selection** — `Router.CandidatesWithFallbacks(model)` respects tiers, cooldowns, and `forward_unknown` (unknown model tries every tier).
 4. **Failover loop** — for each candidate: try → on `401/403` refresh `routre.env` key and retry once → on `5xx`/network retry once after 500 ms → on `429` with `Retry-After` set cooldown floor → on `400/404/422` surface immediately → on `200` capture SSE frames with in-flight dialect translation and flush. Once first byte is emitted, failover is *disabled* (no duplicated output); mid-stream aborts are never cached.
 5. **All-failed → honest error** — `model_not_found` (no provider can serve) vs `providers_unavailable` (every capable provider cooling, `Retry-After` tells you to wait) vs `all_providers_failed` with full `attempts[]` the same shape `doctor` shows.
+
+</details>
 
 ---
 
@@ -290,15 +316,25 @@ opencode run --model <provider>/<model> "hello"
 
 *Source: [`docs/cache-rtk-routing.puml`](docs/cache-rtk-routing.puml)*
 
+> Internals in one breath: RTK's 12 filters shrink `tool_result` bodies (fail-open, never grows); the cache keys SHA-256 of canonical post-RTK JSON (streaming/JSON never cross); the router walks tiers with per-provider `2s→30m` cooldowns. Deep dive in [`docs/SPEC.md`](docs/SPEC.md).
+
+<details><summary>Full cache / RTK / routing internals — click to expand</summary>
+
 **Left — RTK (12 filters):** autodetect `tool_result` kind → matched filter (git-diff 10 lines/hunk + 80/30 head/tail, git-log 50/15, grep 80/40, dedup for tree/ls/find, build-output 50/25, smart-truncate head 120/tail 60) → fail-open guard. Bench-gated: `routre bench` fails the build if aggregate <90% or worst payload <90% (measured 91.5% / 90.3%).
 
 **Middle — Cache:** canonical JSON (sorted keys, stable numbers) → SHA-256 hex key → `prefix_order` moves system prompt first for stable upstream prompt-cache → `GetWithReason` classifies misses (`disabled`/`absent`/`expired`/`shape_mismatch` → `/v1/status` + Prometheus) → streaming replay is byte-identical & shape-aware (SSE entry never served to JSON request) → billing-accurate hit (credits stored `promptTokens`, not length estimate) → LRU `16k entries / 7d / 128 MiB`, sliding TTL refreshes hot hits, 8 MiB/entry cap, abort never stored.
 
 **Right — Router & failover:** tiers in config order (`subscription → cheap → free`) → `forward_unknown` switch → per-provider exponential cooldown `2s → 30m` (isolated — one 503 never cools others) → `Retry-After` as floor → `candidateRunner` (transient retry + auth-refresh + Emitted guard) → background `GET {base}/models` every 6h + startup + `SIGHUP` (`routre models sync` persists to `config.json`).
 
+</details>
+
 ---
 
 ### Automatic failover
+
+> Tiers tried in order, per-provider `2s→30m` cooldowns, one transient retry + one auth-refresh before failover, `Retry-After` honored, streams fail over only before the first byte. Failover policy table in [`docs/SPEC.md`](docs/SPEC.md).
+
+<details><summary>Full failover rules — click to expand</summary>
 
 - Providers are configured in **tiers** (`subscription` → `cheap` → `free`)
   and tried in order; within a tier, providers are tried in order.
@@ -337,7 +373,13 @@ opencode run --model <provider>/<model> "hello"
   `routre.env`) and injects them upstream — a client's `Authorization`
   header is a placeholder and is never forwarded.
 
+</details>
+
 ### Keeping models current
+
+> Three layers, cheapest first: `forward_unknown` forwards unknown models verbatim; in-memory discovery refreshes every 6h; `routre models sync` persists to `config.json`. Details in [`docs/SPEC.md`](docs/SPEC.md).
+
+<details><summary>Full model-freshness layers — click to expand</summary>
 
 Three layers, cheapest first:
 
@@ -357,7 +399,13 @@ Three layers, cheapest first:
    17 */6 * * * ~/.local/bin/routre models sync -config ~/routre/config.json >> ~/.routre/models-sync.log 2>&1
    ```
 
+</details>
+
 ### RTK token compression (≥90% on tool-heavy traffic)
+
+> 12 heuristic filters shrink `tool_result` bodies ≥90% (bench-gated aggregate + worst-payload); fail-open, never grows, 500 B–10 MiB window. Filter table in [`docs/SPEC.md`](docs/SPEC.md).
+
+<details><summary>Full RTK filter table — click to expand</summary>
 
 Heuristic compression of `tool_result` content — no local LM, no network
 calls:
@@ -377,7 +425,13 @@ grows** a payload, 500 B–10 MiB window, per-request safe. The `bench`
 command measures reduction on 5 realistic tool-heavy payloads and gates
 **both the aggregate (91.5%) and the worst per-payload (90.3%)** at ≥90%.
 
+</details>
+
 ### Response cache
+
+> Exact-match LRU on SHA-256 of post-RTK JSON; streaming replays byte-identical SSE; hits credited at upstream-reported tokens. Tuning knobs in [`docs/SPEC.md`](docs/SPEC.md).
+
+<details><summary>Full cache behavior — click to expand</summary>
 
 - Exact-match LRU keyed by SHA-256 of the **processed** body (post-RTK).
   Defaults: 512 entries / 1 h TTL / 8 MiB max entry; the shipped
@@ -404,6 +458,8 @@ command measures reduction on 5 realistic tool-heavy payloads and gates
   **upstream-reported** prompt token count stored on the cached response,
   so the ledger matches the provider's billing numbers instead of
   length-based estimates.
+
+</details>
 
 ### Cross-kind streaming translation (OpenAI ↔ Anthropic)
 
