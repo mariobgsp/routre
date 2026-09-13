@@ -144,17 +144,17 @@ func TestStreamOutcomeEntryMapsRealStatus(t *testing.T) {
 		t.Fatalf("nil error must log 200/ok with stream=true, got %d/%s/%v", e.Status, e.Class, e.Stream)
 	}
 	// Deterministic upstream client error surfaced verbatim.
-	e := streamOutcomeEntry("cli", "m", &StreamWritten{Status: http.StatusBadRequest, Provider: "commandcode"})
+	e := streamOutcomeEntry("cli", "m", &streamWritten{Status: http.StatusBadRequest, Provider: "commandcode"})
 	if e.Status != http.StatusBadRequest || e.Class != "error" || e.Provider != "commandcode" || !e.Stream {
 		t.Fatalf("400 must log 400/error with the provider, got %d/%s/%s/%v", e.Status, e.Class, e.Provider, e.Stream)
 	}
 	// All-failed render.
-	e = streamOutcomeEntry("cli", "m", &StreamWritten{Status: http.StatusServiceUnavailable})
+	e = streamOutcomeEntry("cli", "m", &streamWritten{Status: http.StatusServiceUnavailable})
 	if e.Status != http.StatusServiceUnavailable || e.Class != "all_failed" {
 		t.Fatalf("503 must log 503/all_failed, got %d/%s", e.Status, e.Class)
 	}
 	// Internal-error fallback (502, no attempts recorded).
-	e = streamOutcomeEntry("cli", "m", &StreamWritten{Status: http.StatusBadGateway})
+	e = streamOutcomeEntry("cli", "m", &streamWritten{Status: http.StatusBadGateway})
 	if e.Status != http.StatusBadGateway || e.Class != "all_failed" {
 		t.Fatalf("502 must log 502/all_failed, got %d/%s", e.Status, e.Class)
 	}
@@ -167,12 +167,12 @@ func TestStreamOutcomeEntryMapsRealStatus(t *testing.T) {
 
 // TestStreamOutcomeEntryTypedNilMidStreamAbort is the regression test for the
 // panic the handler took on every mid-stream abort: Pipeline.Stream can hand
-// back a (*StreamWritten)(nil) wrapped in the error interface, and an
+// back a (*streamWritten)(nil) wrapped in the error interface, and an
 // unguarded `sw.Status` dereference inside streamOutcomeEntry crashed the
 // request goroutine (recovered by net/http, so only the log line was lost).
 // A typed-nil must map to the success shape, never be dereferenced.
 func TestStreamOutcomeEntryTypedNilMidStreamAbort(t *testing.T) {
-	var typedNil *StreamWritten
+	var typedNil *streamWritten
 	if typedNil != nil {
 		t.Fatal("precondition: the pointer must be nil")
 	}

@@ -66,18 +66,18 @@ func NewPipelineWithDeps(handlers *Handlers, cfg *config.Store, router *router.R
 	return &Pipeline{handlers: handlers, cfg: cfg, router: router, cache: cache, rtk: rtk, d: d, httpClient: httpClient, usage: usage, metrics: metrics, keys: keys, logger: logger}
 }
 
-// StreamWritten is returned by Pipeline.Stream when it has already
+// streamWritten is returned by Pipeline.Stream when it has already
 // written a non-2xx response to the client (the upstream's own status
 // surfaced verbatim, or the pipeline's all-failed render). The error
 // text is never rendered — once a status is on the wire a second body
 // would corrupt the response. Callers use Status/Provider to record the
 // outcome (reqlog, metrics) without writing anything.
-type StreamWritten struct {
+type streamWritten struct {
 	Status   int
 	Provider string
 }
 
-func (e *StreamWritten) Error() string {
+func (e *streamWritten) Error() string {
 	return fmt.Sprintf("stream response already written: status %d", e.Status)
 }
 
@@ -112,15 +112,35 @@ func writeUpstreamError(w http.ResponseWriter, status int, ct string, body []byt
 	if status < 400 {
 		status = http.StatusBadGateway
 	}
-	if ct == "" {
-		ct = "application/json"
-	}
 	if len(body) == 0 {
 		body = []byte(fmt.Sprintf(`{"error":{"message":"upstream returned HTTP %d","type":"upstream_error","model":%q}}`, status, model))
 	}
-	w.Header().Set("Content-Type", ct)
-	w.WriteHeader(status)
-	_, _ = w.Write(body)
+	writeStatus(w, status, body, ct)
+}
+
+// streamFinished reports whether a finished runner round already produced
+// the client's terminal response, and if so the error Stream should return
+// for it (nil when the response was a success or a mid-stream abort).
+// handled=false means the failure still needs rendering.
+//
+// Every consumer of a runnerResult must go through this. The all-overloaded
+// retry rounds reassign `result`, and checking only OK there let a retry
+// that had committed a deterministic 4xx (Written set, TryLog still empty)
+// fall through to the all-failed render — a second WriteHeader over the
+// committed 400 plus a reqlog status the client never received.
+func streamFinished(res runnerResult) (err error, handled bool) {
+	switch {
+	case res.OK:
+		return nil, true
+	case res.Emitted:
+		if res.Written == nil {
+			// Mid-stream abort: the client already has a partial 200.
+			return nil, true
+		}
+		return res.Written, true
+	default:
+		return nil, false
+	}
 }
 
 type Request struct {
@@ -209,10 +229,13 @@ func (p *Pipeline) Stream(ctx context.Context, req Request, w http.ResponseWrite
 		if retryAfter, served := p.router.MinCooldownForModel(requested, p.cfg.Get().ForwardUnknown); served {
 			failures.Render(w, failures.KindProvidersUnavailable, requested,
 				[]failures.Outcome{{Provider: "*", Cooldown: retryAfter}}, retryAfter)
-			return nil
+			// Report the status that reached the wire: returning nil here
+			// made route log a client-visible 503 as status=200 class="ok",
+			// so `routre logs -errors` never showed it.
+			return &streamWritten{Status: http.StatusServiceUnavailable}
 		}
 		failures.Render(w, failures.KindModelNotFound, requested, nil, 0)
-		return nil
+		return &streamWritten{Status: http.StatusServiceUnavailable}
 	}
 	// Per-cand retry + auth refresh + tryLog accumulation now flow
 	// through candidateRunner (internal/proxy/runner.go). The eval
@@ -222,26 +245,12 @@ func (p *Pipeline) Stream(ctx context.Context, req Request, w http.ResponseWrite
 	result := runner.Run(ctx, cands, func(ctx context.Context, cand router.Candidate, attempt int) evalResult {
 		return p.streamEval(ctx, cand, attempt, w, header, api, requested, body, processed, client, rtkSaved, clientFmt)
 	})
-	if result.OK {
-		// A candidate succeeded (bytes already written to w).
-		return nil
-	}
-	if result.Emitted {
-		// The runner stopped because a streaming attempt already
-		// committed a response: either a mid-stream abort (Written nil —
-		// the client has a partial 200) or a deterministic upstream
-		// error surfaced verbatim (Written set). Rendering a 503
-		// all_failed here would be a superfluous WriteHeader over the
-		// committed response. Report what reached the client instead of
-		// pretending the stream succeeded.
-		//
-		// Return a true nil when Written is nil: handing back a
-		// (*StreamWritten)(nil) wrapped in the error interface would make
-		// callers' `err != nil` checks fire on a mid-stream abort.
-		if result.Written == nil {
-			return nil
-		}
-		return result.Written
+	// Terminal check: a candidate succeeded (bytes written), the round
+	// committed a deterministic 4xx verbatim, or the stream aborted
+	// mid-flight (partial 200 — report a true nil, never a typed-nil
+	// *streamWritten, or callers' `err != nil` checks fire).
+	if err, done := streamFinished(result); done {
+		return err
 	}
 	allOverloaded := len(result.TryLog) > 0
 	for _, e := range result.TryLog {
@@ -256,9 +265,14 @@ func (p *Pipeline) Stream(ctx context.Context, req Request, w http.ResponseWrite
 		retry := runner.Run(ctx, cands, func(ctx context.Context, cand router.Candidate, attempt int) evalResult {
 			return p.streamEval(ctx, cand, attempt, w, header, api, requested, body, processed, client, rtkSaved, clientFmt)
 		})
-		if retry.OK {
-			return nil
+		// The retry round can itself commit a terminal response (a
+		// deterministic 4xx surfaced verbatim, or a mid-stream abort).
+		// It must be checked here — before the reassignment below — or the
+		// all-failed render writes a second status over the committed one.
+		if err, done := streamFinished(retry); done {
+			return err
 		}
+		result = retry
 		if len(retry.TryLog) > 0 {
 			stillOverloaded := true
 			for _, e := range retry.TryLog {
@@ -273,32 +287,29 @@ func (p *Pipeline) Stream(ctx context.Context, req Request, w http.ResponseWrite
 				retry2 := runner.Run(ctx, cands, func(ctx context.Context, cand router.Candidate, attempt int) evalResult {
 					return p.streamEval(ctx, cand, attempt, w, header, api, requested, body, processed, client, rtkSaved, clientFmt)
 				})
-				if retry2.OK {
-					return nil
+				if err, done := streamFinished(retry2); done {
+					return err
 				}
 				result = retry2
-			} else {
-				result = retry
 			}
-		} else {
-			result = retry
 		}
 	}
 	if len(result.TryLog) == 0 {
-		// Defensive: every terminal stream outcome either records an
-		// attempt or has already written its own response (handled
-		// above), so an all-failed render with an empty breakdown means
-		// an eval swallowed a failure. "all providers failed" with no
-		// attempts[] entry tells the client nothing and misattributes a
-		// routre bug to the upstreams — say what actually happened.
+		// Reaching here with no recorded attempt means the rounds above
+		// either recorded an attempt or were already handled by
+		// streamFinished (which returns before writing anything). Nothing
+		// has been committed to w at this point, so this write is safe —
+		// and an "all providers failed" body with an empty attempts[]
+		// would tell the client nothing while blaming the upstreams for a
+		// routre failure.
 		debugf("all-failed with empty tryLog for %q — no upstream attempt recorded", requested)
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusBadGateway)
 		_, _ = w.Write(emptyAttemptsBody(requested))
-		return &StreamWritten{Status: http.StatusBadGateway}
+		return &streamWritten{Status: http.StatusBadGateway}
 	}
 	failures.Render(w, failures.KindAllFailed, requested, result.TryLog, 5*time.Second)
-	return &StreamWritten{Status: http.StatusServiceUnavailable}
+	return &streamWritten{Status: http.StatusServiceUnavailable}
 }
 
 // streamEval is the per-attempt streaming eval passed to candidateRunner.
@@ -329,7 +340,18 @@ func (p *Pipeline) streamEval(ctx context.Context, cand router.Candidate, _ int,
 		class := router.Classify(rerr)
 		p.metrics.Failure(cand.Provider.Provider.Name, class.String())
 		if !router.IsRetryableClass(class) {
-			return evalResult{OK: true, Err: rerr, Class: class, Retryable: false, Emitted: true}
+			// Unreachable today: Classify produces only ErrStream (handled
+			// above), ErrTimeout and ErrNetwork (both retryable). Returning
+			// OK:true with nothing written would hand the client an empty
+			// 200 that reqlog logs as ok, so surface the transport error
+			// explicitly if a future class ever lands here.
+			writeStatus(w, http.StatusBadGateway,
+				[]byte(fmt.Sprintf(`{"error":{"message":%q,"type":"upstream_error","model":%q}}`, rerr.Error(), requested)),
+				"application/json")
+			return evalResult{
+				OK: true, Err: rerr, Class: class, Retryable: false, Emitted: true,
+				Written: &streamWritten{Status: http.StatusBadGateway, Provider: cand.Provider.Provider.Name},
+			}
 		}
 		p.router.ReportFailureWithBackoff(cand.Provider, class, retryAfter)
 		return evalResult{Err: rerr, Class: class, Retryable: true}
@@ -394,7 +416,7 @@ func (p *Pipeline) streamEval(ctx context.Context, cand router.Candidate, _ int,
 			Class:     class,
 			Retryable: false,
 			Emitted:   true,
-			Written:   &StreamWritten{Status: status, Provider: cand.Provider.Provider.Name},
+			Written:   &streamWritten{Status: status, Provider: cand.Provider.Provider.Name},
 		}
 	}
 	p.metrics.Failure(cand.Provider.Provider.Name, class.String())
