@@ -66,6 +66,63 @@ func NewPipelineWithDeps(handlers *Handlers, cfg *config.Store, router *router.R
 	return &Pipeline{handlers: handlers, cfg: cfg, router: router, cache: cache, rtk: rtk, d: d, httpClient: httpClient, usage: usage, metrics: metrics, keys: keys, logger: logger}
 }
 
+// StreamWritten is returned by Pipeline.Stream when it has already
+// written a non-2xx response to the client (the upstream's own status
+// surfaced verbatim, or the pipeline's all-failed render). The error
+// text is never rendered — once a status is on the wire a second body
+// would corrupt the response. Callers use Status/Provider to record the
+// outcome (reqlog, metrics) without writing anything.
+type StreamWritten struct {
+	Status   int
+	Provider string
+}
+
+func (e *StreamWritten) Error() string {
+	return fmt.Sprintf("stream response already written: status %d", e.Status)
+}
+
+// emptyAttemptsBody is the honest body for the unreachable "all
+// providers failed with no recorded attempt" state. The normal
+// all-failed body carries a per-provider attempts[] breakdown; reaching
+// the render with an empty breakdown means an eval swallowed a failure,
+// so blaming the upstreams would misattribute a routre bug. Name it.
+func emptyAttemptsBody(model string) []byte {
+	body, err := json.Marshal(map[string]any{
+		"error": map[string]any{
+			"message": fmt.Sprintf("routre recorded no upstream attempt for model %q (all-failed state is a routre bug, please report it)", model),
+			"type":    "internal_error",
+			"model":   model,
+		},
+	})
+	if err != nil {
+		// Cannot happen for strings; keep the wire shape valid if it ever does.
+		return []byte(`{"error":{"message":"routre internal error: no upstream attempt recorded","type":"internal_error"}}`)
+	}
+	return body
+}
+
+// writeUpstreamError surfaces a deterministic upstream failure to a
+// streaming client verbatim. The stream relay commits its status lazily
+// on the first body byte, so at the call site nothing has been written
+// yet and the upstream's real status (400/404/422) is still available.
+// Rendering "all providers failed" instead would hide an actionable
+// client error — an over-long prompt, an out-of-range max_tokens, a
+// parameter the model rejects — behind an unactionable 503.
+func writeUpstreamError(w http.ResponseWriter, status int, ct string, body []byte, model string) {
+	if status < 400 {
+		status = http.StatusBadGateway
+	}
+	if ct == "" {
+		ct = "application/json"
+	}
+	if len(body) == 0 {
+		body = []byte(fmt.Sprintf(`{"error":{"message":"upstream returned HTTP %d","type":"upstream_error","model":%q}}`, status, model))
+	}
+	w.Header().Set("Content-Type", ct)
+	w.WriteHeader(status)
+	_, _ = w.Write(body)
+}
+
 type Request struct {
 	Body   []byte
 	Path   string
@@ -165,13 +222,26 @@ func (p *Pipeline) Stream(ctx context.Context, req Request, w http.ResponseWrite
 	result := runner.Run(ctx, cands, func(ctx context.Context, cand router.Candidate, attempt int) evalResult {
 		return p.streamEval(ctx, cand, attempt, w, header, api, requested, body, processed, client, rtkSaved, clientFmt)
 	})
-	if result.OK || result.Emitted {
-		// OK: a candidate succeeded. Emitted: the runner stopped because a
-		// streaming attempt already committed bytes (mid-stream abort) —
-		// rendering a 503 all_failed here would be a superfluous
-		// WriteHeader over the committed response (and append error JSON
-		// to the client's partial stream).
+	if result.OK {
+		// A candidate succeeded (bytes already written to w).
 		return nil
+	}
+	if result.Emitted {
+		// The runner stopped because a streaming attempt already
+		// committed a response: either a mid-stream abort (Written nil —
+		// the client has a partial 200) or a deterministic upstream
+		// error surfaced verbatim (Written set). Rendering a 503
+		// all_failed here would be a superfluous WriteHeader over the
+		// committed response. Report what reached the client instead of
+		// pretending the stream succeeded.
+		//
+		// Return a true nil when Written is nil: handing back a
+		// (*StreamWritten)(nil) wrapped in the error interface would make
+		// callers' `err != nil` checks fire on a mid-stream abort.
+		if result.Written == nil {
+			return nil
+		}
+		return result.Written
 	}
 	allOverloaded := len(result.TryLog) > 0
 	for _, e := range result.TryLog {
@@ -214,8 +284,21 @@ func (p *Pipeline) Stream(ctx context.Context, req Request, w http.ResponseWrite
 			result = retry
 		}
 	}
+	if len(result.TryLog) == 0 {
+		// Defensive: every terminal stream outcome either records an
+		// attempt or has already written its own response (handled
+		// above), so an all-failed render with an empty breakdown means
+		// an eval swallowed a failure. "all providers failed" with no
+		// attempts[] entry tells the client nothing and misattributes a
+		// routre bug to the upstreams — say what actually happened.
+		debugf("all-failed with empty tryLog for %q — no upstream attempt recorded", requested)
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusBadGateway)
+		_, _ = w.Write(emptyAttemptsBody(requested))
+		return &StreamWritten{Status: http.StatusBadGateway}
+	}
 	failures.Render(w, failures.KindAllFailed, requested, result.TryLog, 5*time.Second)
-	return nil
+	return &StreamWritten{Status: http.StatusServiceUnavailable}
 }
 
 // streamEval is the per-attempt streaming eval passed to candidateRunner.
@@ -235,7 +318,7 @@ func (p *Pipeline) streamEval(ctx context.Context, cand router.Candidate, _ int,
 	streamCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
 	relayStart := time.Now()
-	status, errBody, _, retryAfter, susage, rerr := p.handlers.relay(streamCtx, w, cand.Provider.Provider.BaseURL, dummyReq, payload, true, kind, cand.Provider.Provider.APIKeyEnv, api, clientFmt)
+	status, errBody, ct, retryAfter, susage, rerr := p.handlers.relay(streamCtx, w, cand.Provider.Provider.BaseURL, dummyReq, payload, true, kind, cand.Provider.Provider.APIKeyEnv, api, clientFmt)
 	relayDur := time.Since(relayStart).Milliseconds()
 	p.lastPhases = &Phases{TotalMS: relayDur}
 	if rerr != nil {
@@ -294,7 +377,25 @@ func (p *Pipeline) streamEval(ctx context.Context, cand router.Candidate, _ int,
 		if cand.ShouldFailoverOnClientError() {
 			return evalResult{Err: fmt.Errorf("provider %s rejected model %q (HTTP %d)", cand.Provider.Provider.Name, cand.Upstream, status), Class: class, Retryable: false}
 		}
-		return evalResult{OK: true, Err: fmt.Errorf("provider %s: status %d (%v)", cand.Provider.Provider.Name, status, class), Class: class, Retryable: false, Emitted: false}
+		// Deterministic rejection from the listed provider for this
+		// model (over-long prompt, out-of-range max_tokens, unsupported
+		// parameter): no other candidate can serve it either. Nothing
+		// has been committed to the stream yet — the relay commits its
+		// status lazily on the first body byte — so surface the
+		// upstream's own status and body. Rendering the all-failed 503
+		// here is what turned commandcode's "maximum context length is
+		// 1048576 tokens" 400 into an unactionable
+		// "all providers failed" with an empty attempts[] array.
+		writeUpstreamError(w, status, ct, errBody, requested)
+		p.metrics.Failure(cand.Provider.Provider.Name, class.String())
+		return evalResult{
+			OK:        true,
+			Err:       fmt.Errorf("provider %s: status %d (%v)", cand.Provider.Provider.Name, status, class),
+			Class:     class,
+			Retryable: false,
+			Emitted:   true,
+			Written:   &StreamWritten{Status: status, Provider: cand.Provider.Provider.Name},
+		}
 	}
 	p.metrics.Failure(cand.Provider.Provider.Name, class.String())
 	p.router.ReportFailureWithBackoff(cand.Provider, class, retryAfter)
@@ -529,7 +630,14 @@ func (p *Pipeline) processInternal(ctx context.Context, req Request) (Response, 
 			return Response{StatusCode: 402, Body: body, Header: http.Header{"Content-Type": []string{"application/json"}}, Provider: tryLog[0].Provider}, nil
 		}
 		// Mixed classes (some 5xx, some 4xx, some auth) — genuine
-		// outage. Surface as 503 with the per-provider breakdown.
+		// outage. Surface as 503 with the per-provider breakdown. An
+		// empty breakdown is impossible here (every terminal outcome
+		// records an attempt); if it ever happens, report the internal
+		// bug instead of an unactionable "all providers failed".
+		if len(tryLog) == 0 {
+			debugf("all-failed with empty tryLog for %q — no upstream attempt recorded", requested)
+			return Response{StatusCode: http.StatusBadGateway, Body: emptyAttemptsBody(requested), ContentType: "application/json"}, nil
+		}
 		prov := ""
 		if len(tryLog) > 0 {
 			prov = tryLog[0].Provider

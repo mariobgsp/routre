@@ -162,10 +162,11 @@ func (h *Handlers) route(w http.ResponseWriter, r *http.Request, api apiFormat) 
 				logReq(reqlog.Entry{Client: client, Model: modelFromBody(body), Status: http.StatusOK, Class: "ok", Stream: true})
 				return
 			}
-			// Pipeline failed before any byte reached the client: it already
-			// wrote a 503 body to w. Log the request so reqlog shows the
-			// failure (previously the streaming 503 path was silent here).
-			logReq(reqlog.Entry{Client: client, Model: modelFromBody(body), Status: http.StatusServiceUnavailable, Class: "all_failed", Stream: true})
+			// Stream already wrote the response — either the all-failed
+			// 503 or the upstream's own 4xx surfaced verbatim. Never
+			// write again; just record the real status/class so reqlog
+			// and `routre logs -errors` show what the client got.
+			logReq(streamOutcomeEntry(client, modelFromBody(body), serr))
 			return
 		} else {
 			resp, perr := h.pipeline.Process(ctx, req)
@@ -221,6 +222,46 @@ func (h *Handlers) route(w http.ResponseWriter, r *http.Request, api apiFormat) 
 // isStreaming detects stream:true via dialect seam.
 func isStreaming(body []byte) bool {
 	return dialect.IsStreaming(body)
+}
+
+// streamOutcomeEntry maps a Pipeline.Stream error to its reqlog entry.
+// Stream returns *StreamWritten for every outcome it already put on the
+// wire (all-failed 503, or the upstream's own 4xx surfaced verbatim), so
+// the log carries the real status and class. Previously every terminal
+// stream outcome took the success branch and was logged as
+// status=200 class=ok, which is why 503 all_providers_failed responses
+// never appeared in reqlog.
+func streamOutcomeEntry(client, model string, err error) reqlog.Entry {
+	success := reqlog.Entry{Client: client, Model: model, Status: http.StatusOK, Class: "ok", Stream: true}
+	if err == nil {
+		// Success: Stream returned nil. Only reachable if a caller
+		// passes nil by mistake — report the success shape rather than
+		// inventing a failure.
+		return success
+	}
+	var sw *StreamWritten
+	if errors.As(err, &sw) {
+		if sw == nil {
+			// Typed-nil *StreamWritten = mid-stream abort: the client
+			// already has its partial 200 and the failure path wrote
+			// nothing. Dereferencing sw here panicked the handler on
+			// every client disconnect, so guard it explicitly.
+			return success
+		}
+		e := reqlog.Entry{Client: client, Model: model, Status: sw.Status, Provider: sw.Provider, Stream: true}
+		switch {
+		case sw.Status >= 500:
+			e.Class = "all_failed"
+		case sw.Status >= 400:
+			e.Class = "error"
+		default:
+			e.Class = "ok"
+		}
+		return e
+	}
+	// Unknown pre-write failure (unreachable today — Stream only returns
+	// nil or *StreamWritten): keep the conservative all-failed shape.
+	return reqlog.Entry{Client: client, Model: model, Status: http.StatusServiceUnavailable, Class: "all_failed", Stream: true}
 }
 
 // cacheKey is the exact-match key over the processed body (post-RTK,
