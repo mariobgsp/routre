@@ -41,6 +41,12 @@ type evalResult struct {
 	// output and a second attempt would duplicate it. Always false for
 	// non-streaming eval.
 	Emitted bool
+	// Written reports a non-2xx response a streaming eval has already
+	// committed to the client (e.g. a deterministic upstream 400
+	// surfaced verbatim). Set together with Emitted; the caller uses it
+	// to record the real status instead of assuming success, and must
+	// never write a second body.
+	Written *StreamWritten
 	// Phases is the per-attempt wall-clock breakdown. Streaming eval
 	// populates DialMS/HeadersMS/TTFBMS/TotalMS; non-streaming sets
 	// only TotalMS (the three earlier checkpoints all collapse into
@@ -99,6 +105,9 @@ type runnerResult struct {
 	// non-retryable failure). The caller must not render an all-failed
 	// response on top of the committed output.
 	Emitted bool
+	// Written carries the status of an already-committed non-2xx stream
+	// response (nil when nothing was written or the stream succeeded).
+	Written *StreamWritten
 	Phases  *Phases
 }
 
@@ -128,14 +137,14 @@ func (r *candidateRunner) Run(ctx context.Context, cands []router.Candidate, eva
 			// committed bytes (Err != nil, Emitted == true). In both
 			// cases we must not failover.
 			if res.OK {
-				return runnerResult{OK: res.Err == nil, Emitted: res.Emitted, Response: res.Response, TryLog: tryLog, Phases: res.Phases}
+				return runnerResult{OK: res.Err == nil, Emitted: res.Emitted, Response: res.Response, TryLog: tryLog, Written: res.Written, Phases: res.Phases}
 			}
 			// Once a streaming eval emitted bytes, failover would
 			// duplicate output. Stop trying immediately. The current
 			// cand is not added to the tryLog because the client
 			// already has its bytes.
 			if res.Emitted {
-				return runnerResult{OK: false, TryLog: tryLog}
+				return runnerResult{OK: false, TryLog: tryLog, Written: res.Written}
 			}
 			if res.Err != nil {
 				lastErr = res.Err

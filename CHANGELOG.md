@@ -12,6 +12,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 > (2026-08-25). Sections marked `legacy` use the pre-rebrand
 > routre-cli numbering and are kept for history only.
 
+## [0.4.12] — 2026-09-13
+
+### Fixed
+
+- **Streaming 4xx no longer masquerades as `503 all_providers_failed`** (`internal/proxy/pipeline.go`, `internal/proxy/runner.go`) — a deterministic rejection from a model's listed provider (over-long prompt, out-of-range `max_tokens`, unsupported parameter) was dropped on the streaming path: `streamEval`'s non-retryable branch returned `OK: true` with `Emitted: false` and wrote nothing, so `candidateRunner.Run` (which reduces `OK` to `Err == nil`) never appended the candidate to `tryLog`, and `Stream` fell through to the all-failed render with an **empty** attempt list. The client saw `503 {"message":"all providers for model \"…\" failed","type":"all_providers_failed","model":"…"}` with no `attempts[]` and no reason. The upstream's own status and body are now surfaced verbatim — nothing has been committed to the stream at that point (the relay commits its status lazily on the first body byte), so there is no double `WriteHeader`. Symptom this fixes: commandcode's real `400 This model's maximum context length is 1048576 tokens` / `400 Invalid max_tokens value, the valid range of max_tokens is [1, 393216]` reaching the client instead of an unactionable 503.
+- **`all_providers_failed` can no longer be rendered with an empty `attempts[]`** (`internal/proxy/pipeline.go`) — the streaming and non-streaming paths now both detect the impossible "every provider failed but no attempt was recorded" state and answer `502` with an `internal_error` body that names the model and says the all-failed state is a routre bug. A body that blames the upstreams while listing no attempts gives the client nothing to act on and misattributes an internal failure.
+- **Streaming failures logged as `status=200 class="ok"`** (`internal/proxy/chat.go`) — `Pipeline.Stream` returned `nil` for every terminal outcome, so `route` took its success branch and the request log never recorded a streaming 503; `routre logs -errors` was blind to them (16 upstream 400s in one day produced zero visible entries). `Stream` now returns a `*StreamWritten` describing the status it already put on the wire (and a true `nil` for mid-stream aborts), and the route maps it to a real `status`/`class`/`provider` entry.
+
 ## [0.4.11] — 2026-09-11
 
 ### Fixed
