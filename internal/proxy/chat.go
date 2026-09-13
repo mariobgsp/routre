@@ -225,7 +225,7 @@ func isStreaming(body []byte) bool {
 }
 
 // streamOutcomeEntry maps a Pipeline.Stream error to its reqlog entry.
-// Stream returns *StreamWritten for every outcome it already put on the
+// Stream returns *streamWritten for every outcome it already put on the
 // wire (all-failed 503, or the upstream's own 4xx surfaced verbatim), so
 // the log carries the real status and class. Previously every terminal
 // stream outcome took the success branch and was logged as
@@ -239,10 +239,10 @@ func streamOutcomeEntry(client, model string, err error) reqlog.Entry {
 		// inventing a failure.
 		return success
 	}
-	var sw *StreamWritten
+	var sw *streamWritten
 	if errors.As(err, &sw) {
 		if sw == nil {
-			// Typed-nil *StreamWritten = mid-stream abort: the client
+			// Typed-nil *streamWritten = mid-stream abort: the client
 			// already has its partial 200 and the failure path wrote
 			// nothing. Dereferencing sw here panicked the handler on
 			// every client disconnect, so guard it explicitly.
@@ -260,7 +260,7 @@ func streamOutcomeEntry(client, model string, err error) reqlog.Entry {
 		return e
 	}
 	// Unknown pre-write failure (unreachable today — Stream only returns
-	// nil or *StreamWritten): keep the conservative all-failed shape.
+	// nil or *streamWritten): keep the conservative all-failed shape.
 	return reqlog.Entry{Client: client, Model: model, Status: http.StatusServiceUnavailable, Class: "all_failed", Stream: true}
 }
 

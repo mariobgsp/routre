@@ -43,10 +43,11 @@ type evalResult struct {
 	Emitted bool
 	// Written reports a non-2xx response a streaming eval has already
 	// committed to the client (e.g. a deterministic upstream 400
-	// surfaced verbatim). Set together with Emitted; the caller uses it
-	// to record the real status instead of assuming success, and must
-	// never write a second body.
-	Written *StreamWritten
+	// surfaced verbatim). Emitted=true with Written=nil is the mid-stream
+	// abort (partial 200 — nothing written by the failure path); the
+	// caller uses Written to record the real status instead of assuming
+	// success, and must never write a second body.
+	Written *streamWritten
 	// Phases is the per-attempt wall-clock breakdown. Streaming eval
 	// populates DialMS/HeadersMS/TTFBMS/TotalMS; non-streaming sets
 	// only TotalMS (the three earlier checkpoints all collapse into
@@ -107,7 +108,7 @@ type runnerResult struct {
 	Emitted bool
 	// Written carries the status of an already-committed non-2xx stream
 	// response (nil when nothing was written or the stream succeeded).
-	Written *StreamWritten
+	Written *streamWritten
 	Phases  *Phases
 }
 
