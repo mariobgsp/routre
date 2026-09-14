@@ -287,6 +287,18 @@ func TestCandidatesQualifiedModel(t *testing.T) {
 	}
 }
 
+func TestCandidatesMuseShortAlias(t *testing.T) {
+	r := New([]TierInput{{Name: "subscription", Providers: []ProviderInput{
+		{Name: "opencode-zen", Kind: "openai", BaseURL: "https://zen", APIKeyEnv: "ZEN", Models: []string{"muse-spark-1.3-contributor-free"}},
+	}}}, DefaultCooldownPolicy())
+	for _, model := range []string{"muse-1.3-contributor-free", "opencode-zen/muse-1.3-contributor-free"} {
+		cands := r.Candidates(model)
+		if len(cands) != 1 || cands[0].Upstream != "muse-spark-1.3-contributor-free" {
+			t.Fatalf("%q must route to canonical Muse ID, got %+v", model, cands)
+		}
+	}
+}
+
 func TestCandidatesForwardsUnknownModel(t *testing.T) {
 	r := New(mkModelTiers(), DefaultCooldownPolicy())
 	r.SetForwardUnknown(true)

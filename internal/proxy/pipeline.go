@@ -188,39 +188,43 @@ func (p *Pipeline) Stream(ctx context.Context, req Request, w http.ResponseWrite
 	if cfg := p.cfg.Get(); cfg.Cache.PrefixOrder {
 		processed = orderPrompt(processed)
 	}
-	// Streaming replay cache: serve an identical earlier stream from memory.
-	// Entries are byte-identical client-dialect SSE captures, so tool-call
-	// ids, finish_reason and [DONE] stay self-consistent by construction.
-	streamKey := p.keyFor(processed)
-	e, got, missReason := p.cache.GetWithReason(streamKey)
-	if got && e.SSE {
-		cacheSaved := e.PromptTokens
-		if cacheSaved == 0 {
-			cacheSaved = int64(tokenize.Count(string(processed), tokenize.KindOpenAI))
+	// Safe-prefix cache: Chat always; Responses only when free of
+	// caller-bound state (no encrypted reasoning/previous_response_id).
+	if cacheableRequest(clientFmt, processed) {
+		// Streaming replay cache: serve an identical earlier stream from memory.
+		// Entries are byte-identical client-dialect SSE captures, so tool-call
+		// ids, finish_reason and [DONE] stay self-consistent by construction.
+		streamKey := p.keyFor(processed)
+		e, got, missReason := p.cache.GetWithReason(streamKey)
+		if got && e.SSE {
+			cacheSaved := e.PromptTokens
+			if cacheSaved == 0 {
+				cacheSaved = int64(tokenize.Count(string(processed), tokenize.KindOpenAI))
+			}
+			if cacheSaved > 0 {
+				p.usage.Record(client, requested, 0, 0, 0, cacheSaved, usage.Prices{}, 0)
+			}
+			p.metrics.CacheHit()
+			w.Header().Set("Content-Type", e.ContentType)
+			w.Header().Set("X-Llrouter-Cache", "hit")
+			w.Header().Set("X-Llrouter-Streaming", "true")
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write(e.Body)
+			if f, ok := w.(http.Flusher); ok {
+				f.Flush()
+			}
+			return nil
 		}
-		if cacheSaved > 0 {
-			p.usage.Record(client, requested, 0, 0, 0, cacheSaved, usage.Prices{}, 0)
+		if got && !e.SSE {
+			// Entry exists but is a JSON (non-streaming) capture; the client
+			// asked for a stream. This is a shape mismatch, not a capacity/age
+			// miss.
+			p.metrics.CacheMissReason("shape_mismatch")
+		} else {
+			p.metrics.CacheMissReason(string(missReason))
 		}
-		p.metrics.CacheHit()
-		w.Header().Set("Content-Type", e.ContentType)
-		w.Header().Set("X-Llrouter-Cache", "hit")
-		w.Header().Set("X-Llrouter-Streaming", "true")
-		w.WriteHeader(http.StatusOK)
-		_, _ = w.Write(e.Body)
-		if f, ok := w.(http.Flusher); ok {
-			f.Flush()
-		}
-		return nil
+		p.metrics.CacheMiss()
 	}
-	if got && !e.SSE {
-		// Entry exists but is a JSON (non-streaming) capture; the client
-		// asked for a stream. This is a shape mismatch, not a capacity/age
-		// miss.
-		p.metrics.CacheMissReason("shape_mismatch")
-	} else {
-		p.metrics.CacheMissReason(string(missReason))
-	}
-	p.metrics.CacheMiss()
 	cands := p.router.CandidatesWithFallbacks(requested, p.cfg.Get().Fallbacks)
 	if len(cands) == 0 {
 		// No candidate was even eligible (model unlisted or every serving
@@ -330,6 +334,16 @@ func (p *Pipeline) streamEval(ctx context.Context, cand router.Candidate, _ int,
 	defer cancel()
 	relayStart := time.Now()
 	status, errBody, ct, retryAfter, susage, rerr := p.handlers.relay(streamCtx, w, cand.Provider.Provider.BaseURL, dummyReq, payload, true, kind, cand.Provider.Provider.APIKeyEnv, api, clientFmt)
+	// Adaptable retry: provider added/renamed a caller-bound field after
+	// upfront sanitize. One sanitized retry, then structured failover.
+	if rerr == nil && clientFmt == fmtResponses && isReasoningStateError(status, errBody) {
+		if sanitized := sanitizeResponsesPayload(processed); string(sanitized) != string(processed) {
+			if sp, serr := p.preparePayload(api, clientFmt, cand, requested, sanitized); serr == nil {
+				debugf("reasoning-state retry for %q", requested)
+				status, errBody, ct, retryAfter, susage, rerr = p.handlers.relay(streamCtx, w, cand.Provider.Provider.BaseURL, dummyReq, sp, true, kind, cand.Provider.Provider.APIKeyEnv, api, clientFmt)
+			}
+		}
+	}
 	relayDur := time.Since(relayStart).Milliseconds()
 	p.lastPhases = &Phases{TotalMS: relayDur}
 	if rerr != nil {
@@ -368,9 +382,8 @@ func (p *Pipeline) streamEval(ctx context.Context, cand router.Candidate, _ int,
 		p.metrics.CacheRead(cand.Provider.Provider.Name, susage.cacheRead)
 		p.metrics.CacheCreation(cand.Provider.Provider.Name, susage.cacheCreation)
 		p.metrics.Request(client, cand.Provider.Provider.Name, requested, "ok")
-		// Streaming replay cache: store the exact client-dialect SSE bytes so
-		// an identical later request replays without an upstream call.
-		if len(susage.captured) > 0 {
+		// Streaming replay cache: safe-prefix only, never caller-bound state.
+		if cacheableRequest(clientFmt, processed) && len(susage.captured) > 0 {
 			p.cache.Put(p.keyFor(processed), cache.Entry{
 				Body: susage.captured, ContentType: "text/event-stream",
 				PromptTokens: susage.prompt, CompletionTokens: susage.completion,
@@ -439,10 +452,10 @@ func (p *Pipeline) preparePayload(api apiFormat, clientFmt apiFormat, cand route
 	if clientFmt == fmtResponses && (kind == "anthropic" || kind == "gemini") {
 		return nil, fmt.Errorf("provider %s (kind=%s) cannot serve a Responses API request", cand.Provider.Provider.Name, kind)
 	}
-	// ponytail: Responses native passthrough for opencode upstreams
+	// Adaptable native passthrough: sanitize caller-bound Responses state
+	// upfront (reasoning/previous_response_id), then model rewrite only.
 	if clientFmt == fmtResponses && isNativeResponses(cand.Provider.Provider.BaseURL) {
-		// Send /v1/responses verbatim (model rewrite only); no chat translation.
-		return cand.Payload(processed, requested), nil
+		return cand.Payload(sanitizeResponsesPayload(processed), requested), nil
 	}
 	if clientFmt == fmtResponses {
 		// Non-native provider: translate Responses -> chat before relay.
@@ -512,7 +525,7 @@ func (p *Pipeline) processInternal(ctx context.Context, req Request) (Response, 
 		processed = orderPrompt(processed)
 	}
 	key := p.keyFor(processed)
-	if !streaming {
+	if !streaming && cacheableRequest(clientFmt, processed) {
 		e, got, missReason := p.cache.GetWithReason(key)
 		if got && !e.SSE {
 			cacheSaved := e.PromptTokens
@@ -701,6 +714,15 @@ func (p *Pipeline) tryEval(ctx context.Context, cand router.Candidate, req Reque
 	rec := &responseRecorder{header: make(http.Header)}
 	relayStart := time.Now()
 	status, respBody, ct, retryAfter, _, rerr := p.handlers.relay(attemptCtx, rec, cand.Provider.Provider.BaseURL, dummyReq, payload, streaming, kind, cand.Provider.Provider.APIKeyEnv, api, clientFmt)
+	if rerr == nil && clientFmt == fmtResponses && isReasoningStateError(status, respBody) {
+		if sanitized := sanitizeResponsesPayload(processed); string(sanitized) != string(processed) {
+			if sp, serr := p.preparePayload(api, clientFmt, cand, requested, sanitized); serr == nil {
+				debugf("reasoning-state retry for %q", requested)
+				rec = &responseRecorder{header: make(http.Header)}
+				status, respBody, ct, retryAfter, _, rerr = p.handlers.relay(attemptCtx, rec, cand.Provider.Provider.BaseURL, dummyReq, sp, streaming, kind, cand.Provider.Provider.APIKeyEnv, api, clientFmt)
+			}
+		}
+	}
 	relayDur := time.Since(relayStart).Milliseconds()
 	p.lastPhases = &Phases{TotalMS: relayDur}
 	if rerr != nil {
@@ -751,7 +773,9 @@ func (p *Pipeline) tryEval(ctx context.Context, cand router.Candidate, req Reque
 		if clientFmt == fmtResponses && !isNativeResponses(cand.Provider.Provider.BaseURL) {
 			cacheBody = respBody
 		}
-		p.cache.Put(p.keyFor(processed), cacheEntry(cacheBody, ct, prompt, completion))
+		if cacheableRequest(clientFmt, processed) {
+			p.cache.Put(p.keyFor(processed), cacheEntry(cacheBody, ct, prompt, completion))
+		}
 		p.metrics.Request(client, cand.Provider.Provider.Name, requested, "ok")
 		p.metrics.CacheRead(cand.Provider.Provider.Name, cacheRead)
 		p.metrics.CacheCreation(cand.Provider.Provider.Name, cacheCreation)

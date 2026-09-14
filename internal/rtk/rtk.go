@@ -102,18 +102,29 @@ func (r *RTK) Apply(in []byte) (out []byte, changed bool) {
 	if err := dec.Decode(&doc); err != nil {
 		return in, false
 	}
-	messages, ok := doc["messages"].([]any)
-	if !ok {
-		return in, false
-	}
 	mutated := false
-	for _, m := range messages {
-		msg, ok := m.(map[string]any)
-		if !ok {
-			continue
+	if messages, ok := doc["messages"].([]any); ok {
+		for _, m := range messages {
+			msg, ok := m.(map[string]any)
+			if !ok {
+				continue
+			}
+			if compressMessage(cfg, msg) {
+				mutated = true
+			}
 		}
-		if compressMessage(cfg, msg) {
-			mutated = true
+	}
+	// Responses API: compress function_call_output + message text blocks.
+	// Bench-gated safe: same compressText, fail-open, never-grow.
+	if input, ok := doc["input"].([]any); ok {
+		for _, it := range input {
+			m, ok := it.(map[string]any)
+			if !ok {
+				continue
+			}
+			if compressResponsesItem(cfg, m) {
+				mutated = true
+			}
 		}
 	}
 	if !mutated {
@@ -129,6 +140,68 @@ func (r *RTK) Apply(in []byte) (out []byte, changed bool) {
 		return in, false
 	}
 	return out, true
+}
+
+// compressResponsesItem compresses one Responses input item in place.
+// function_call_output output + message text blocks only; reasoning items
+// are left to the sanitizer. Same fail-open compressText contract.
+func compressResponsesItem(cfg Config, m map[string]any) bool {
+	typ, _ := m["type"].(string)
+	switch typ {
+	case "function_call_output":
+		s, ok := m["output"].(string)
+		if !ok {
+			return false
+		}
+		nc, ok := compressText(cfg, s)
+		if !ok {
+			return false
+		}
+		m["output"] = nc
+		return true
+	case "message":
+		// Chat path only compresses tool output; user/developer prompts
+		// stay verbatim. Match that here: role must be tool-ish.
+		if role, _ := m["role"].(string); role != "tool" && role != "function" && role != "developer" {
+			return false
+		}
+		c, ok := m["content"]
+		if !ok {
+			return false
+		}
+		if s, ok := c.(string); ok {
+			nc, ok := compressText(cfg, s)
+			if !ok {
+				return false
+			}
+			m["content"] = nc
+			return true
+		}
+		arr, ok := c.([]any)
+		if !ok {
+			return false
+		}
+		changed := false
+		for _, b := range arr {
+			bm, ok := b.(map[string]any)
+			if !ok {
+				continue
+			}
+			tt, _ := bm["type"].(string)
+			if tt != "input_text" && tt != "output_text" && tt != "text" {
+				continue
+			}
+			if ts, ok := bm["text"].(string); ok {
+				if nc, ok := compressText(cfg, ts); ok {
+					bm["text"] = nc
+					changed = true
+				}
+			}
+		}
+		return changed
+	default:
+		return false
+	}
 }
 
 // compressMessage compresses one message's content in place. Reports whether
