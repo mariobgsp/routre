@@ -387,6 +387,27 @@ func clampMaxTokens(doc map[string]any, ceiling int64) {
 	doc["max_tokens"] = maxAllowed
 }
 
+// normalizeModelAlias accepts the short Muse names commonly used in older
+// pi/OpenCode configurations. OpenCode's current IDs include the "spark"
+// segment; keep the alias at the routing boundary so the upstream always
+// receives its canonical model ID.
+var modelAliases = map[string]string{
+	"muse-1.2-contributor-free": "muse-spark-1.2-contributor-free",
+	"muse-1.3-contributor-free": "muse-spark-1.3-contributor-free",
+}
+
+func normalizeModelAlias(model string) string {
+	if canonical, ok := modelAliases[model]; ok {
+		return canonical
+	}
+	if i := strings.Index(model, "/"); i > 0 {
+		if canonical, ok := modelAliases[model[i+1:]]; ok {
+			return model[:i+1] + canonical
+		}
+	}
+	return model
+}
+
 // stripProviderPrefix removes the leading "provider/" label from a client
 // model reference when (and only when) the first segment exactly equals the
 // provider's configured name. Otherwise it returns "" and the model is
@@ -495,6 +516,7 @@ func providerServes(models []string, provider, model string) bool {
 func (r *Router) Candidates(model string) []Candidate {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
+	model = normalizeModelAlias(model)
 	now := r.now()
 	// Detect provider-qualified model (e.g. "commandcode/deepseek/...").
 	// If qualified, only that provider should be considered — prevents
@@ -736,6 +758,7 @@ func (r *Router) Status() []Status {
 func (r *Router) ServesModel(model string) bool {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
+	model = normalizeModelAlias(model)
 	for _, p := range r.provs {
 		if stripProviderPrefix(p.Provider.Name, model) != "" {
 			return true
@@ -758,6 +781,7 @@ func (r *Router) ServesModel(model string) bool {
 func (r *Router) MinCooldownForModel(model string, forwardUnknown bool) (time.Duration, bool) {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
+	model = normalizeModelAlias(model)
 	now := r.now()
 	best := time.Duration(0)
 	found := false
