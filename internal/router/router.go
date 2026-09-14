@@ -150,7 +150,9 @@ func ClassifyStatusBody(status int, body []byte) ErrClass {
 	if c == ErrAuth && bodyHasCredits(body) {
 		return ErrCredits
 	}
-	if status == 529 && len(body) == 0 {
+	// 529 is Anthropic's dedicated capacity code; treat all of them as
+	// transient overload regardless of body shape.
+	if status == 529 {
 		return ErrOverloaded
 	}
 	if (c == ErrServer || c == ErrRateLimit) && bodyHasOverloaded(body) {

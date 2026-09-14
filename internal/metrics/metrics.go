@@ -254,6 +254,13 @@ func (m *Metrics) CacheHitRatio() float64 {
 	return 0
 }
 
+// RTKSavedTotal returns total tokens saved by RTK compression.
+func (m *Metrics) RTKSavedTotal() int64 {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.rtkSave
+}
+
 // RTKAppliedCount returns the number of requests where RTK changed the
 // payload.
 func (m *Metrics) RTKAppliedCount() int64 {
