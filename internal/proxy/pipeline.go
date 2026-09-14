@@ -170,18 +170,25 @@ func (p *Pipeline) Stream(ctx context.Context, req Request, w http.ResponseWrite
 	client := req.Client
 	header := req.Header
 	api := apiFormat(dialect.DetectFormat(path, body))
-	debugf("stream request %q client=%q api=%v", modelFromBody(body), client, api)
 	clientFmt := api
+	debugf("stream request %q client=%q api=%v", modelFromBody(body), client, api)
 	// ponytail: keep Responses payload native for opencode upstreams that
 	// support /v1/responses directly (opencode.ai/zen). Translation to
 	// chat.completions is per-candidate in preparePayload; doing it
 	// globally broke muse-spark which only serves /v1/responses (500 on
 	// /v1/chat/completions). Keep api as Responses here.
-	requested := modelFromBody(body)
-	processed, rtkChanged := p.rtk.Apply(body)
+	// Sanitize-then-key: strip caller-bound Responses state before RTK,
+	// ordering, keying, and cacheability so pi replays map to the same
+	// safe-prefix key instead of bypassing cache.
+	sanitizedBody := body
+	if clientFmt == fmtResponses {
+		sanitizedBody = sanitizeResponsesPayload(body)
+	}
+	requested := modelFromBody(sanitizedBody)
+	processed, rtkChanged := p.rtk.Apply(sanitizedBody)
 	rtkSaved := 0
 	if rtkChanged {
-		rtkSaved = tokenize.Count(string(body), tokenize.KindOpenAI) - tokenize.Count(string(processed), tokenize.KindOpenAI)
+		rtkSaved = tokenize.Count(string(sanitizedBody), tokenize.KindOpenAI) - tokenize.Count(string(processed), tokenize.KindOpenAI)
 		p.metrics.RTKApplied()
 	}
 	p.metrics.RTKSaved(int64(rtkSaved))
@@ -312,7 +319,11 @@ func (p *Pipeline) Stream(ctx context.Context, req Request, w http.ResponseWrite
 		_, _ = w.Write(emptyAttemptsBody(requested))
 		return &streamWritten{Status: http.StatusBadGateway}
 	}
-	failures.Render(w, failures.KindAllFailed, requested, result.TryLog, 5*time.Second)
+	retryAfter := 5 * time.Second
+	if allOverloaded {
+		retryAfter = time.Second
+	}
+	failures.Render(w, failures.KindAllFailed, requested, result.TryLog, retryAfter)
 	return &streamWritten{Status: http.StatusServiceUnavailable}
 }
 
@@ -512,12 +523,16 @@ func (p *Pipeline) processInternal(ctx context.Context, req Request) (Response, 
 	clientFmt := api
 	// ponytail: same as Stream — keep Responses native, translate per-candidate
 	streaming := dialect.IsStreaming(body)
-	requested := modelFromBody(body)
+	sanitizedBody := body
+	if clientFmt == fmtResponses {
+		sanitizedBody = sanitizeResponsesPayload(body)
+	}
+	requested := modelFromBody(sanitizedBody)
 	debugf("process request %q streaming=%v client=%q api=%v", requested, streaming, client, api)
-	processed, rtkChanged := p.rtk.Apply(body)
+	processed, rtkChanged := p.rtk.Apply(sanitizedBody)
 	rtkSaved := 0
 	if rtkChanged {
-		rtkSaved = tokenize.Count(string(body), tokenize.KindOpenAI) - tokenize.Count(string(processed), tokenize.KindOpenAI)
+		rtkSaved = tokenize.Count(string(sanitizedBody), tokenize.KindOpenAI) - tokenize.Count(string(processed), tokenize.KindOpenAI)
 		p.metrics.RTKApplied()
 	}
 	p.metrics.RTKSaved(int64(rtkSaved))
@@ -645,6 +660,7 @@ func (p *Pipeline) processInternal(ctx context.Context, req Request) (Response, 
 		case allClient && len(tryLog) > 0:
 			// Every provider rejected the model (400/404/422). This
 			// is a model-not-found, not a service outage.
+			p.metrics.Request(client, "*", requested, "client")
 			body, _ := failures.RenderBody(failures.KindModelNotFound, requested, tryLog, 0)
 			return Response{StatusCode: 404, Body: body, Header: http.Header{"Content-Type": []string{"application/json"}}, Provider: tryLog[0].Provider}, nil
 		case allAuth && len(tryLog) > 0:
@@ -652,6 +668,7 @@ func (p *Pipeline) processInternal(ctx context.Context, req Request) (Response, 
 			// don't authorize this model. Surface as 502 (bad
 			// gateway) so the user knows the gateway is fine, the
 			// auth is wrong.
+			p.metrics.Request(client, "*", requested, "auth")
 			body := []byte(fmt.Sprintf(`{"error":{"message":"all configured providers rejected the request (auth). check API keys and model access.","type":"all_providers_unauthorized","model":%q,"attempts":%s}}`,
 				requested, mustJSON(tryLog)))
 			return Response{StatusCode: 502, Body: body, Header: http.Header{"Content-Type": []string{"application/json"}}, Provider: tryLog[0].Provider}, nil
@@ -660,6 +677,7 @@ func (p *Pipeline) processInternal(ctx context.Context, req Request) (Response, 
 			// CreditsError / 402): the balance is exhausted on all of
 			// them. 402 is terminal — the client must top up or pick
 			// another account, not retry.
+			p.metrics.Request(client, "*", requested, "credits")
 			body := []byte(fmt.Sprintf(`{"error":{"message":"all configured providers rejected the request (insufficient credits). top up the account or use a model the provider serves for free.","type":"all_providers_insufficient_credits","model":%q,"attempts":%s}}`,
 				requested, mustJSON(tryLog)))
 			return Response{StatusCode: 402, Body: body, Header: http.Header{"Content-Type": []string{"application/json"}}, Provider: tryLog[0].Provider}, nil
@@ -677,7 +695,19 @@ func (p *Pipeline) processInternal(ctx context.Context, req Request) (Response, 
 		if len(tryLog) > 0 {
 			prov = tryLog[0].Provider
 		}
-		body, hdr := failures.RenderBody(failures.KindAllFailed, requested, tryLog, 5*time.Second)
+		finalOverloaded := len(tryLog) > 0
+		for _, e := range tryLog {
+			if e.Class != router.ErrOverloaded.String() {
+				finalOverloaded = false
+				break
+			}
+		}
+		retryAfter := 5 * time.Second
+		if finalOverloaded {
+			retryAfter = time.Second
+		}
+		p.metrics.Request(client, "*", requested, "all_failed")
+		body, hdr := failures.RenderBody(failures.KindAllFailed, requested, tryLog, retryAfter)
 		return Response{StatusCode: 503, Body: body, Header: hdr, Provider: prov}, nil
 	}
 	return Response{}, fmt.Errorf("streaming request: use Stream")

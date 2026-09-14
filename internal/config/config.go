@@ -149,7 +149,9 @@ func Default() Config {
 		LogLevel: "info",
 		Tiers:    []Tier{},
 		RTK:      RTKConfig{Enabled: true, MinBytes: 0, MaxBytes: 10 << 20},
-		Cache:    CacheConfig{Enabled: true, MaxEntries: 4096, TTLSeconds: 86400, PrefixOrder: true, MaxBytes: 64 << 20, CanonicalKeys: true, SlidingTTL: true},
+		// Longer exact-match retention for pi agentic prefix reuse;
+		// RAM still capped by MaxBytes LRU + SlidingTTL.
+		Cache: CacheConfig{Enabled: true, MaxEntries: 16384, TTLSeconds: 604800, PrefixOrder: true, MaxBytes: 128 << 20, CanonicalKeys: true, SlidingTTL: true},
 		// Zero-config model handling: unknown/future models forward to all
 		// providers and fail over, instead of requiring a whitelist edit.
 		ForwardUnknown: true,

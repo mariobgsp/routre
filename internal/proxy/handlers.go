@@ -172,6 +172,7 @@ func (h *Handlers) Status(w http.ResponseWriter, _ *http.Request) {
 		"providers":              provs,
 		"cache_hit_ratio":        h.Metrics.CacheHitRatio(),
 		"rtk_applied":            h.Metrics.RTKAppliedCount(),
+		"rtk_saved_total":        h.Metrics.RTKSavedTotal(),
 		"discovery_last_success": h.Router.LastDiscoveryUnix(),
 	})
 }
