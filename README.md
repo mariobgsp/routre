@@ -24,7 +24,17 @@ routre models sync        # pull new provider models into config.json
 Point any agent at `http://127.0.0.1:20128` via `OPENAI_BASE_URL` /
 `ANTHROPIC_BASE_URL` — failover, compression, and caching come for free.
 
-### Latest (v0.4.12 — 2026-09-13)
+### Latest (v0.5.0 — 2026-09-17)
+
+- **Codebase simplification, no behavior change** — god files split (`router`/`chat`/`pipeline` → focused files, nothing over ~450 lines in `internal/proxy`), duplicate translate/response paths deleted, test + dialect helpers unified, endpoint routing de-nested. Go source 22222 → 20757 lines (−6.6%), CI green including `-race`. See [CHANGELOG.md](CHANGELOG.md).
+
+<details><summary>Previous — v0.4.14 / v0.4.13</summary>
+
+- **Overload tuning + Responses hardening** — 529 classifies as overloaded with honest `Retry-After`; caller-bound Responses state sanitized with safe-prefix caching; no second status over committed streams. See [CHANGELOG.md](CHANGELOG.md).
+
+</details>
+
+<details><summary>Previous — v0.4.12</summary>
 
 - **Honest streaming errors** — a deterministic upstream 4xx (context-length overflow, out-of-range `max_tokens`) now reaches the client as that 4xx with the provider's own message, instead of `503 all_providers_failed` with no per-provider detail; an `all_providers_failed` body can no longer arrive with an empty `attempts[]`, and streaming failures are logged with their real status so `routre logs -errors` finally shows them. See [CHANGELOG.md](CHANGELOG.md).
 
