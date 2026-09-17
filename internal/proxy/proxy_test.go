@@ -47,8 +47,10 @@ func loadTestStore(t testing.TB, cfgJSON string) *config.Store {
 
 // serveGateway wires handlers + HTTP server from a loaded config store.
 // Single home for the test-gateway wiring every env helper used to clone;
-// per-test variations (keys, tokens, mocks) stay with the callers.
-func serveGateway(t testing.TB, st *config.Store) (base string, h *Handlers, srv *Server) {
+// per-test variations (keys, tokens, mocks) stay with the callers. setup
+// hooks run after New but before Listen/Serve (e.g. SetProcessToken, which
+// must precede Serve).
+func serveGateway(t testing.TB, st *config.Store, setup ...func(h *Handlers, srv *Server)) (base string, h *Handlers, srv *Server) {
 	t.Helper()
 	cfg := st.Get()
 	rtr := router.New(tiersFromConfig(cfg), router.DefaultCooldownPolicy())
@@ -61,6 +63,9 @@ func serveGateway(t testing.TB, st *config.Store) (base string, h *Handlers, srv
 	logger := log.New(io.Discard, "", 0)
 	h = NewHandlers(st, rtr, cch, tk, logger, usage.New(""))
 	srv = New(h, logger)
+	for _, fn := range setup {
+		fn(h, srv)
+	}
 	ln, err := srv.Listen("127.0.0.1:0")
 	if err != nil {
 		t.Fatalf("listen: %v", err)

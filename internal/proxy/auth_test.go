@@ -22,12 +22,14 @@ func authEnv(t *testing.T, processToken string) (base string, m *mock.Server) {
 	}
 	t.Cleanup(m.Close)
 	cfgJSON := `{"listen":"127.0.0.1:0","rtk":{"enabled":false},"cache":{"enabled":false},"auth":{"secret_env":"AUTH_KEY","header":"X-Routre-Key"},"tiers":[{"name":"t","providers":[{"name":"a","kind":"openai","base_url":"` + m.URL() + `/v1","api_key_env":"TEST_KEY","models":["m"]}]}]}`
-	base, h, srv := serveGateway(t, loadTestStore(t, cfgJSON))
-	// Seed the auth secret into the keystore (as serve does).
-	h.Keys.Set("AUTH_KEY", "super-secret")
-	if processToken != "" {
-		srv.SetProcessToken(processToken)
-	}
+	base, _, _ = serveGateway(t, loadTestStore(t, cfgJSON), func(h *Handlers, srv *Server) {
+		// Seed the auth secret into the keystore (as serve does), and the
+		// process token — both before Serve starts accepting requests.
+		h.Keys.Set("AUTH_KEY", "super-secret")
+		if processToken != "" {
+			srv.SetProcessToken(processToken)
+		}
+	})
 	return base, m
 }
 
