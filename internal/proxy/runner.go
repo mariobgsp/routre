@@ -201,3 +201,13 @@ func buildOutcome(cand router.Candidate, lastErr error, lastClass router.ErrClas
 	}
 	return entry
 }
+
+// retryTransientAttempts: how many times a candidate is retried on a
+// transient failure (network error or 5xx) before failover moves on.
+// Upstream 503 blips are common (opencode.ai had an hour-long one in
+// production); a single fast retry absorbs them without escalating the
+// provider's cooldown and burning every fallback in the same window.
+const retryTransientAttempts = 1
+
+// transientRetryDelay: pause between retries of the same candidate.
+const transientRetryDelay = 500 * time.Millisecond

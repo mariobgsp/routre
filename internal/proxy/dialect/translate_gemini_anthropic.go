@@ -183,18 +183,7 @@ func toolResultText(raw json.RawMessage) string {
 // an Anthropic /v1/messages response.
 func geminiToAnthropic(body []byte, model string) ([]byte, error) {
 	var in struct {
-		Candidates []struct {
-			Content struct {
-				Parts []struct {
-					Text         string `json:"text"`
-					FunctionCall struct {
-						Name string         `json:"name"`
-						Args map[string]any `json:"args"`
-					} `json:"functionCall"`
-				} `json:"parts"`
-			} `json:"content"`
-			FinishReason string `json:"finishReason"`
-		} `json:"candidates"`
+		Candidates    []geminiCandidate `json:"candidates"`
 		UsageMetadata struct {
 			PromptTokenCount     int `json:"promptTokenCount"`
 			CandidatesTokenCount int `json:"candidatesTokenCount"`
@@ -279,19 +268,8 @@ func (s *g2aState) translate(evt sseEvent) (string, error) {
 		return "", nil
 	}
 	var in struct {
-		Candidates []struct {
-			Content struct {
-				Parts []struct {
-					Text         string `json:"text"`
-					FunctionCall struct {
-						Name string         `json:"name"`
-						Args map[string]any `json:"args"`
-					} `json:"functionCall"`
-				} `json:"parts"`
-			} `json:"content"`
-			FinishReason string `json:"finishReason"`
-		} `json:"candidates"`
-		ModelVersion  string `json:"modelVersion"`
+		Candidates    []geminiCandidate `json:"candidates"`
+		ModelVersion  string            `json:"modelVersion"`
 		UsageMetadata struct {
 			PromptTokenCount     int `json:"promptTokenCount"`
 			CandidatesTokenCount int `json:"candidatesTokenCount"`

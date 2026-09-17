@@ -3,6 +3,7 @@ package proxy
 import (
 	"encoding/json"
 	"io"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -22,14 +23,7 @@ func cfgFor(t *testing.T, forwardUnknown bool, mocks ...*mock.Server) string {
 		`"tiers":[{"name":"t1","providers":[` + strings.Join(provs, ",") + `]}],` +
 		`"rtk":{"enabled":true,"min_bytes":500,"max_bytes":10485760},` +
 		`"cache":{"enabled":true,"max_entries":64,"ttl_seconds":3600,"prefix_order":false},` +
-		`"forward_unknown":` + boolJSON(forwardUnknown) + `}`
-}
-
-func boolJSON(b bool) string {
-	if b {
-		return "true"
-	}
-	return "false"
+		`"forward_unknown":` + strconv.FormatBool(forwardUnknown) + `}`
 }
 
 func chatBodyFor(model string, stream bool) []byte {

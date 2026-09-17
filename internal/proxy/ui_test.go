@@ -9,36 +9,14 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/mariobgsp/routre/internal/cache"
 	"github.com/mariobgsp/routre/internal/config"
-	"github.com/mariobgsp/routre/internal/router"
-	"github.com/mariobgsp/routre/internal/rtk"
-	"github.com/mariobgsp/routre/internal/usage"
-	"log"
 )
 
 func uiTestEnv(t *testing.T, cfgJSON string) (base string, store *config.Store, cleanup func()) {
 	t.Helper()
-	cfgPath := writeConfigFile(t, cfgJSON)
-	st := config.NewStore(cfgPath)
-	if err := st.Load(); err != nil {
-		t.Fatalf("config load: %v", err)
-	}
-	cfg := st.Get()
-	rtr := router.New(tiersFromConfig(cfg), router.DefaultCooldownPolicy())
-	rtr.SetForwardUnknown(cfg.ForwardUnknown)
-	cch := cache.New(cache.Config{Enabled: cfg.Cache.Enabled, MaxEntries: cfg.Cache.MaxEntries, TTLSeconds: cfg.Cache.TTLSeconds, PrefixOrder: cfg.Cache.PrefixOrder})
-	tk := rtk.New(rtk.Config{Enabled: cfg.RTK.Enabled, MinBytes: cfg.RTK.MinBytes, MaxBytes: cfg.RTK.MaxBytes})
-	logger := log.New(io.Discard, "", 0)
-	h := NewHandlers(st, rtr, cch, tk, logger, usage.New(""))
-	srv := New(h, logger)
-	ln, err := srv.Listen("127.0.0.1:0")
-	if err != nil {
-		t.Fatalf("listen: %v", err)
-	}
-	go func() { _ = srv.Serve(ln) }()
-	t.Cleanup(func() { _ = srv.Shutdown(2 * 1e9) })
-	return "http://" + ln.Addr().String(), st, func() {}
+	st := loadTestStore(t, cfgJSON)
+	base, _, _ = serveGateway(t, st)
+	return base, st, func() {}
 }
 
 func TestUIDashboardLoopback(t *testing.T) {

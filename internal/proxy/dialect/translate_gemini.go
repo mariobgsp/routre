@@ -16,6 +16,25 @@ import (
 // (streaming). The Anthropic-client ↔ Gemini-upstream directions live in
 // translate_gemini_anthropic.go. See the pair matrix in SPEC.
 
+// Shared Gemini generateContent shapes (non-streaming + SSE frames carry
+// the same candidate envelope). One definition — a field rename happens once.
+type geminiFunctionCall struct {
+	Name string         `json:"name"`
+	Args map[string]any `json:"args"`
+}
+
+type geminiPart struct {
+	Text         string             `json:"text"`
+	FunctionCall geminiFunctionCall `json:"functionCall"`
+}
+
+type geminiCandidate struct {
+	Content struct {
+		Parts []geminiPart `json:"parts"`
+	} `json:"content"`
+	FinishReason string `json:"finishReason"`
+}
+
 // openAIToGemini maps an OpenAI chat request to Gemini generateContent.
 // Known losses (documented): tool_choice/parallel_tool_calls are not mapped;
 // image_url blocks become omission placeholders; the model is returned both
@@ -137,18 +156,7 @@ func openAIToGemini(body []byte) ([]byte, error) {
 // usageMetadata; otherwise zero (the caller falls back to its own count).
 func geminiToOpenAI(body []byte, model string) ([]byte, error) {
 	var in struct {
-		Candidates []struct {
-			Content struct {
-				Parts []struct {
-					Text         string `json:"text"`
-					FunctionCall struct {
-						Name string         `json:"name"`
-						Args map[string]any `json:"args"`
-					} `json:"functionCall"`
-				} `json:"parts"`
-			} `json:"content"`
-			FinishReason string `json:"finishReason"`
-		} `json:"candidates"`
+		Candidates    []geminiCandidate `json:"candidates"`
 		UsageMetadata struct {
 			PromptTokenCount     int `json:"promptTokenCount"`
 			CandidatesTokenCount int `json:"candidatesTokenCount"`
@@ -197,17 +205,21 @@ func geminiToOpenAI(body []byte, model string) ([]byte, error) {
 }
 
 // geminiFinishToOpenAI maps a Gemini finishReason to an OpenAI finish_reason.
+var geminiFinishMap = map[string]string{
+	"STOP":               "stop",
+	"MAX_TOKENS":         "length",
+	"SAFETY":             "content_filter",
+	"RECITATION":         "content_filter",
+	"BLOCKLIST":          "content_filter",
+	"PROHIBITED_CONTENT": "content_filter",
+	"SPII":               "content_filter",
+}
+
 func geminiFinishToOpenAI(fr string) string {
-	switch fr {
-	case "STOP":
-		return "stop"
-	case "MAX_TOKENS":
-		return "length"
-	case "SAFETY", "RECITATION", "BLOCKLIST", "PROHIBITED_CONTENT", "SPII":
-		return "content_filter"
-	default:
-		return "stop"
+	if v, ok := geminiFinishMap[fr]; ok {
+		return v
 	}
+	return "stop"
 }
 
 // g2oState translates a Gemini streamGenerateContent SSE stream to OpenAI
@@ -224,18 +236,7 @@ func (s *g2oState) translate(evt sseEvent) (string, error) {
 		return "", nil
 	}
 	var in struct {
-		Candidates []struct {
-			Content struct {
-				Parts []struct {
-					Text         string `json:"text"`
-					FunctionCall struct {
-						Name string         `json:"name"`
-						Args map[string]any `json:"args"`
-					} `json:"functionCall"`
-				} `json:"parts"`
-			} `json:"content"`
-			FinishReason string `json:"finishReason"`
-		} `json:"candidates"`
+		Candidates []geminiCandidate `json:"candidates"`
 	}
 	if err := json.Unmarshal([]byte(data), &in); err != nil {
 		return "", nil // skip non-JSON frames

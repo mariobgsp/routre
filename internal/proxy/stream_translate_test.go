@@ -1,52 +1,23 @@
 package proxy
 
 import (
-	"bufio"
+	"bytes"
 	"encoding/json"
 	"net/http"
 	"strings"
 	"testing"
 
 	"github.com/mariobgsp/routre/internal/mock"
+	"github.com/mariobgsp/routre/internal/proxy/dialect"
 )
 
-// buildAnthropicConfigWithMocks is buildConfigWithMocks but with anthropic
-// kind upstreams.
-func buildAnthropicConfigWithMocks(t *testing.T, mocks map[string]*mock.Server) string {
-	t.Helper()
-	var tiers []string
-	order := []string{"a", "b", "c"}
-	for _, name := range order {
-		m, ok := mocks[name]
-		if !ok {
-			continue
-		}
-		tiers = append(tiers, `{"name":"tier-`+name+`","providers":[{"name":"`+name+`","kind":"anthropic","base_url":"`+m.URL()+`/v1","api_key_env":"TEST_KEY_`+strings.ToUpper(name)+`","models":["m"]}]}`)
-	}
-	return `{"listen":"127.0.0.1:0","tiers":[` + strings.Join(tiers, ",") + `],"rtk":{"enabled":true,"min_bytes":500,"max_bytes":10485760},"cache":{"enabled":true,"max_entries":64,"ttl_seconds":3600,"prefix_order":false}}`
-}
-
-// translateForTest runs an SSE stream through translateStream and returns all
-// emitted bytes.
+// translateForTest runs an SSE stream through the canonical dialect translator.
 func translateForTest(t *testing.T, upstream string, from, to apiFormat) string {
 	t.Helper()
-	st := newStreamTranslator(from, to)
-	var out strings.Builder
-	rd := bufio.NewReader(strings.NewReader(upstream))
-	for {
-		evt := sseEvent{}
-		ok, ferr := evt.read(rd)
-		if !ok && ferr == nil {
-			continue
-		}
-		if ferr != nil {
-			break
-		}
-		s, perr := st.translate(evt)
-		if perr != nil {
-			t.Fatalf("translate: %v", perr)
-		}
-		out.WriteString(s)
+	var out bytes.Buffer
+	err := dialect.New().Stream(dialect.Format(from), dialect.Format(to), strings.NewReader(upstream), &out, nil)
+	if err != nil {
+		t.Fatalf("translate: %v", err)
 	}
 	return out.String()
 }
@@ -141,20 +112,27 @@ func TestStreamTranslateOpenAIToAnthropic(t *testing.T) {
 	}
 
 	// Validate it parses as well-formed anthropic SSE events.
-	rd := bufio.NewReader(strings.NewReader(got))
 	n := 0
-	for {
-		ev := sseEvent{}
-		ok, ferr := ev.read(rd)
-		if !ok && ferr == nil {
+	for _, frame := range strings.Split(got, "\n\n") {
+		frame = strings.TrimSpace(frame)
+		if frame == "" {
 			continue
 		}
-		if ferr != nil {
-			break
+		var data string
+		for _, line := range strings.Split(frame, "\n") {
+			if v, ok := strings.CutPrefix(line, "data: "); ok {
+				if data != "" {
+					data += "\n"
+				}
+				data += v
+			}
+		}
+		if data == "" {
+			continue
 		}
 		var pm map[string]any
-		if err := json.Unmarshal([]byte(ev.dataJSON()), &pm); err != nil {
-			t.Fatalf("emitted %s event not valid JSON: %v\n%s", ev.event, err, ev.dataJSON())
+		if err := json.Unmarshal([]byte(data), &pm); err != nil {
+			t.Fatalf("emitted event not valid JSON: %v\n%s", err, data)
 		}
 		n++
 	}
@@ -170,7 +148,7 @@ func TestStreamCrossKindE2E(t *testing.T) {
 	defer a.Close()
 	a.SetStream(true)
 	a.SetAnthropic(true)
-	base, _ := testEnv(t, buildAnthropicConfigWithMocks(t, map[string]*mock.Server{"a": a}))
+	base, _ := testEnv(t, buildMockConfig(t, "anthropic", map[string]*mock.Server{"a": a}))
 
 	resp, data := post(t, base, "/v1/chat/completions", chatBody(true, ""))
 	if resp.StatusCode != http.StatusOK {
@@ -204,7 +182,7 @@ func TestStreamCrossKindE2EAnthropicClient(t *testing.T) {
 	defer a.Close()
 	a.SetStream(true)
 	// openai-format mock upstream, default.
-	base, _ := testEnv(t, buildConfigWithMocks(t, map[string]*mock.Server{"a": a}))
+	base, _ := testEnv(t, buildMockConfig(t, "openai", map[string]*mock.Server{"a": a}))
 
 	body := []byte(`{"model":"m","max_tokens":100,"stream":true,"messages":[{"role":"user","content":"hi"}]}`)
 	resp, data := post(t, base, "/v1/messages", body)
@@ -347,7 +325,7 @@ func TestStreamCrossKindFailoverPreFirstByte(t *testing.T) {
 	a.SetAnthropic(true)
 	b.SetStream(true)
 	b.SetAnthropic(true)
-	base, _ := testEnv(t, buildAnthropicConfigWithMocks(t, map[string]*mock.Server{"a": a, "b": b}))
+	base, _ := testEnv(t, buildMockConfig(t, "anthropic", map[string]*mock.Server{"a": a, "b": b}))
 
 	a.SetResetConn(true) // candidate A dies at socket level before any byte.
 
@@ -377,7 +355,7 @@ func TestStreamCrossKindNoFailoverMidStreamAbort(t *testing.T) {
 	a.SetAnthropic(true)
 	b.SetStream(true)
 	b.SetAnthropic(true)
-	base, _ := testEnv(t, buildAnthropicConfigWithMocks(t, map[string]*mock.Server{"a": a, "b": b}))
+	base, _ := testEnv(t, buildMockConfig(t, "anthropic", map[string]*mock.Server{"a": a, "b": b}))
 
 	a.SetAbortMid(true) // emit a few frames then hijack+close the conn.
 

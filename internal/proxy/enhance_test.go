@@ -129,7 +129,7 @@ func TestRetryAfterHonoredOnFailover(t *testing.T) {
 	defer b.Close()
 	t.Setenv("RA_KEY_A", "ka")
 	t.Setenv("RA_KEY_B", "kb")
-	base, _ := testEnv(t, buildConfigWithMocks(t, map[string]*mock.Server{"a": a, "b": b}))
+	base, _ := testEnv(t, buildMockConfig(t, "openai", map[string]*mock.Server{"a": a, "b": b}))
 
 	a.SetFail(429)
 	a.FailRetryAfter = "30"

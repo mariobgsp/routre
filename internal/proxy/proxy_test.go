@@ -22,20 +22,37 @@ import (
 
 // testEnv wires a full gateway against mock upstreams and returns its base
 // URL. t.Cleanup closes everything.
-func testEnv(t *testing.T, cfgJSON string) (base string, mocks map[string]*mock.Server) {
+func testEnv(t testing.TB, cfgJSON string) (base string, mocks map[string]*mock.Server) {
 	t.Helper()
 	// The gateway holds provider keys; every provider referenced by the
 	// test configs needs its env var set.
 	t.Setenv("TEST_KEY_A", "test-key-a")
 	t.Setenv("TEST_KEY_B", "test-key-b")
 	t.Setenv("TEST_KEY_C", "test-key-c")
+	st := loadTestStore(t, cfgJSON)
+	base, _, _ = serveGateway(t, st)
+	return base, nil
+}
+
+// loadTestStore writes cfgJSON to a temp file and loads it.
+func loadTestStore(t testing.TB, cfgJSON string) *config.Store {
+	t.Helper()
 	cfgPath := writeConfigFile(t, cfgJSON)
 	st := config.NewStore(cfgPath)
 	if err := st.Load(); err != nil {
 		t.Fatalf("config load: %v", err)
 	}
-	cfg := st.Get()
+	return st
+}
 
+// serveGateway wires handlers + HTTP server from a loaded config store.
+// Single home for the test-gateway wiring every env helper used to clone;
+// per-test variations (keys, tokens, mocks) stay with the callers. setup
+// hooks run after New but before Listen/Serve (e.g. SetProcessToken, which
+// must precede Serve).
+func serveGateway(t testing.TB, st *config.Store, setup ...func(h *Handlers, srv *Server)) (base string, h *Handlers, srv *Server) {
+	t.Helper()
+	cfg := st.Get()
 	rtr := router.New(tiersFromConfig(cfg), router.DefaultCooldownPolicy())
 	rtr.SetForwardUnknown(cfg.ForwardUnknown) // mirror main.buildRouter
 	cch := cache.New(cache.Config{
@@ -44,18 +61,21 @@ func testEnv(t *testing.T, cfgJSON string) (base string, mocks map[string]*mock.
 	})
 	tk := rtk.New(rtk.Config{Enabled: cfg.RTK.Enabled, MinBytes: cfg.RTK.MinBytes, MaxBytes: cfg.RTK.MaxBytes})
 	logger := log.New(io.Discard, "", 0)
-	h := NewHandlers(st, rtr, cch, tk, logger, usage.New(""))
-	srv := New(h, logger)
+	h = NewHandlers(st, rtr, cch, tk, logger, usage.New(""))
+	srv = New(h, logger)
+	for _, fn := range setup {
+		fn(h, srv)
+	}
 	ln, err := srv.Listen("127.0.0.1:0")
 	if err != nil {
 		t.Fatalf("listen: %v", err)
 	}
 	go func() { _ = srv.Serve(ln) }()
 	t.Cleanup(func() { _ = srv.Shutdown(2 * time.Second) })
-	return "http://" + ln.Addr().String(), nil
+	return "http://" + ln.Addr().String(), h, srv
 }
 
-func writeConfigFile(t *testing.T, content string) string {
+func writeConfigFile(t testing.TB, content string) string {
 	t.Helper()
 	p := t.TempDir() + "/cfg.json"
 	if err := os.WriteFile(p, []byte(content), 0o644); err != nil {
@@ -64,8 +84,9 @@ func writeConfigFile(t *testing.T, content string) string {
 	return p
 }
 
-// buildConfigWithMocks returns a config JSON pointing at the given mocks.
-func buildConfigWithMocks(t *testing.T, mocks map[string]*mock.Server) string {
+// buildMockConfig returns a config JSON pointing at the given mocks with
+// the given provider kind ("openai", "anthropic", ...).
+func buildMockConfig(t testing.TB, kind string, mocks map[string]*mock.Server) string {
 	t.Helper()
 	var tiers []string
 	order := []string{"a", "b", "c"}
@@ -74,7 +95,7 @@ func buildConfigWithMocks(t *testing.T, mocks map[string]*mock.Server) string {
 		if !ok {
 			continue
 		}
-		tiers = append(tiers, `{"name":"tier-`+name+`","providers":[{"name":"`+name+`","kind":"openai","base_url":"`+m.URL()+`/v1","api_key_env":"TEST_KEY_`+strings.ToUpper(name)+`","models":["m"]}]}`)
+		tiers = append(tiers, `{"name":"tier-`+name+`","providers":[{"name":"`+name+`","kind":"`+kind+`","base_url":"`+m.URL()+`/v1","api_key_env":"TEST_KEY_`+strings.ToUpper(name)+`","models":["m"]}]}`)
 	}
 	return `{"listen":"127.0.0.1:0","tiers":[` + strings.Join(tiers, ",") + `],"rtk":{"enabled":true,"min_bytes":500,"max_bytes":10485760},"cache":{"enabled":true,"max_entries":64,"ttl_seconds":3600,"prefix_order":false}}`
 }
@@ -95,7 +116,7 @@ func chatBody(stream bool, toolContent string) []byte {
 	return b
 }
 
-func post(t *testing.T, url, path string, body []byte) (*http.Response, []byte) {
+func post(t testing.TB, url, path string, body []byte) (*http.Response, []byte) {
 	t.Helper()
 	resp, err := http.Post(url+path, "application/json", bytes.NewReader(body))
 	if err != nil {
@@ -106,7 +127,7 @@ func post(t *testing.T, url, path string, body []byte) (*http.Response, []byte) 
 	return resp, data
 }
 
-func get(t *testing.T, url, path string) (*http.Response, []byte) {
+func get(t testing.TB, url, path string) (*http.Response, []byte) {
 	t.Helper()
 	resp, err := http.Get(url + path)
 	if err != nil {
@@ -137,7 +158,7 @@ func TestFailoverOrder(t *testing.T) {
 	defer b.Close()
 	c, _ := mock.New("c")
 	defer c.Close()
-	base, _ := testEnv(t, buildConfigWithMocks(t, map[string]*mock.Server{"a": a, "b": b, "c": c}))
+	base, _ := testEnv(t, buildMockConfig(t, "openai", map[string]*mock.Server{"a": a, "b": b, "c": c}))
 
 	a.SetFail(500)
 	b.SetFail(500)
@@ -346,7 +367,7 @@ func TestClampMaxTokens(t *testing.T) {
 func TestMetricsEndpoint(t *testing.T) {
 	a, _ := mock.New("a")
 	defer a.Close()
-	base, _ := testEnv(t, buildConfigWithMocks(t, map[string]*mock.Server{"a": a}))
+	base, _ := testEnv(t, buildMockConfig(t, "openai", map[string]*mock.Server{"a": a}))
 
 	post(t, base, "/v1/chat/completions", chatBody(false, ""))
 
@@ -367,7 +388,7 @@ func TestFailoverStopsAtClientError(t *testing.T) {
 	defer a.Close()
 	b, _ := mock.New("b")
 	defer b.Close()
-	base, _ := testEnv(t, buildConfigWithMocks(t, map[string]*mock.Server{"a": a, "b": b}))
+	base, _ := testEnv(t, buildMockConfig(t, "openai", map[string]*mock.Server{"a": a, "b": b}))
 
 	a.SetFail(400) // client error: must NOT fail over
 	resp, _ := post(t, base, "/v1/chat/completions", chatBody(false, ""))
@@ -384,7 +405,7 @@ func TestAuthFailover(t *testing.T) {
 	defer a.Close()
 	b, _ := mock.New("b")
 	defer b.Close()
-	base, _ := testEnv(t, buildConfigWithMocks(t, map[string]*mock.Server{"a": a, "b": b}))
+	base, _ := testEnv(t, buildMockConfig(t, "openai", map[string]*mock.Server{"a": a, "b": b}))
 
 	a.SetFail(401)
 	resp, _ := post(t, base, "/v1/chat/completions", chatBody(false, ""))
@@ -399,7 +420,7 @@ func TestAuthFailover(t *testing.T) {
 func TestAllFailed(t *testing.T) {
 	a, _ := mock.New("a")
 	defer a.Close()
-	base, _ := testEnv(t, buildConfigWithMocks(t, map[string]*mock.Server{"a": a}))
+	base, _ := testEnv(t, buildMockConfig(t, "openai", map[string]*mock.Server{"a": a}))
 
 	a.SetFail(503)
 	resp, _ := post(t, base, "/v1/chat/completions", chatBody(false, ""))
@@ -419,7 +440,7 @@ func TestStreamingUpstream500FailsOver(t *testing.T) {
 	defer a.Close()
 	b, _ := mock.New("b")
 	defer b.Close()
-	base, _ := testEnv(t, buildConfigWithMocks(t, map[string]*mock.Server{"a": a, "b": b}))
+	base, _ := testEnv(t, buildMockConfig(t, "openai", map[string]*mock.Server{"a": a, "b": b}))
 
 	a.SetFail(500)
 	resp, data := post(t, base, "/v1/chat/completions", chatBody(true, ""))
@@ -449,7 +470,7 @@ func TestStreamingUpstream429Surfaces(t *testing.T) {
 	defer a.Close()
 	b, _ := mock.New("b")
 	defer b.Close()
-	base, _ := testEnv(t, buildConfigWithMocks(t, map[string]*mock.Server{"a": a, "b": b}))
+	base, _ := testEnv(t, buildMockConfig(t, "openai", map[string]*mock.Server{"a": a, "b": b}))
 
 	a.SetFail(429)
 	b.SetFail(429)
@@ -471,7 +492,7 @@ func TestStreamingAllProvidersFailedIncludesReasons(t *testing.T) {
 	defer a.Close()
 	b, _ := mock.New("b")
 	defer b.Close()
-	base, _ := testEnv(t, buildConfigWithMocks(t, map[string]*mock.Server{"a": a, "b": b}))
+	base, _ := testEnv(t, buildMockConfig(t, "openai", map[string]*mock.Server{"a": a, "b": b}))
 
 	a.SetFail(503)
 	b.SetFail(503)
@@ -501,7 +522,7 @@ func TestNonStreamingAllProvidersFailedIncludesReasons(t *testing.T) {
 	defer a.Close()
 	b, _ := mock.New("b")
 	defer b.Close()
-	base, _ := testEnv(t, buildConfigWithMocks(t, map[string]*mock.Server{"a": a, "b": b}))
+	base, _ := testEnv(t, buildMockConfig(t, "openai", map[string]*mock.Server{"a": a, "b": b}))
 
 	a.SetFail(503)
 	b.SetFail(503)
@@ -525,7 +546,7 @@ func TestProvidersUnavailableIncludesModelAndCooldown(t *testing.T) {
 	defer a.Close()
 	b, _ := mock.New("b")
 	defer b.Close()
-	base, _ := testEnv(t, buildConfigWithMocks(t, map[string]*mock.Server{"a": a, "b": b}))
+	base, _ := testEnv(t, buildMockConfig(t, "openai", map[string]*mock.Server{"a": a, "b": b}))
 
 	// Drive both providers into cooldown: keep them failing so every
 	// request escalates the failure count.
@@ -559,7 +580,7 @@ func TestProvidersUnavailableIncludesModelAndCooldown(t *testing.T) {
 func TestModelNotFoundIncludesModel(t *testing.T) {
 	a, _ := mock.New("a")
 	defer a.Close()
-	cfg := strings.Replace(buildConfigWithMocks(t, map[string]*mock.Server{"a": a}),
+	cfg := strings.Replace(buildMockConfig(t, "openai", map[string]*mock.Server{"a": a}),
 		`"tiers":[`, `"forward_unknown":false,"tiers":[`, 1)
 	base, _ := testEnv(t, cfg)
 	body := bytes.Replace(chatBody(false, ""), []byte(`"m"`), []byte(`"no-such-model"`), 1)
@@ -586,7 +607,7 @@ func TestModelNotConfiguredVsCooldown(t *testing.T) {
 	// providers_unavailable error-identity distinction, which applies when
 	// forwarding is off. Default (forward_unknown=true) behavior for
 	// unlisted models is covered by the wildcard tests.
-	cfg := strings.Replace(buildConfigWithMocks(t, map[string]*mock.Server{"a": a}),
+	cfg := strings.Replace(buildMockConfig(t, "openai", map[string]*mock.Server{"a": a}),
 		`"tiers":[`, `"forward_unknown":false,"tiers":[`, 1)
 	base, _ := testEnv(t, cfg)
 
@@ -622,7 +643,7 @@ func TestModelNotConfiguredVsCooldown(t *testing.T) {
 func TestStreamingAcceptHeader(t *testing.T) {
 	a, _ := mock.New("a")
 	defer a.Close()
-	base, _ := testEnv(t, buildConfigWithMocks(t, map[string]*mock.Server{"a": a}))
+	base, _ := testEnv(t, buildMockConfig(t, "openai", map[string]*mock.Server{"a": a}))
 
 	_, _ = post(t, base, "/v1/chat/completions", chatBody(true, ""))
 	if got := a.Header().Get("Accept"); got != "text/event-stream" {
@@ -636,7 +657,7 @@ func TestStreamingAcceptHeader(t *testing.T) {
 func TestStreamingBetaPassthrough(t *testing.T) {
 	a, _ := mock.New("a")
 	defer a.Close()
-	base, _ := testEnv(t, buildConfigWithMocks(t, map[string]*mock.Server{"a": a}))
+	base, _ := testEnv(t, buildMockConfig(t, "openai", map[string]*mock.Server{"a": a}))
 
 	req, _ := http.NewRequest(http.MethodPost, base+"/v1/chat/completions", bytes.NewReader(chatBody(true, "")))
 	req.Header.Set("Content-Type", "application/json")
@@ -671,7 +692,7 @@ func TestIsStreamingFalsePositive(t *testing.T) {
 func TestStreamingPassThrough(t *testing.T) {
 	a, _ := mock.New("a")
 	defer a.Close()
-	base, _ := testEnv(t, buildConfigWithMocks(t, map[string]*mock.Server{"a": a}))
+	base, _ := testEnv(t, buildMockConfig(t, "openai", map[string]*mock.Server{"a": a}))
 
 	resp, data := post(t, base, "/v1/chat/completions", chatBody(true, ""))
 	if resp.StatusCode != 200 {
@@ -691,7 +712,7 @@ func TestStreamingPassThrough(t *testing.T) {
 func TestStreamingSuccessClassifiedOK(t *testing.T) {
 	a, _ := mock.New("a")
 	defer a.Close()
-	base, _ := testEnv(t, buildConfigWithMocks(t, map[string]*mock.Server{"a": a}))
+	base, _ := testEnv(t, buildMockConfig(t, "openai", map[string]*mock.Server{"a": a}))
 
 	post(t, base, "/v1/chat/completions", chatBody(true, ""))
 
@@ -713,7 +734,7 @@ func TestStreamingAbortDoesNotFailOver(t *testing.T) {
 	defer a.Close()
 	b, _ := mock.New("b")
 	defer b.Close()
-	base, _ := testEnv(t, buildConfigWithMocks(t, map[string]*mock.Server{"a": a, "b": b}))
+	base, _ := testEnv(t, buildMockConfig(t, "openai", map[string]*mock.Server{"a": a, "b": b}))
 
 	a.SetAbortMid(true)
 	resp, data := post(t, base, "/v1/chat/completions", chatBody(true, ""))
@@ -731,7 +752,7 @@ func TestStreamingAbortDoesNotFailOver(t *testing.T) {
 func TestCacheHit(t *testing.T) {
 	a, _ := mock.New("a")
 	defer a.Close()
-	base, _ := testEnv(t, buildConfigWithMocks(t, map[string]*mock.Server{"a": a}))
+	base, _ := testEnv(t, buildMockConfig(t, "openai", map[string]*mock.Server{"a": a}))
 
 	body := chatBody(false, "")
 	resp1, data1 := post(t, base, "/v1/chat/completions", body)
@@ -776,7 +797,7 @@ func TestCacheHit(t *testing.T) {
 func TestRTKAppliedOnRelay(t *testing.T) {
 	a, _ := mock.New("a")
 	defer a.Close()
-	base, _ := testEnv(t, buildConfigWithMocks(t, map[string]*mock.Server{"a": a}))
+	base, _ := testEnv(t, buildMockConfig(t, "openai", map[string]*mock.Server{"a": a}))
 
 	big := strings.Repeat("repeated tool line\n", 400)
 	body := chatBody(false, big)
@@ -801,7 +822,7 @@ func TestRTKAppliedOnRelay(t *testing.T) {
 func TestNonStreamingSetsContentType(t *testing.T) {
 	a, _ := mock.New("a")
 	defer a.Close()
-	base, _ := testEnv(t, buildConfigWithMocks(t, map[string]*mock.Server{"a": a}))
+	base, _ := testEnv(t, buildMockConfig(t, "openai", map[string]*mock.Server{"a": a}))
 
 	resp, _ := post(t, base, "/v1/chat/completions", chatBody(false, ""))
 	if resp.StatusCode != 200 {
@@ -816,7 +837,7 @@ func TestNonStreamingSetsContentType(t *testing.T) {
 func TestHealthz(t *testing.T) {
 	a, _ := mock.New("a")
 	defer a.Close()
-	base, _ := testEnv(t, buildConfigWithMocks(t, map[string]*mock.Server{"a": a}))
+	base, _ := testEnv(t, buildMockConfig(t, "openai", map[string]*mock.Server{"a": a}))
 	resp, data := get(t, base, "/healthz")
 	if resp.StatusCode != 200 || !strings.Contains(string(data), "ok") {
 		t.Fatalf("healthz: %d %s", resp.StatusCode, data)
@@ -826,7 +847,7 @@ func TestHealthz(t *testing.T) {
 func TestStatusEndpoint(t *testing.T) {
 	a, _ := mock.New("a")
 	defer a.Close()
-	base, _ := testEnv(t, buildConfigWithMocks(t, map[string]*mock.Server{"a": a}))
+	base, _ := testEnv(t, buildMockConfig(t, "openai", map[string]*mock.Server{"a": a}))
 	resp, data := get(t, base, "/v1/status")
 	if resp.StatusCode != 200 {
 		t.Fatalf("status: %d", resp.StatusCode)
@@ -847,7 +868,7 @@ func TestStatusEndpoint(t *testing.T) {
 func TestModelsEndpoint(t *testing.T) {
 	a, _ := mock.New("a")
 	defer a.Close()
-	base, _ := testEnv(t, buildConfigWithMocks(t, map[string]*mock.Server{"a": a}))
+	base, _ := testEnv(t, buildMockConfig(t, "openai", map[string]*mock.Server{"a": a}))
 	resp, data := get(t, base, "/v1/models")
 	if resp.StatusCode != 200 || !strings.Contains(string(data), "a/m") {
 		t.Fatalf("models: %d %s", resp.StatusCode, data)

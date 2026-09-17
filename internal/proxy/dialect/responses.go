@@ -146,7 +146,7 @@ func responsesToOpenAI(body []byte) ([]byte, error) {
 	doc := map[string]any{
 		"model":      in.Model,
 		"messages":   msgs,
-		"max_tokens": maxInt(in.MaxOutputTokens, 4096),
+		"max_tokens": max(in.MaxOutputTokens, 4096),
 	}
 
 	// Tools: map Responses {type:"function", name, description, parameters,

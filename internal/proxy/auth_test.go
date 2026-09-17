@@ -2,18 +2,11 @@ package proxy
 
 import (
 	"io"
-	"log"
 	"net/http"
 	"strings"
 	"testing"
-	"time"
 
-	"github.com/mariobgsp/routre/internal/cache"
-	"github.com/mariobgsp/routre/internal/config"
 	"github.com/mariobgsp/routre/internal/mock"
-	"github.com/mariobgsp/routre/internal/router"
-	"github.com/mariobgsp/routre/internal/rtk"
-	"github.com/mariobgsp/routre/internal/usage"
 )
 
 // authEnv wires a gateway with auth enabled (secret env AUTH_KEY, value
@@ -29,30 +22,15 @@ func authEnv(t *testing.T, processToken string) (base string, m *mock.Server) {
 	}
 	t.Cleanup(m.Close)
 	cfgJSON := `{"listen":"127.0.0.1:0","rtk":{"enabled":false},"cache":{"enabled":false},"auth":{"secret_env":"AUTH_KEY","header":"X-Routre-Key"},"tiers":[{"name":"t","providers":[{"name":"a","kind":"openai","base_url":"` + m.URL() + `/v1","api_key_env":"TEST_KEY","models":["m"]}]}]}`
-	cfgPath := writeConfigFile(t, cfgJSON)
-	st := config.NewStore(cfgPath)
-	if err := st.Load(); err != nil {
-		t.Fatalf("config load: %v", err)
-	}
-	cfg := st.Get()
-	rtr := router.New(tiersFromConfig(cfg), router.DefaultCooldownPolicy())
-	cch := cache.New(cache.Config{Enabled: false})
-	tk := rtk.New(rtk.Config{Enabled: false})
-	logger := log.New(io.Discard, "", 0)
-	h := NewHandlers(st, rtr, cch, tk, logger, usage.New(""))
-	// Seed the auth secret into the keystore (as serve does).
-	h.Keys.Set("AUTH_KEY", "super-secret")
-	srv := New(h, logger)
-	if processToken != "" {
-		srv.SetProcessToken(processToken)
-	}
-	ln, err := srv.Listen("127.0.0.1:0")
-	if err != nil {
-		t.Fatal(err)
-	}
-	go func() { _ = srv.Serve(ln) }()
-	t.Cleanup(func() { _ = srv.Shutdown(2 * time.Second) })
-	return "http://" + ln.Addr().String(), m
+	base, _, _ = serveGateway(t, loadTestStore(t, cfgJSON), func(h *Handlers, srv *Server) {
+		// Seed the auth secret into the keystore (as serve does), and the
+		// process token — both before Serve starts accepting requests.
+		h.Keys.Set("AUTH_KEY", "super-secret")
+		if processToken != "" {
+			srv.SetProcessToken(processToken)
+		}
+	})
+	return base, m
 }
 
 func TestAuthRejectsMissing(t *testing.T) {
@@ -120,18 +98,7 @@ func TestAuthDisabledPassthrough(t *testing.T) {
 	t.Cleanup(m.Close)
 	t.Setenv("TEST_KEY", "k")
 	cfgJSON := `{"listen":"127.0.0.1:0","rtk":{"enabled":false},"cache":{"enabled":false},"tiers":[{"name":"t","providers":[{"name":"a","kind":"openai","base_url":"` + m.URL() + `/v1","api_key_env":"TEST_KEY","models":["m"]}]}]}`
-	cfgPath := writeConfigFile(t, cfgJSON)
-	st := config.NewStore(cfgPath)
-	if err := st.Load(); err != nil {
-		t.Fatal(err)
-	}
-	cfg := st.Get()
-	h := NewHandlers(st, router.New(tiersFromConfig(cfg), router.DefaultCooldownPolicy()), cache.New(cache.Config{Enabled: false}), rtk.New(rtk.Config{Enabled: false}), log.New(io.Discard, "", 0), usage.New(""))
-	srv := New(h, log.New(io.Discard, "", 0))
-	ln, _ := srv.Listen("127.0.0.1:0")
-	go func() { _ = srv.Serve(ln) }()
-	t.Cleanup(func() { _ = srv.Shutdown(2 * time.Second) })
-	base := "http://" + ln.Addr().String()
+	base, _, _ := serveGateway(t, loadTestStore(t, cfgJSON))
 	resp, _ := post(t, base, "/v1/chat/completions", []byte(`{"model":"m","messages":[]}`))
 	if resp.StatusCode != 200 {
 		t.Fatalf("auth-disabled status = %d, want 200", resp.StatusCode)
