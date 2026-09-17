@@ -2,20 +2,10 @@ package proxy
 
 import (
 	"encoding/json"
-	"io"
-	"log"
-	"net/http"
-	"os"
 	"strings"
 	"testing"
-	"time"
 
-	"github.com/mariobgsp/routre/internal/cache"
-	"github.com/mariobgsp/routre/internal/config"
 	"github.com/mariobgsp/routre/internal/mock"
-	"github.com/mariobgsp/routre/internal/router"
-	"github.com/mariobgsp/routre/internal/rtk"
-	"github.com/mariobgsp/routre/internal/usage"
 )
 
 // cacheImpactEnv wires a gateway with one openai-kind mock upstream and the
@@ -30,28 +20,8 @@ func cacheImpactEnv(b *testing.B) (string, *mock.Server) {
 	b.Cleanup(m.Close)
 	tiers := `{"name":"t","providers":[{"name":"a","kind":"openai","base_url":"` + m.URL() + `/v1","api_key_env":"TEST_KEY_A","models":["m"]}]}`
 	cfgJSON := `{"listen":"127.0.0.1:0","rtk":{"enabled":true,"min_bytes":500,"max_bytes":10485760},"cache":{"enabled":true,"max_entries":64,"ttl_seconds":3600},"tiers":[` + tiers + `]}`
-	cfgPath := b.TempDir() + "/cfg.json"
-	if err := os.WriteFile(cfgPath, []byte(cfgJSON), 0o644); err != nil {
-		b.Fatal(err)
-	}
-	st := config.NewStore(cfgPath)
-	if err := st.Load(); err != nil {
-		b.Fatal(err)
-	}
-	cfg := st.Get()
-	rtr := router.New(tiersFromConfig(cfg), router.DefaultCooldownPolicy())
-	rtr.SetForwardUnknown(cfg.ForwardUnknown)
-	cch := cache.New(cache.Config{Enabled: cfg.Cache.Enabled, MaxEntries: cfg.Cache.MaxEntries, TTLSeconds: cfg.Cache.TTLSeconds, PrefixOrder: cfg.Cache.PrefixOrder})
-	tk := rtk.New(rtk.Config{Enabled: cfg.RTK.Enabled, MinBytes: cfg.RTK.MinBytes, MaxBytes: cfg.RTK.MaxBytes})
-	h := NewHandlers(st, rtr, cch, tk, log.New(io.Discard, "", 0), usage.New(""))
-	srv := New(h, log.New(io.Discard, "", 0))
-	ln, err := srv.Listen("127.0.0.1:0")
-	if err != nil {
-		b.Fatal(err)
-	}
-	go func() { _ = srv.Serve(ln) }()
-	b.Cleanup(func() { _ = srv.Shutdown(2 * time.Second) })
-	return "http://" + ln.Addr().String(), m
+	base, _, _ := serveGateway(b, loadTestStore(b, cfgJSON))
+	return base, m
 }
 
 // BenchmarkCacheMiss measures a full upstream round trip (mock, loopback) —
@@ -66,7 +36,7 @@ func BenchmarkCacheMiss(b *testing.B) {
 			"messages": []any{map[string]any{"role": "user", "content": "hello"}},
 			"pad":      i,
 		})
-		resp, data := postB(b, base, "/v1/chat/completions", doc)
+		resp, data := post(b, base, "/v1/chat/completions", doc)
 		if resp.StatusCode != 200 {
 			b.Fatalf("status %d: %s", resp.StatusCode, data)
 		}
@@ -79,12 +49,12 @@ func BenchmarkCacheHit(b *testing.B) {
 	base, m := cacheImpactEnv(b)
 	body := chatBody(false, "")
 	// Warm exactly one entry.
-	if resp, _ := postB(b, base, "/v1/chat/completions", body); resp.Header.Get("X-Llrouter-Cache") != "miss" {
+	if resp, _ := post(b, base, "/v1/chat/completions", body); resp.Header.Get("X-Llrouter-Cache") != "miss" {
 		b.Fatal("warmup must be a miss")
 	}
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		resp, data := postB(b, base, "/v1/chat/completions", body)
+		resp, data := post(b, base, "/v1/chat/completions", body)
 		if resp.Header.Get("X-Llrouter-Cache") != "hit" {
 			b.Fatalf("expected hit, got %q (%s)", resp.Header.Get("X-Llrouter-Cache"), data)
 		}
@@ -108,29 +78,8 @@ func streamCacheEnv(t *testing.T, abortMid bool) (string, *mock.Server) {
 	t.Cleanup(m.Close)
 	tiers := `{"name":"t","providers":[{"name":"a","kind":"openai","base_url":"` + m.URL() + `/v1","api_key_env":"TEST_KEY_A","models":["m"]}]}`
 	cfgJSON := `{"listen":"127.0.0.1:0","rtk":{"enabled":false},"cache":{"enabled":true,"max_entries":64,"ttl_seconds":3600},"tiers":[` + tiers + `]}`
-	cfgPath := t.TempDir() + "/cfg.json"
-	if err := os.WriteFile(cfgPath, []byte(cfgJSON), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	st := config.NewStore(cfgPath)
-	if err := st.Load(); err != nil {
-		t.Fatalf("config load: %v", err)
-	}
-	cfg := st.Get()
-	rtr := router.New(tiersFromConfig(cfg), router.DefaultCooldownPolicy())
-	rtr.SetForwardUnknown(cfg.ForwardUnknown)
-	cch := cache.New(cache.Config{Enabled: true, MaxEntries: 64, TTLSeconds: 3600})
-	tk := rtk.New(rtk.Config{Enabled: false})
-	logger := log.New(io.Discard, "", 0)
-	h := NewHandlers(st, rtr, cch, tk, logger, usage.New(""))
-	srv := New(h, logger)
-	ln, err := srv.Listen("127.0.0.1:0")
-	if err != nil {
-		t.Fatal(err)
-	}
-	go func() { _ = srv.Serve(ln) }()
-	t.Cleanup(func() { _ = srv.Shutdown(2 * time.Second) })
-	return "http://" + ln.Addr().String(), m
+	base, _, _ := serveGateway(t, loadTestStore(t, cfgJSON))
+	return base, m
 }
 
 // TestStreamingCacheReplay: the second identical streaming request is
@@ -181,18 +130,6 @@ func TestStreamingAbortNotCached(t *testing.T) {
 	}
 }
 
-// postB is post() for benchmarks (Fatal on the testing.B).
-func postB(b *testing.B, url, path string, body []byte) (*http.Response, []byte) {
-	b.Helper()
-	resp, err := http.Post(url+path, "application/json", strings.NewReader(string(body)))
-	if err != nil {
-		b.Fatalf("post: %v", err)
-	}
-	data, _ := io.ReadAll(resp.Body)
-	resp.Body.Close()
-	return resp, data
-}
-
 // BenchmarkCacheKeyVariance measures the hit rate when the same semantic
 // request arrives with different JSON key order each time. With canonical
 // keys enabled (the default) all variants must share one key and hit after
@@ -204,7 +141,7 @@ func BenchmarkCacheKeyVariance(b *testing.B) {
 		"model": "m", "messages": []any{map[string]any{"role": "user", "content": "hello"}},
 		"temperature": 0.7,
 	})
-	if resp, _ := postB(b, base, "/v1/chat/completions", warm); resp.Header.Get("X-Llrouter-Cache") != "miss" {
+	if resp, _ := post(b, base, "/v1/chat/completions", warm); resp.Header.Get("X-Llrouter-Cache") != "miss" {
 		b.Fatal("warmup must be a miss")
 	}
 	b.ResetTimer()
@@ -218,7 +155,7 @@ func BenchmarkCacheKeyVariance(b *testing.B) {
 		} else {
 			sb.WriteString(`{"messages":[{"role":"user","content":"hello"}],"temperature":0.7,"model":"m"}`)
 		}
-		resp, data := postB(b, base, "/v1/chat/completions", []byte(sb.String()))
+		resp, data := post(b, base, "/v1/chat/completions", []byte(sb.String()))
 		if resp.StatusCode != 200 {
 			b.Fatalf("status %d: %s", resp.StatusCode, data)
 		}

@@ -15,12 +15,9 @@ import (
 	"github.com/mariobgsp/routre/internal/usage"
 )
 
-// streamWritten is returned by Pipeline.Stream when it has already
-// written a non-2xx response to the client (the upstream's own status
-// surfaced verbatim, or the pipeline's all-failed render). The error
-// text is never rendered — once a status is on the wire a second body
-// would corrupt the response. Callers use Status/Provider to record the
-// outcome (reqlog, metrics) without writing anything.
+// streamWritten marks a Stream outcome already on the wire (upstream 4xx
+// surfaced verbatim, or the all-failed render). Never write again — record
+// Status/Provider to reqlog/metrics instead.
 type streamWritten struct {
 	Status   int
 	Provider string
@@ -30,11 +27,9 @@ func (e *streamWritten) Error() string {
 	return fmt.Sprintf("stream response already written: status %d", e.Status)
 }
 
-// emptyAttemptsBody is the honest body for the unreachable "all
-// providers failed with no recorded attempt" state. The normal
-// all-failed body carries a per-provider attempts[] breakdown; reaching
-// the render with an empty breakdown means an eval swallowed a failure,
-// so blaming the upstreams would misattribute a routre bug. Name it.
+// emptyAttemptsBody is the all-failed body for the unreachable "no attempt
+// recorded" state — an eval swallowed a failure, i.e. a routre bug. Named
+// as internal_error so upstreams are never blamed for it.
 func emptyAttemptsBody(model string) []byte {
 	body, err := json.Marshal(map[string]any{
 		"error": map[string]any{
@@ -50,13 +45,9 @@ func emptyAttemptsBody(model string) []byte {
 	return body
 }
 
-// writeUpstreamError surfaces a deterministic upstream failure to a
-// streaming client verbatim. The stream relay commits its status lazily
-// on the first body byte, so at the call site nothing has been written
-// yet and the upstream's real status (400/404/422) is still available.
-// Rendering "all providers failed" instead would hide an actionable
-// client error — an over-long prompt, an out-of-range max_tokens, a
-// parameter the model rejects — behind an unactionable 503.
+// writeUpstreamError surfaces a deterministic upstream failure verbatim.
+// Rendering "all providers failed" instead would hide an actionable client
+// error (bad prompt, bad max_tokens) behind a 503.
 func writeUpstreamError(w http.ResponseWriter, status int, ct string, body []byte, model string) {
 	if status < 400 {
 		status = http.StatusBadGateway
@@ -67,16 +58,11 @@ func writeUpstreamError(w http.ResponseWriter, status int, ct string, body []byt
 	writeStatus(w, status, body, ct)
 }
 
-// streamFinished reports whether a finished runner round already produced
-// the client's terminal response, and if so the error Stream should return
-// for it (nil when the response was a success or a mid-stream abort).
-// handled=false means the failure still needs rendering.
-//
-// Every consumer of a runnerResult must go through this. The all-overloaded
-// retry rounds reassign `result`, and checking only OK there let a retry
-// that had committed a deterministic 4xx (Written set, TryLog still empty)
-// fall through to the all-failed render — a second WriteHeader over the
-// committed 400 plus a reqlog status the client never received.
+// streamFinished reports whether a runner round already produced the
+// terminal response (handled=true), and the error Stream returns for it.
+// Every runnerResult consumer must go through this, including retry rounds:
+// a retry that committed a 4xx must not fall through to the all-failed
+// render (second WriteHeader + wrong reqlog status).
 func streamFinished(res runnerResult) (err error, handled bool) {
 	switch {
 	case res.OK:
@@ -101,14 +87,9 @@ func (p *Pipeline) Stream(ctx context.Context, req Request, w http.ResponseWrite
 	api := apiFormat(dialect.DetectFormat(path, body))
 	clientFmt := api
 	debugf("stream request %q client=%q api=%v", modelFromBody(body), client, api)
-	// ponytail: keep Responses payload native for opencode upstreams that
-	// support /v1/responses directly (opencode.ai/zen). Translation to
-	// chat.completions is per-candidate in preparePayload; doing it
-	// globally broke muse-spark which only serves /v1/responses (500 on
-	// /v1/chat/completions). Keep api as Responses here.
-	// Sanitize-then-key: strip caller-bound Responses state before RTK,
-	// ordering, keying, and cacheability so pi replays map to the same
-	// safe-prefix key instead of bypassing cache.
+	// Keep Responses payloads native here (muse-spark serves only
+	// /v1/responses); translation to chat.completions is per-candidate.
+	// Sanitize-then-key so replays share the safe-prefix cache key.
 	sanitizedBody := body
 	if clientFmt == fmtResponses {
 		sanitizedBody = sanitizeResponsesPayload(body)
@@ -124,12 +105,9 @@ func (p *Pipeline) Stream(ctx context.Context, req Request, w http.ResponseWrite
 	if cfg := p.cfg.Get(); cfg.Cache.PrefixOrder {
 		processed = orderPrompt(processed)
 	}
-	// Safe-prefix cache: Chat always; Responses only when free of
-	// caller-bound state (no encrypted reasoning/previous_response_id).
+	// Streaming replay cache: byte-identical SSE captures stay
+	// self-consistent (tool ids, finish_reason, [DONE]) by construction.
 	if cacheableRequest(clientFmt, processed) {
-		// Streaming replay cache: serve an identical earlier stream from memory.
-		// Entries are byte-identical client-dialect SSE captures, so tool-call
-		// ids, finish_reason and [DONE] stay self-consistent by construction.
 		streamKey := p.keyFor(processed)
 		e, got, missReason := p.cache.GetWithReason(streamKey)
 		if got && e.SSE {
@@ -235,13 +213,9 @@ func (p *Pipeline) Stream(ctx context.Context, req Request, w http.ResponseWrite
 		}
 	}
 	if len(result.TryLog) == 0 {
-		// Reaching here with no recorded attempt means the rounds above
-		// either recorded an attempt or were already handled by
-		// streamFinished (which returns before writing anything). Nothing
-		// has been committed to w at this point, so this write is safe —
-		// and an "all providers failed" body with an empty attempts[]
-		// would tell the client nothing while blaming the upstreams for a
-		// routre failure.
+		// No attempt recorded and nothing committed: safe to write the
+		// honest internal-error body (empty attempts[] would blame upstreams
+		// for a routre bug).
 		debugf("all-failed with empty tryLog for %q — no upstream attempt recorded", requested)
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusBadGateway)
@@ -256,10 +230,8 @@ func (p *Pipeline) Stream(ctx context.Context, req Request, w http.ResponseWrite
 	return &streamWritten{Status: http.StatusServiceUnavailable}
 }
 
-// streamEval is the per-attempt streaming eval passed to candidateRunner.
-// It performs prep + the upstream relay, records success/failure
-// side effects, and tells the runner whether to stop (OK), retry
-// (Retryable + retryable class), or move to the next candidate.
+// streamEval is the per-attempt streaming eval: prep + relay, then report
+// stop (OK) / retry (Retryable) / next-candidate to the runner.
 func (p *Pipeline) streamEval(ctx context.Context, cand router.Candidate, _ int, w http.ResponseWriter, header http.Header, api apiFormat, requested string, body, processed []byte, client string, rtkSaved int, clientFmt apiFormat) evalResult {
 	payload, perr := p.preparePayload(api, clientFmt, cand, requested, processed)
 	if perr != nil {
@@ -268,14 +240,11 @@ func (p *Pipeline) streamEval(ctx context.Context, cand router.Candidate, _ int,
 	}
 	kind := cand.Provider.Provider.Kind
 	dummyReq := &http.Request{Header: header}
-	// Streaming relays are exempt from the per-attempt timeout (they can run
-	// for minutes); the transport bounds dial + response headers.
-	streamCtx, cancel := context.WithCancel(ctx)
+	streamCtx, cancel := context.WithCancel(ctx) // streams run unbounded
 	defer cancel()
 	relayStart := time.Now()
 	status, errBody, ct, retryAfter, susage, rerr := p.handlers.relay(streamCtx, w, cand.Provider.Provider.BaseURL, dummyReq, payload, true, kind, cand.Provider.Provider.APIKeyEnv, api, clientFmt)
-	// Adaptable retry: provider added/renamed a caller-bound field after
-	// upfront sanitize. One sanitized retry, then structured failover.
+	// One sanitized retry for providers that renamed a caller-bound field.
 	if rerr == nil && clientFmt == fmtResponses && isReasoningStateError(status, errBody) {
 		if sanitized := sanitizeResponsesPayload(processed); string(sanitized) != string(processed) {
 			if sp, serr := p.preparePayload(api, clientFmt, cand, requested, sanitized); serr == nil {
@@ -294,11 +263,8 @@ func (p *Pipeline) streamEval(ctx context.Context, cand router.Candidate, _ int,
 		class := router.Classify(rerr)
 		p.metrics.Failure(cand.Provider.Provider.Name, class.String())
 		if !router.IsRetryableClass(class) {
-			// Unreachable today: Classify produces only ErrStream (handled
-			// above), ErrTimeout and ErrNetwork (both retryable). Returning
-			// OK:true with nothing written would hand the client an empty
-			// 200 that reqlog logs as ok, so surface the transport error
-			// explicitly if a future class ever lands here.
+			// Defensive: Classify yields only retryable classes here, but a
+			// future class must surface explicitly, never as an empty 200.
 			writeStatus(w, http.StatusBadGateway,
 				[]byte(fmt.Sprintf(`{"error":{"message":%q,"type":"upstream_error","model":%q}}`, rerr.Error(), requested)),
 				"application/json")
@@ -312,8 +278,7 @@ func (p *Pipeline) streamEval(ctx context.Context, cand router.Candidate, _ int,
 	}
 	if status >= 200 && status < 300 {
 		p.router.ReportSuccess(cand.Provider)
-		// Usage is captured from the SSE stream by the sniffer inside relay
-		// (same-kind and cross-kind), never buffering the response.
+		// Usage comes from the in-relay SSE sniffer, never buffered.
 		prompt := susage.prompt
 		if prompt == 0 {
 			prompt = int64(tokenize.Count(string(processed), tokenize.KindOpenAI))
@@ -334,8 +299,6 @@ func (p *Pipeline) streamEval(ctx context.Context, cand router.Candidate, _ int,
 	}
 	class := router.ClassifyStatusBody(status, errBody)
 	if class == router.ErrAuth {
-		// Auth-refresh-and-retry: the runner will call refreshFn
-		// on ErrAuth and re-invoke eval.
 		return evalResult{Err: fmt.Errorf("provider %s: status %d (%v)", cand.Provider.Provider.Name, status, class), Class: class, Retryable: false}
 	}
 	if class == router.ErrCredits {

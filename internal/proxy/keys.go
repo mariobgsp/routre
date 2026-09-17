@@ -13,9 +13,8 @@ import (
 	"github.com/mariobgsp/routre/internal/config"
 )
 
-// upstreamKey returns the provider's API key from the environment. The
-// gateway holds keys; clients never need to know them. It is the fallback
-// for tests that construct a Handlers without a keystore.
+// upstreamKey reads the provider key from the environment (fallback for
+// Handlers without a keystore, i.e. tests).
 func upstreamKey(envName string) (string, bool) {
 	v := os.Getenv(envName)
 	if v == "" {
@@ -35,11 +34,9 @@ func (h *Handlers) providerKey(envName string) (string, bool) {
 	return upstreamKey(envName)
 }
 
-// opencode session id: stable per-gateway instance fallback for the
-// x-opencode-session header opencode.ai/zen requires. Forwarded when the
-// client sent one; injected only for native Responses upstreams.
-// ponytail: stable per-instance, not per-request random. Upgrade to a
-// per-client map if opencode optimizes on it.
+// opencode session id: stable per-gateway fallback for the x-opencode-session
+// header (forward the client's when present; inject for native upstreams).
+// ponytail: per-instance, not per-request. Upgrade if opencode optimizes on it.
 var (
 	opencodeSessID   string
 	opencodeSessOnce sync.Once
@@ -57,8 +54,7 @@ func opencodeSessionID() string {
 	return opencodeSessID
 }
 
-// bearerKey extracts the bearer token from the incoming Authorization header
-// (used as X-Api-Key for Anthropic-style upstreams).
+// bearerKey extracts the bearer token from Authorization.
 func bearerKey(r *http.Request) string {
 	auth := r.Header.Get("Authorization")
 	if strings.HasPrefix(auth, "Bearer ") {
@@ -76,9 +72,7 @@ func firstNonEmpty(vals ...string) string {
 	return ""
 }
 
-// parseRetryAfter parses an upstream Retry-After header delay. It accepts
-// both forms HTTP allows: an integer number of seconds, or an HTTP-date.
-// Unparseable or negative values yield 0 (no delay).
+// parseRetryAfter parses Retry-After seconds or HTTP-dates (0 when absent/bad).
 func parseRetryAfter(s string) time.Duration {
 	s = strings.TrimSpace(s)
 	if s == "" {

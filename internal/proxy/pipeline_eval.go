@@ -67,12 +67,8 @@ func (p *Pipeline) preparePayload(api apiFormat, clientFmt apiFormat, cand route
 	return payload, nil
 }
 
-// keyFor returns the cache key for a processed body. When
-// cache.canonical_keys is enabled the body is first reduced to a
-// deterministic JSON round-trip (sorted keys, no whitespace) so that
-// semantically identical requests differing only in byte layout share a
-// key. Canonicalization never touches the values, so sampling
-// parameters stay in the key and wrong-output risk is zero.
+// keyFor returns the cache key; with canonical_keys the body is reduced to
+// a deterministic JSON round-trip first (values untouched, so keys stay safe).
 func (p *Pipeline) keyFor(processed []byte) string {
 	if p.cfg.Get().Cache.CanonicalKeys {
 		return cacheKey(cache.CanonicalJSON(processed))
@@ -80,8 +76,7 @@ func (p *Pipeline) keyFor(processed []byte) string {
 	return cacheKey(processed)
 }
 
-// mustJSON marshals v or returns a literal null. Used for the
-// all-auth response body where failures.Outcome[] must serialize.
+// mustJSON marshals v, or "null" for the failures.Outcome[] body.
 func mustJSON(v any) string {
 	b, err := json.Marshal(v)
 	if err != nil {
@@ -182,20 +177,19 @@ func (p *Pipeline) tryEval(ctx context.Context, cand router.Candidate, req Reque
 		return evalResult{OK: true, Response: &Response{StatusCode: status, Body: sendBody, ContentType: ct, Header: hdr, Provider: cand.Provider.Provider.Name}}
 	}
 	class := router.ClassifyStatusBody(status, respBody)
+	errStatus := func() error {
+		return fmt.Errorf("provider %s: status %d (%v)", cand.Provider.Provider.Name, status, class)
+	}
+	// Auth and billing failures are terminal for this candidate even though
+	// both count as retryable classes: the runner refreshes auth itself,
+	// and a balance never heals in 500ms (same-retry just burns a round).
 	if class == router.ErrAuth {
-		// Auth-refresh-and-retry: runner calls refreshFn on
-		// ErrAuth and re-invokes eval.
-		return evalResult{Err: fmt.Errorf("provider %s: status %d (%v)", cand.Provider.Provider.Name, status, class), Class: class, Retryable: false}
+		return evalResult{Err: errStatus(), Class: class, Retryable: false}
 	}
 	if class == router.ErrCredits {
-		// A billing rejection is deterministic: the balance does not
-		// heal in 500ms, so a same-cand retry just burns a second full
-		// wall-clock attempt. Fail over to the next candidate once.
-		// ReportFailure is a cooldown no-op for ErrCredits (the
-		// provider may still serve free variants).
 		p.metrics.Failure(cand.Provider.Provider.Name, class.String())
 		p.router.ReportFailureWithBackoff(cand.Provider, class, retryAfter)
-		return evalResult{Err: fmt.Errorf("provider %s: status %d (%v)", cand.Provider.Provider.Name, status, class), Class: class, Retryable: false}
+		return evalResult{Err: errStatus(), Class: class, Retryable: false}
 	}
 	if !router.IsRetryableClass(class) {
 		if cand.ShouldFailoverOnClientError() {
@@ -205,7 +199,7 @@ func (p *Pipeline) tryEval(ctx context.Context, cand router.Candidate, req Reque
 	}
 	p.metrics.Failure(cand.Provider.Provider.Name, class.String())
 	p.router.ReportFailureWithBackoff(cand.Provider, class, retryAfter)
-	return evalResult{Err: fmt.Errorf("provider %s: status %d (%v)", cand.Provider.Provider.Name, status, class), Class: class, Retryable: true}
+	return evalResult{Err: errStatus(), Class: class, Retryable: true}
 }
 
 // clampPayload caps max_tokens in payload to ceiling, handling both OpenAI (max_tokens) and Gemini (generationConfig.maxOutputTokens) shapes.

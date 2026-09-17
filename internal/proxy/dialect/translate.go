@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"strings"
 )
 
 // translateBody converts a request between the OpenAI and Anthropic dialects
@@ -118,7 +119,7 @@ func openAItoAnthropic(body []byte) ([]byte, error) {
 
 	doc := map[string]any{
 		"model":      in.Model,
-		"max_tokens": maxInt(in.MaxTokens, 4096),
+		"max_tokens": max(in.MaxTokens, 4096),
 		"messages":   out,
 	}
 	if len(systemParts) > 0 {
@@ -127,7 +128,7 @@ func openAItoAnthropic(body []byte) ([]byte, error) {
 		// for agents: the system prompt is large, stable across calls,
 		// and shared across every request in a session.
 		doc["system"] = []map[string]any{
-			{"type": "text", "text": joinStrings(systemParts, "\n"), "cache_control": map[string]any{"type": "ephemeral"}},
+			{"type": "text", "text": strings.Join(systemParts, "\n"), "cache_control": map[string]any{"type": "ephemeral"}},
 		}
 	}
 	if in.Stream {
@@ -221,7 +222,7 @@ func anthropicToOpenAI(body []byte) ([]byte, error) {
 
 	doc := map[string]any{
 		"model":      in.Model,
-		"max_tokens": maxInt(in.MaxTokens, 4096),
+		"max_tokens": max(in.MaxTokens, 4096),
 		"messages":   out,
 	}
 	if in.Stream {
@@ -341,22 +342,4 @@ func contentToText(raw json.RawMessage) string {
 func mustRaw(v any) []byte {
 	b, _ := json.Marshal(v)
 	return b
-}
-
-func maxInt(a, b int) int {
-	if a > b {
-		return a
-	}
-	return b
-}
-
-func joinStrings(parts []string, sep string) string {
-	var b bytes.Buffer
-	for i, p := range parts {
-		if i > 0 {
-			b.WriteString(sep)
-		}
-		b.WriteString(p)
-	}
-	return b.String()
 }

@@ -50,13 +50,7 @@ func (h *Handlers) route(w http.ResponseWriter, r *http.Request, api apiFormat) 
 	// Request-log + metrics emission on every exit path.
 	logReq := func(e reqlog.Entry) {
 		e.LatencyMS = time.Since(start).Milliseconds()
-		// Per-phase observability foundation (latency survey #4).
-		// Only the successful upstream attempt's phases are
-		// populated; cache-served requests and pre-pipeline errors
-		// leave these zero. TotalMS is the upstream-call wall
-		// time (dial + headers + first body + body, depending on
-		// streaming shape). Future httptrace work will split
-		// this into DialMS/HeadersMS/TTFBMS.
+		// Only successful upstream attempts populate phase timings.
 		if h.pipeline != nil {
 			if ph := h.pipeline.LastPhases(); ph != nil {
 				e.DialMS = ph.DialMS
@@ -97,10 +91,7 @@ func (h *Handlers) route(w http.ResponseWriter, r *http.Request, api apiFormat) 
 				logReq(reqlog.Entry{Client: client, Model: modelFromBody(body), Status: http.StatusOK, Class: "ok", Stream: true})
 				return
 			}
-			// Stream already wrote the response — either the all-failed
-			// 503 or the upstream's own 4xx surfaced verbatim. Never
-			// write again; just record the real status/class so reqlog
-			// and `routre logs -errors` show what the client got.
+			// Stream already wrote the response; record its status, never write again.
 			logReq(streamOutcomeEntry(client, modelFromBody(body), serr))
 			return
 		} else {
@@ -119,11 +110,8 @@ func (h *Handlers) route(w http.ResponseWriter, r *http.Request, api apiFormat) 
 				case resp.StatusCode >= 400:
 					class = "error"
 				}
-				// Provider is the upstream that served (or tried to
-				// serve) the request. Set on every non-streaming log
-				// line so `routre logs -provider <name>` actually
-				// filters something — previously this field was
-				// always empty, which made the filter a no-op.
+				// Provider served (or tried to serve) this request; logged so
+				// `routre logs -provider <name>` filters on something real.
 				logReq(reqlog.Entry{Client: client, Model: reqModel, Provider: resp.Provider, Status: resp.StatusCode, Class: class, PromptTokens: int64(tokenize.Count(string(body), tokenize.KindOpenAI))})
 				for k, vv := range resp.Header {
 					for _, v := range vv {
@@ -140,11 +128,7 @@ func (h *Handlers) route(w http.ResponseWriter, r *http.Request, api apiFormat) 
 		}
 	}
 
-	// Legacy fallback removed — pipeline now owns RTK, cache, routing,
-	// translation and retry. This path is only reached if the pipeline is
-	// nil (tests that construct Handlers without NewHandlers) or if both
-	// pipeline.Process and pipeline.Stream failed before writing.
-	// Keep a minimal honest error to avoid silent 200.
+	// Nil-pipeline fallback (tests without NewHandlers): honest 503, never silent 200.
 	h.Metrics.Request(client, "", modelFromBody(body), "all_failed")
 	logReq(reqlog.Entry{Client: client, Model: modelFromBody(body), Status: http.StatusServiceUnavailable, Class: "all_failed"})
 	w.Header().Set("Retry-After", "5")
@@ -160,27 +144,17 @@ func isStreaming(body []byte) bool {
 }
 
 // streamOutcomeEntry maps a Pipeline.Stream error to its reqlog entry.
-// Stream returns *streamWritten for every outcome it already put on the
-// wire (all-failed 503, or the upstream's own 4xx surfaced verbatim), so
-// the log carries the real status and class. Previously every terminal
-// stream outcome took the success branch and was logged as
-// status=200 class=ok, which is why 503 all_providers_failed responses
-// never appeared in reqlog.
+// Every terminal stream outcome already reached the wire, so the log
+// carries the real status/class instead of a blanket 200/ok.
 func streamOutcomeEntry(client, model string, err error) reqlog.Entry {
 	success := reqlog.Entry{Client: client, Model: model, Status: http.StatusOK, Class: "ok", Stream: true}
 	if err == nil {
-		// Success: Stream returned nil. Only reachable if a caller
-		// passes nil by mistake — report the success shape rather than
-		// inventing a failure.
 		return success
 	}
 	var sw *streamWritten
 	if errors.As(err, &sw) {
 		if sw == nil {
-			// Typed-nil *streamWritten = mid-stream abort: the client
-			// already has its partial 200 and the failure path wrote
-			// nothing. Dereferencing sw here panicked the handler on
-			// every client disconnect, so guard it explicitly.
+			// Typed-nil = mid-stream abort with a partial 200 already sent.
 			return success
 		}
 		e := reqlog.Entry{Client: client, Model: model, Status: sw.Status, Provider: sw.Provider, Stream: true}
@@ -194,16 +168,11 @@ func streamOutcomeEntry(client, model string, err error) reqlog.Entry {
 		}
 		return e
 	}
-	// Unknown pre-write failure (unreachable today — Stream only returns
-	// nil or *streamWritten): keep the conservative all-failed shape.
+	// Unknown pre-write failure: conservative all-failed shape.
 	return reqlog.Entry{Client: client, Model: model, Status: http.StatusServiceUnavailable, Class: "all_failed", Stream: true}
 }
 
-// cacheKey is the exact-match key over the processed body (post-RTK,
-// post-ordering). The "stream" flag is stripped so the same prompt
-// hits whether the client used stream:true or stream:false. The body
-// is canonicalized (deterministic JSON round-trip) when canonical
-// keys are enabled, which the pipeline does before calling this.
+// cacheKey strips the "stream" flag so stream:true/false share cache entries.
 func cacheKey(processed []byte) string {
 	if bytes.Contains(processed, []byte(`"stream"`)) {
 		var m map[string]json.RawMessage
@@ -224,8 +193,7 @@ func orderPrompt(processed []byte) []byte {
 	return cache.OrderPrompt(processed)
 }
 
-// cacheEntry wraps a response for the cache, carrying the upstream-reported
-// token usage so later hits report provider-accurate numbers.
+// cacheEntry wraps a response for the cache with provider-accurate usage.
 func cacheEntry(body []byte, ct string, prompt, completion int64) cache.Entry {
 	return cache.Entry{Body: body, ContentType: ct, PromptTokens: prompt, CompletionTokens: completion}
 }

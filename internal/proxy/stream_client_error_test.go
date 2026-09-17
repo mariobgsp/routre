@@ -27,7 +27,7 @@ func TestStreamingClientErrorSurfacesUpstreamStatus(t *testing.T) {
 	a.SetFail(http.StatusBadRequest)
 	a.SetFailBody(contextLengthBody)
 
-	base, _ := testEnv(t, buildConfigWithMocks(t, map[string]*mock.Server{"a": a}))
+	base, _ := testEnv(t, buildMockConfig(t, "openai", map[string]*mock.Server{"a": a}))
 
 	resp, data := post(t, base, "/v1/chat/completions", chatBody(true, ""))
 	if resp.StatusCode != http.StatusBadRequest {
@@ -53,7 +53,7 @@ func TestStreamingClientErrorSurfaces404(t *testing.T) {
 	a.SetFail(http.StatusNotFound)
 	a.SetFailBody(`{"error":{"message":"Model \"m\" is not supported on this endpoint.","type":"invalid_request_error"}}`)
 
-	base, _ := testEnv(t, buildConfigWithMocks(t, map[string]*mock.Server{"a": a}))
+	base, _ := testEnv(t, buildMockConfig(t, "openai", map[string]*mock.Server{"a": a}))
 
 	resp, data := post(t, base, "/v1/chat/completions", chatBody(true, ""))
 	if resp.StatusCode != http.StatusNotFound {
@@ -74,7 +74,7 @@ func TestStreamingAllFailedCarriesAttempts(t *testing.T) {
 	b, _ := mock.New("b")
 	defer b.Close()
 
-	base, _ := testEnv(t, buildConfigWithMocks(t, map[string]*mock.Server{"a": a, "b": b}))
+	base, _ := testEnv(t, buildMockConfig(t, "openai", map[string]*mock.Server{"a": a, "b": b}))
 
 	a.SetFail(http.StatusTooManyRequests)
 	b.SetFail(http.StatusTooManyRequests)

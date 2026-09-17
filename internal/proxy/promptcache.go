@@ -5,13 +5,9 @@ import (
 	"encoding/json"
 )
 
-// injectPromptCache marks Anthropic cache breakpoints on an outbound
-// /v1/messages body: the system prefix and the last message's final text
-// block get cache_control {type:"ephemeral"}. It is strictly additive and
-// fail-open — an already-present cache_control is never overwritten, and
-// malformed input is returned unchanged. When the last message's content is
-// a plain string (no block array), cache_control cannot be attached there,
-// so only the system block is marked.
+// injectPromptCache marks Anthropic cache breakpoints (system prefix + last
+// message's final text block) with cache_control ephemeral. Additive and
+// fail-open: existing breakpoints kept, malformed input unchanged.
 func injectPromptCache(body []byte) []byte {
 	if !json.Valid(body) {
 		return body
@@ -24,9 +20,7 @@ func injectPromptCache(body []byte) []byte {
 	}
 	changed := false
 
-	// Mark the system prefix: if an array, attach to the first text block;
-	// if a plain string, wrap it into an array so the breakpoint is
-	// expressible.
+	// System prefix: array → first text block; plain string → wrap it.
 	if sys, ok := doc["system"]; ok {
 		switch s := sys.(type) {
 		case []any:

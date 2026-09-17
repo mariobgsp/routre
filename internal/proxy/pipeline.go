@@ -204,16 +204,9 @@ func (p *Pipeline) processInternal(ctx context.Context, req Request) (Response, 
 				tryLog = retry.TryLog
 			}
 		}
-		// Re-shape the 503 into a more honest status when the failure
-		// pattern is uniform. If every candidate returned 4xx (the
-		// provider doesn't serve this model), the user should see a
-		// 404 model_not_found, not a 503 outage. If every candidate
-		// returned 401/403, the user should see a 502 (their keys are
-		// bad for this model), not a 503. If every candidate hit a
-		// billing rejection, the user should see a terminal 402
-		// (credits exhausted) rather than a retryable-looking 503 that
-		// makes clients retry the same losing round. Only the mixed /
-		// server-side case stays as 503.
+		// Uniform failures get honest statuses: all-4xx → 404 (unknown
+		// model, not an outage), all-auth → 502 (bad keys), all-billing
+		// → 402 (top up, don't retry). Mixed/server-side stays 503.
 		allClient, allAuth, allCredits := true, true, true
 		for _, e := range tryLog {
 			if e.Class != router.ErrClient.String() {
@@ -228,44 +221,28 @@ func (p *Pipeline) processInternal(ctx context.Context, req Request) (Response, 
 		}
 		switch {
 		case allClient && len(tryLog) > 0:
-			// Every provider rejected the model (400/404/422). This
-			// is a model-not-found, not a service outage.
 			p.metrics.Request(client, "*", requested, "client")
 			body, _ := failures.RenderBody(failures.KindModelNotFound, requested, tryLog, 0)
 			return Response{StatusCode: 404, Body: body, Header: http.Header{"Content-Type": []string{"application/json"}}, Provider: tryLog[0].Provider}, nil
 		case allAuth && len(tryLog) > 0:
-			// Every provider returned 401/403: the configured keys
-			// don't authorize this model. Surface as 502 (bad
-			// gateway) so the user knows the gateway is fine, the
-			// auth is wrong.
 			p.metrics.Request(client, "*", requested, "auth")
 			body := []byte(fmt.Sprintf(`{"error":{"message":"all configured providers rejected the request (auth). check API keys and model access.","type":"all_providers_unauthorized","model":%q,"attempts":%s}}`,
 				requested, mustJSON(tryLog)))
 			return Response{StatusCode: 502, Body: body, Header: http.Header{"Content-Type": []string{"application/json"}}, Provider: tryLog[0].Provider}, nil
 		case allCredits && len(tryLog) > 0:
-			// Every provider reported a billing rejection (401
-			// CreditsError / 402): the balance is exhausted on all of
-			// them. 402 is terminal — the client must top up or pick
-			// another account, not retry.
 			p.metrics.Request(client, "*", requested, "credits")
 			body := []byte(fmt.Sprintf(`{"error":{"message":"all configured providers rejected the request (insufficient credits). top up the account or use a model the provider serves for free.","type":"all_providers_insufficient_credits","model":%q,"attempts":%s}}`,
 				requested, mustJSON(tryLog)))
 			return Response{StatusCode: 402, Body: body, Header: http.Header{"Content-Type": []string{"application/json"}}, Provider: tryLog[0].Provider}, nil
 		}
-		// Mixed classes (some 5xx, some 4xx, some auth) — genuine
-		// outage. Surface as 503 with the per-provider breakdown. An
-		// empty breakdown is impossible here (every terminal outcome
-		// records an attempt); if it ever happens, report the internal
-		// bug instead of an unactionable "all providers failed".
+		// Mixed failure: genuine 503 with the per-provider breakdown.
+		// tryLog is non-empty here (empty returns above), so index directly.
 		if len(tryLog) == 0 {
 			debugf("all-failed with empty tryLog for %q — no upstream attempt recorded", requested)
 			return Response{StatusCode: http.StatusBadGateway, Body: emptyAttemptsBody(requested), ContentType: "application/json"}, nil
 		}
-		prov := ""
-		if len(tryLog) > 0 {
-			prov = tryLog[0].Provider
-		}
-		finalOverloaded := len(tryLog) > 0
+		prov := tryLog[0].Provider
+		finalOverloaded := true
 		for _, e := range tryLog {
 			if e.Class != router.ErrOverloaded.String() {
 				finalOverloaded = false
