@@ -12,6 +12,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 > (2026-08-25). Sections marked `legacy` use the pre-rebrand
 > routre-cli numbering and are kept for history only.
 
+## [0.5.0] — 2026-09-17
+
+### Changed
+
+- **Codebase simplification, no behavior change** (PR #83; `internal/proxy/*`, `internal/router/*`, `internal/proxy/dialect/*`) — Go source goes 22222 → 20757 lines (−6.6%) with `gofmt`/`go vet`/`go test -race ./...` green throughout:
+  - *God files split:* `router.go` (860) → `router`/`classify`/`candidates`; `chat.go` (909) → `chat`/`relay`/`keys`/`promptcache`; `pipeline.go` (917) → `pipeline`/`pipeline_stream`/`pipeline_eval`. Constants moved to their owners (retry knobs → `runner.go`, `attemptTimeout` → `pipeline_eval.go`).
+  - *Duplicates deleted:* `proxy/responses.go` + `proxy/responses_stream.go` (dead copies of the dialect package), the legacy `stream_translate.go` implementation (now a 12-line dialect delegate), the `translate_gemini.go` copy (thin shim), and the uncalled `detectFormat` plus the `kindOf` / `isNativeResponsesBase` one-line wrappers.
+  - *Helpers unified:* one `serveGateway` test wirer (5 cloned gateway setups deleted), `buildMockConfig(kind)` (openai + anthropic builders merged), `post`/`get` generalized to `testing.TB` (`postB` deleted), one shared `geminiCandidate`/`geminiPart` type (was 4 identical anonymous structs), one `upstreamPath()` switch (twin endpoint if-chains merged), `markFirst`/`markLastTextBlock` merged, `geminiFinishToOpenAI` switch → map, `boolJSON`/`maxInt`/`joinStrings` → stdlib.
+  - *Routing de-nested:* `tryEval` terminal-class handling shares one `errStatus` closure with the auth/billing-terminal order preserved (`ErrAuth`/`ErrCredits` stay non-retryable here even though they count as retryable classes); uniform-failure reshaping keeps 404/502/402 with trimmed comments.
+
+### Fixed
+
+- **Test-only data race in the new test harness** (`internal/proxy/proxy_test.go`, `auth_test.go`) — the shared `serveGateway` started `go Serve` before `authEnv` set the process token, racing the serving goroutine (`SetProcessToken` documents "call before Serve"; caught by CI's `go test -race`). `serveGateway` now takes setup hooks that run between `New` and `Listen`/`Serve`.
+
+## [0.4.14] — 2026-09-14
+
+### Changed
+
+- **Overload tuning** — HTTP 529 now classifies as overloaded, with an honest 1s `Retry-After` on all-overloaded rounds (5s mixed/server); larger cache defaults (16384 entries / 7d TTL / 128MB) for prefix reuse; terminal per-model request metrics plus `rtk_saved_total` in `/v1/status`.
+
+## [0.4.13] — 2026-09-14
+
+### Fixed
+
+- **Caller-bound Responses state sanitized** — reasoning / encrypted content / `previous_response_id` stripped upfront on the native Responses path (one sanitized retry on reasoning-state 400s); safe-prefix cache (Chat always, Responses only when free of caller-bound state, encrypted reasoning never replayed); RTK compresses Responses `function_call_output` and tool-ish blocks under the same fail-open contract.
+- **No second status over a committed stream** — a mid-stream abort can no longer trigger a superfluous `WriteHeader` over the already-committed response.
+
 ## [0.4.12] — 2026-09-13
 
 ### Fixed
