@@ -1,9 +1,12 @@
 package proxy
 
 import (
+	"bytes"
 	"encoding/json"
 	"strings"
 	"testing"
+
+	"github.com/mariobgsp/routre/internal/proxy/dialect"
 )
 
 func TestOpenAIToGemini(t *testing.T) {
@@ -100,27 +103,28 @@ func TestGeminiToOpenAIToolCall(t *testing.T) {
 }
 
 func TestG2OStreamTranslate(t *testing.T) {
-	var st g2oState
-	// Text frame.
-	out, err := st.translate(sseEvent{data: []string{`{"candidates":[{"content":{"parts":[{"text":"hi"}]}}]}`}})
-	if err != nil {
-		t.Fatal(err)
+	stream := func(upstream string) string {
+		var out bytes.Buffer
+		err := dialect.New().Stream(dialect.FormatOpenAI, dialect.FormatGemini, strings.NewReader(upstream), &out, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return out.String()
 	}
+	// Text frame.
+	out := stream("data: " + `{"candidates":[{"content":{"parts":[{"text":"hi"}]}}]}` + "\n\n")
 	if !strings.Contains(out, `"delta":{"content":"hi"}`) {
 		t.Fatalf("missing text delta: %s", out)
 	}
 	// Final frame with finishReason.
-	out2, err := st.translate(sseEvent{data: []string{`{"candidates":[{"content":{"parts":[]},"finishReason":"STOP"}]}`}})
-	if err != nil {
-		t.Fatal(err)
-	}
+	out2 := stream("data: " + `{"candidates":[{"content":{"parts":[]},"finishReason":"STOP"}]}` + "\n\n")
 	if !strings.Contains(out2, `"finish_reason":"stop"`) {
 		t.Fatalf("missing finish_reason: %s", out2)
 	}
 	// Empty data frame is skipped.
-	out3, err := st.translate(sseEvent{data: []string{`{}`}})
-	if err != nil || out3 != "" {
-		t.Fatalf("empty frame should be skipped, got %q err=%v", out3, err)
+	out3 := stream("data: {}\n\n")
+	if out3 != "" {
+		t.Fatalf("empty frame should be skipped, got %q", out3)
 	}
 }
 

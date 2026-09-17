@@ -17,18 +17,10 @@ const (
 )
 
 func (f Format) String() string {
-	switch f {
-	case FormatOpenAI:
-		return "openai"
-	case FormatAnthropic:
-		return "anthropic"
-	case FormatResponses:
-		return "responses"
-	case FormatGemini:
-		return "gemini"
-	default:
-		return "unknown"
+	if f >= FormatUnknown && f <= FormatGemini {
+		return [...]string{"unknown", "openai", "anthropic", "responses", "gemini"}[f]
 	}
+	return "unknown"
 }
 
 type Pair struct {
@@ -36,14 +28,17 @@ type Pair struct {
 }
 
 func DetectFormat(path string, body []byte) Format {
-	if strings.HasSuffix(path, "/messages") {
-		return FormatAnthropic
-	}
-	if strings.HasSuffix(path, "/responses") {
-		return FormatResponses
-	}
-	if strings.HasSuffix(path, "/chat/completions") {
-		return FormatOpenAI
+	for _, p := range []struct {
+		suffix string
+		f      Format
+	}{
+		{"/messages", FormatAnthropic},
+		{"/responses", FormatResponses},
+		{"/chat/completions", FormatOpenAI},
+	} {
+		if strings.HasSuffix(path, p.suffix) {
+			return p.f
+		}
 	}
 	if bytes.Contains(body, []byte(`"max_tokens"`)) && !bytes.Contains(body, []byte(`"stream_options"`)) {
 		return FormatAnthropic
@@ -62,14 +57,12 @@ func IsStreaming(body []byte) bool {
 }
 
 func KindToFormat(kind string) Format {
-	switch kind {
-	case "anthropic":
-		return FormatAnthropic
-	case "gemini":
-		return FormatGemini
-	case "responses":
-		return FormatResponses
-	default:
-		return FormatOpenAI
+	if f, ok := map[string]Format{
+		"anthropic": FormatAnthropic,
+		"gemini":    FormatGemini,
+		"responses": FormatResponses,
+	}[kind]; ok {
+		return f
 	}
+	return FormatOpenAI
 }

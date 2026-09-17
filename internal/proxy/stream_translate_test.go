@@ -1,13 +1,14 @@
 package proxy
 
 import (
-	"bufio"
+	"bytes"
 	"encoding/json"
 	"net/http"
 	"strings"
 	"testing"
 
 	"github.com/mariobgsp/routre/internal/mock"
+	"github.com/mariobgsp/routre/internal/proxy/dialect"
 )
 
 // buildAnthropicConfigWithMocks is buildConfigWithMocks but with anthropic
@@ -26,27 +27,13 @@ func buildAnthropicConfigWithMocks(t *testing.T, mocks map[string]*mock.Server) 
 	return `{"listen":"127.0.0.1:0","tiers":[` + strings.Join(tiers, ",") + `],"rtk":{"enabled":true,"min_bytes":500,"max_bytes":10485760},"cache":{"enabled":true,"max_entries":64,"ttl_seconds":3600,"prefix_order":false}}`
 }
 
-// translateForTest runs an SSE stream through translateStream and returns all
-// emitted bytes.
+// translateForTest runs an SSE stream through the canonical dialect translator.
 func translateForTest(t *testing.T, upstream string, from, to apiFormat) string {
 	t.Helper()
-	st := newStreamTranslator(from, to)
-	var out strings.Builder
-	rd := bufio.NewReader(strings.NewReader(upstream))
-	for {
-		evt := sseEvent{}
-		ok, ferr := evt.read(rd)
-		if !ok && ferr == nil {
-			continue
-		}
-		if ferr != nil {
-			break
-		}
-		s, perr := st.translate(evt)
-		if perr != nil {
-			t.Fatalf("translate: %v", perr)
-		}
-		out.WriteString(s)
+	var out bytes.Buffer
+	err := dialect.New().Stream(dialect.Format(from), dialect.Format(to), strings.NewReader(upstream), &out, nil)
+	if err != nil {
+		t.Fatalf("translate: %v", err)
 	}
 	return out.String()
 }
@@ -141,20 +128,27 @@ func TestStreamTranslateOpenAIToAnthropic(t *testing.T) {
 	}
 
 	// Validate it parses as well-formed anthropic SSE events.
-	rd := bufio.NewReader(strings.NewReader(got))
 	n := 0
-	for {
-		ev := sseEvent{}
-		ok, ferr := ev.read(rd)
-		if !ok && ferr == nil {
+	for _, frame := range strings.Split(got, "\n\n") {
+		frame = strings.TrimSpace(frame)
+		if frame == "" {
 			continue
 		}
-		if ferr != nil {
-			break
+		var data string
+		for _, line := range strings.Split(frame, "\n") {
+			if v, ok := strings.CutPrefix(line, "data: "); ok {
+				if data != "" {
+					data += "\n"
+				}
+				data += v
+			}
+		}
+		if data == "" {
+			continue
 		}
 		var pm map[string]any
-		if err := json.Unmarshal([]byte(ev.dataJSON()), &pm); err != nil {
-			t.Fatalf("emitted %s event not valid JSON: %v\n%s", ev.event, err, ev.dataJSON())
+		if err := json.Unmarshal([]byte(data), &pm); err != nil {
+			t.Fatalf("emitted event not valid JSON: %v\n%s", err, data)
 		}
 		n++
 	}
