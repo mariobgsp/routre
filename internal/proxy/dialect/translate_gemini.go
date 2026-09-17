@@ -197,17 +197,21 @@ func geminiToOpenAI(body []byte, model string) ([]byte, error) {
 }
 
 // geminiFinishToOpenAI maps a Gemini finishReason to an OpenAI finish_reason.
+var geminiFinishMap = map[string]string{
+	"STOP":               "stop",
+	"MAX_TOKENS":         "length",
+	"SAFETY":             "content_filter",
+	"RECITATION":         "content_filter",
+	"BLOCKLIST":          "content_filter",
+	"PROHIBITED_CONTENT": "content_filter",
+	"SPII":               "content_filter",
+}
+
 func geminiFinishToOpenAI(fr string) string {
-	switch fr {
-	case "STOP":
-		return "stop"
-	case "MAX_TOKENS":
-		return "length"
-	case "SAFETY", "RECITATION", "BLOCKLIST", "PROHIBITED_CONTENT", "SPII":
-		return "content_filter"
-	default:
-		return "stop"
+	if v, ok := geminiFinishMap[fr]; ok {
+		return v
 	}
+	return "stop"
 }
 
 // g2oState translates a Gemini streamGenerateContent SSE stream to OpenAI
