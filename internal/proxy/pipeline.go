@@ -96,14 +96,16 @@ func (p *Pipeline) processInternal(ctx context.Context, req Request) (Response, 
 	requested := env.requested
 	debugf("process request %q streaming=%v client=%q api=%v", requested, streaming, client, api)
 	env.applyRTK(p.rtk)
+	if cfg := p.cfg.Get(); cfg.Cache.PrefixOrder {
+		env.orderPrompt()
+	}
+	// finish may discard the RTK mutation (never-grow contract), so report the
+	// compression metrics only for the delta that actually shipped.
+	env.finish(p.cfg.Get().Cache.CanonicalKeys)
 	if env.rtkChanged {
 		p.metrics.RTKApplied()
 	}
 	p.metrics.RTKSaved(int64(env.rtkSaved))
-	if cfg := p.cfg.Get(); cfg.Cache.PrefixOrder {
-		env.orderPrompt()
-	}
-	env.finish(p.cfg.Get().Cache.CanonicalKeys)
 	processed := env.body
 	if !streaming && cacheableRequest(clientFmt, processed) {
 		e, got, missReason := p.cache.GetWithReason(env.key)

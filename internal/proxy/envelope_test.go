@@ -142,6 +142,7 @@ func TestEnvelopeRTKNeverGrowFallback(t *testing.T) {
 		t.Fatal("body with invalid UTF-8 did not decode")
 	}
 	env.rtkChanged = true // pretend RTK rewrote something
+	env.rtkSaved = 12_345 // and credited savings for it
 	if canon := marshalNoEscape(env.doc); len(canon) <= len(raw) {
 		t.Fatalf("precondition failed: canonical %d must exceed raw %d", len(canon), len(raw))
 	}
@@ -151,6 +152,12 @@ func TestEnvelopeRTKNeverGrowFallback(t *testing.T) {
 	}
 	if env.rtkChanged {
 		t.Fatal("rtkChanged must be cleared when the change is discarded")
+	}
+	// The saved-token delta must be discarded with it: the pipeline reports
+	// env.rtkSaved into rtk_saved_total and the ledger, and crediting a
+	// compression that never shipped over-reports savings.
+	if env.rtkSaved != 0 {
+		t.Fatalf("rtkSaved = %d, want 0 for a discarded compression", env.rtkSaved)
 	}
 }
 

@@ -120,9 +120,11 @@ func (e *envelope) finish(canonicalKeys bool) {
 	}
 	if e.rtkChanged && !e.reordered && len(canon) >= len(e.raw) {
 		// RTK's never-grow contract, enforced at the envelope: discard the
-		// mutation and send the original bytes.
+		// mutation and send the original bytes. The saved delta goes with it,
+		// so callers that report savings after finish report zero here.
 		e.body = e.raw
 		e.rtkChanged = false
+		e.rtkSaved = 0
 		e.key = byteKey(e.raw)
 		return
 	}
