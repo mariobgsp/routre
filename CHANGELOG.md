@@ -60,6 +60,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   signal.
 - **Phase timings are per-request** (`Response.Phases` / the `Stream` return);
   the shared `Pipeline.lastPhases` field and `LastPhases()` are gone.
+- **The failover budget bounds candidate selection, not a running generation**:
+  each candidate gets up to 15 s, or an equal share of the 30 s request budget
+  while several providers remain — whichever is smaller. That window covers the
+  wait for the upstream's response headers and its first body byte, and it is
+  spent once (the header wait and the first byte draw on the same slice); after
+  a first byte the timer stops and only the 5-minute `generationBackstop`
+  applies, so a client can see a legitimate long generation run past 30 s.
+- **RTK savings are estimates**: `/v1/status.rtk_saved_total`,
+  `routre_rtk_saved_tokens_total` and the ledger's `rtk_saved` are summed from
+  `tokenize.Estimate` per rewritten segment, so they no longer reconcile
+  exactly with `routre bench` (which keeps the exact BPE `Count`).
+- **Failed requests log no `total_ms`**: per-phase timing is carried only on a
+  successful (or already-emitted) attempt, so diagnosing a failover uses
+  `latency_ms` plus the per-attempt `attempts[]` classes.
 
 ### Fixed
 
@@ -74,6 +88,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 - Unbounded SSE usage carry (capped at 64 KiB) and an unbounded stream-capture
   tee (bounded by the cache's single-entry cap, and skipped entirely for
   uncacheable requests).
+- The non-streaming first body byte was bounded by the 5-minute
+  `generationBackstop` instead of the candidate's slice, holding a stalled
+  request 10× longer than the `attemptTimeout` it replaced. The candidate's
+  slice now bounds the header wait AND the first body byte, and the two draw on
+  the same slice rather than each taking a full one.
+- The header watchdog could cancel the request context after `Do` returned a
+  live response (the success path never checked the timer, and `timer.Stop()`
+  returns false once the callback has run), killing the body read — a spurious
+  failover, or a committed 200 followed by a truncated stream. It now uses the
+  same single-CAS claim as the first-byte watchdog, and the timer-won case is
+  reported as a timeout instead of a live response.
+- A candidate whose slice was already spent was reported as `class:"network"`
+  with an empty error even though no attempt ran; such a candidate is now
+  reported as untried (`failover_budget`) instead of as a failure.
+- RTK savings were credited, and the ledger charged, for a compression whose
+  bytes `finish` discarded under the never-grow contract.
+- `Router.Reset` kept the old endpoint's cooldown when the same provider name
+  moved to a different `base_url`/kind, so a repaired endpoint stayed benched;
+  reconciliation is now keyed on name+kind+base_url.
+- `usage.Load` folded over-cap rows before the configured model names were
+  known, which could bury a configured model under `_other` for the session.
+- The `failover_budget` message rendered the package budget var rather than the
+  value the run actually used.
 
 ## [0.5.1] — 2026-09-21
 

@@ -307,9 +307,9 @@ opencode run --model <provider>/<model> "hello"
 | **2 — RTK** | 12 heuristic filters on `tool_result` bodies — ≥90% fewer tokens, fail-open, no LM, 500 B–10 MiB window | `internal/rtk/` |
 | **3 — Cache** | SHA-256 of canonical JSON (post-RTK) → LRU hit/miss; streaming & JSON never cross; `shape_mismatch` tracked | `internal/cache/` |
 | **4 — Router** | Tiered `subscription → cheap → free`, per-provider cooldown `2s→30m`, `Retry-After` honored, `forward_unknown` | `internal/router/` |
-| **5 — candidateRunner** | 1× immediate connection-level retry + 1 free auth-refresh on 401/403 + `Emitted` guard; hard failover budget 15 s/candidate, 30 s/request | `internal/proxy/runner.go` |
+| **5 — candidateRunner** | 1× immediate connection-level retry + 1 free auth-refresh on 401/403 + `Emitted` guard; failover budget up to 15 s per candidate, or an equal share of the 30 s request budget while providers remain | `internal/proxy/runner.go` |
 | **6 — Dialect** | OpenAI ↔ Anthropic ↔ Gemini SSE state machine, flushed frame-by-frame, no buffering | `internal/proxy/dialect/` |
-| **7 — Relay** | `http.Transport` tuned (MaxConns 64, H2), 15 s first-byte watchdog, 5-minute generation backstop | `internal/proxy/` |
+| **7 — Relay** | `http.Transport` tuned (MaxConns 64, H2); first-byte watchdog bounded by the candidate's slice, then a 5-minute generation backstop | `internal/proxy/` |
 <!-- markdownlint-enable MD060 -->
 
 > **Observability** (left out of the hot path): per-phase `dial_ms / headers_ms / ttfb_ms / total_ms` → JSONL, `GET /metrics` (Prometheus), `routre doctor` + `probe`. **Footprint**: 10.6 MiB binary, ~10 MiB idle RSS, ~26 ms p50 added on a 1 MiB tool-heavy body (see *Benchmarks*).
@@ -322,14 +322,14 @@ opencode run --model <provider>/<model> "hello"
 
 *Source: [`docs/request-lifecycle.puml`](docs/request-lifecycle.puml)*
 
-> Per request: ingest → RTK compress → cache lookup (hit replays immediately) → tiered candidates → failover loop (one immediate connection-level retry, one auth refresh, `Retry-After` honored, bounded at 15 s/candidate and 30 s/request) → honest error if all fail. Full policy in [`docs/SPEC.md`](docs/SPEC.md).
+> Per request: ingest → RTK compress → cache lookup (hit replays immediately) → tiered candidates → failover loop (one immediate connection-level retry, one auth refresh, `Retry-After` honored; up to 15 s per candidate or an equal share of the 30 s request budget while providers remain) → honest error if all fail. Full policy in [`docs/SPEC.md`](docs/SPEC.md).
 
 **Read it left → right, top → bottom:**
 
 1. **Ingest & compress** — body → format detect → RTK (strictly never grows).
 2. **Cache lookup** — `keyFor(CanonicalJSON(post-RTK))` → `GetWithReason` → hit = immediate replay (`X-Llrouter-Cache: hit`, no upstream), miss reason emitted as `routre_cache_misses_by_reason_total{reason}`.
 3. **Candidate selection** — `Router.CandidatesWithFallbacks(model)` respects tiers, cooldowns, and `forward_unknown` (unknown model tries every tier).
-4. **Failover loop** — for each candidate, bounded by the failover budget (15 s per candidate, 30 s across the request, then a 5-minute generation backstop once the first byte lands): try → on `401/403` refresh `routre.env` key and retry once → on a connection-level error retry once immediately (no sleep) → on `5xx`/`429` fail over without a same-candidate retry → on `400/404/422` surface immediately → on `200` capture SSE frames with in-flight dialect translation and flush. Once first byte is emitted, failover is *disabled* (no duplicated output); mid-stream aborts are never cached.
+4. **Failover loop** — each candidate is bounded by the failover budget: up to 15 s, or an equal share of the 30 s request budget while several providers remain (3 candidates ⇒ ~10 s each, 6 ⇒ ~5 s). That window covers the wait for the upstream's response headers AND for its first body byte, while the gateway is still choosing a candidate; once a first byte lands the generation may finish under a 5-minute backstop. Then: try → on `401/403` refresh `routre.env` key and retry once → on a connection-level error retry once immediately (no sleep) → on `5xx`/`429` fail over without a same-candidate retry → on `400/404/422` surface immediately → on `200` capture SSE frames with in-flight dialect translation and flush. Once first byte is emitted, failover is *disabled* (no duplicated output); mid-stream aborts are never cached.
 5. **All-failed → honest error** — `model_not_found` (no provider can serve) vs `providers_unavailable` (every capable provider cooling, `Retry-After` tells you to wait) vs `all_providers_failed` with full `attempts[]` the same shape `doctor` shows.
 
 ---
@@ -352,7 +352,7 @@ opencode run --model <provider>/<model> "hello"
 
 ### Automatic failover
 
-> Tiers tried in order, per-provider `2s→30m` cooldowns (surviving reload), one immediate connection-level retry + one auth-refresh before failover, hard budget 15 s/candidate and 30 s/request, `Retry-After` honored, streams fail over only before the first byte. Failover policy table in [`docs/SPEC.md`](docs/SPEC.md).
+> Tiers tried in order, per-provider `2s→30m` cooldowns (surviving reload), one immediate connection-level retry + one auth-refresh before failover, hard budget up to 15 s per candidate (an equal share of the 30 s request budget while providers remain) covering the header wait and the first body byte, then a 5-minute generation backstop, `Retry-After` honored, streams fail over only before the first byte. Failover policy table in [`docs/SPEC.md`](docs/SPEC.md).
 
 - Providers are configured in **tiers** (`subscription` → `cheap` → `free`)
   and tried in order; within a tier, providers are tried in order.
@@ -367,12 +367,16 @@ opencode run --model <provider>/<model> "hello"
   retry cannot change the answer, and the client can retry after
   `Retry-After`. Each candidate gets a fair slice of the request budget, so
   one provider's retry can never starve an untried healthy one.
-- **The failover budget is hard**: 15 s per candidate to reach the upstream's
-  first byte, 30 s across the whole request while still choosing a candidate,
-  then a 5-minute generation backstop once the first byte arrives (a
-  legitimate long generation is never killed by the candidate budget). If the
-  budget runs out before a candidate is tried, the 503 says so with a
-  `failover_budget` attempt instead of blaming a provider that was never
+- **The failover budget bounds candidate selection, not the generation**: each
+  candidate gets up to 15 s, or an equal share of the 30 s request budget while
+  several providers remain — whichever is smaller (3 candidates ⇒ ~10 s each,
+  6 ⇒ ~5 s). That window covers the wait for the upstream's response headers
+  and for its first body byte, and it is spent once: the header wait and the
+  first byte draw on the same slice. Once a first byte has arrived the timer
+  stops and only the 5-minute generation backstop applies, so a legitimate long
+  generation is never killed — a client can therefore see a request run past
+  30 s. If the budget runs out before a candidate is tried, the 503 says so with
+  a `failover_budget` attempt instead of blaming a provider that was never
   asked.
 - **Auth rotation is recovered**: on a 401/403 the gateway re-reads the
   `routre.env` key file and, if the API key changed, retries the same
