@@ -92,26 +92,67 @@ func watchFirstByte(body io.ReadCloser, budget time.Duration) *firstByteBody {
 	return b
 }
 
+// headerWait gives exactly one of {response returned by Do, header timer} the
+// right to decide the outcome, the same way firstByteBody does for the first
+// body byte. Without it a timer that fires just as Do returns a LIVE response
+// would cancel the request context out from under the body read: a spurious
+// failover, or on a stream a committed 200 followed by StreamAborted.
+type headerWait struct {
+	claimed atomic.Bool
+	timer   *time.Timer
+	cancel  context.CancelFunc
+}
+
+// claim marks the response as arrived. It reports whether this call won the
+// race against the timer; only the winner may use the response.
+func (w *headerWait) claim() bool {
+	if !w.claimed.CompareAndSwap(false, true) {
+		return false
+	}
+	if w.timer != nil {
+		w.timer.Stop()
+	}
+	return true
+}
+
+// onTimeout claims the wait for the timer. It cancels the request context only
+// if the response had not already arrived, so a live body is never killed.
+func (w *headerWait) onTimeout() {
+	if w.claimed.CompareAndSwap(false, true) {
+		w.cancel()
+	}
+}
+
 // doWithBudget bounds the wait for response HEADERS by budget. A provider that
 // accepts the connection and then sends nothing must fail over instead of
-// holding the request until the transport's own header timeout. The returned
-// release closes the request context; the body is not bounded by this timer
-// (the attempt context, the generation backstop, still bounds it).
+// holding the request until the transport's own header timeout. Exactly one of
+// {headers, timeout} wins; the returned release closes the request context once
+// the caller is done with the body. The caller bounds the body separately.
 func (h *Handlers) doWithBudget(req *http.Request, budget time.Duration) (*http.Response, context.CancelFunc, error) {
 	reqCtx, cancel := context.WithCancel(req.Context())
-	timedOut := &atomic.Bool{}
-	timer := time.AfterFunc(budget, func() { timedOut.Store(true); cancel() })
+	w := &headerWait{cancel: cancel}
+	w.timer = time.AfterFunc(budget, w.onTimeout)
 	resp, err := h.HTTPClient.Do(req.WithContext(reqCtx))
 	if err != nil {
-		timer.Stop()
-		cancel()
-		if timedOut.Load() {
+		if !w.claim() {
+			// The timer won and already cancelled the context: this error is
+			// the budget expiring, not an upstream failure.
+			cancel()
 			return nil, nil, fmt.Errorf("no upstream response headers within %s: %w", budget, context.DeadlineExceeded)
 		}
+		cancel()
 		return nil, nil, err
 	}
-	timer.Stop()
-	// Headers arrived; keep the request context alive for the body read.
+	if !w.claim() {
+		// The timer fired while the response was in flight, so the context is
+		// already cancelled and this body is dead. Closing it and reporting the
+		// timeout keeps a live-looking 200 from failing on first read — or, on
+		// a stream, from reaching the client before it aborts.
+		_ = resp.Body.Close()
+		cancel()
+		return nil, nil, fmt.Errorf("no upstream response headers within %s: %w", budget, context.DeadlineExceeded)
+	}
+	// Headers arrived before the deadline: keep the context alive for the body.
 	return resp, cancel, nil
 }
 
