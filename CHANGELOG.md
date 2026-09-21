@@ -12,6 +12,69 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 > (2026-08-25). Sections marked `legacy` use the pre-rebrand
 > routre-cli numbering and are kept for history only.
 
+## [Unreleased]
+
+### Changed
+
+- **Gateway-added latency on a 1 MiB tool-heavy body: ~1474 ms p50 / 1623 ms
+  p99 → ~26 ms / ~28 ms** (RTK firing, cache on, 30 samples; see the harness in
+  `internal/proxy/bench_test.go`). The dominant cost was an exact BPE token
+  count on the request path; unconditional per-request debug logging was the
+  second.
+- **Token counting**: `tokenize.CountCapped` — exact BPE at or below 64 KiB,
+  estimate above. The `max_tokens` clamp uses a deliberately pessimistic
+  `ceil(bytes/3)+1` bound so it never under-counts. `tokenize.Count` and
+  `routre bench` stay exact, so the ≥90% RTK gate is unchanged.
+- **Single-decode request envelope**: one `json` decode with `UseNumber` feeds
+  RTK, prefix ordering and the cache key; one canonical marshal, one cache
+  key. The canonical form now leaves `<` `>` `&` literal (they were escaped,
+  which grew a JS client's own body by up to ~50%) and is used for the KEY
+  only — the bytes sent upstream stay the client's original bytes unless RTK
+  or prefix ordering actually changed them. Cache keys are versioned `v2:`;
+  the first run after upgrade invalidates old entries once (a clean miss,
+  never a collision).
+- **Failover budget**: `candidateFailoverBudget = 15s`,
+  `requestFailoverBudget = 30s` (new, hardcoded — no config key), plus
+  `generationBackstop = 5m` once the first byte has arrived. Each candidate
+  gets a fair slice of the request budget so a same-candidate retry cannot
+  starve an untried provider; a same-candidate retry is now allowed only for
+  connection-level errors and never sleeps. `transientRetryDelay 500ms`
+  deleted; `firstByteTimeout 30s` → the candidate budget; `attemptTimeout 30s`
+  deleted. The overloaded retry rounds (2 × `time.Sleep(1s)` and a third
+  candidate round) are deleted on both paths — an all-overloaded round now
+  returns 503 with `Retry-After: 1` immediately.
+- **Server-error retries removed**: a 5xx/429/overloaded response fails over
+  instead of being retried on the same provider.
+- **A missing provider key is `ErrConfig`, not `ErrNetwork`**: no cooldown and
+  no same-candidate retry, and it still fails over to a provider whose key is
+  set. Previously a single request swept every provider and left each in a
+  2s..5min cooldown, surfacing as `providers_unavailable`.
+- **`Router.Reset` reconciles in place**: cooldowns and the provider state an
+  in-flight request holds survive a `SIGHUP` reload instead of being
+  discarded.
+- **Model labels capped at 512** in the request metrics and the per-provider
+  usage ledger, overflow folded into `_other`; configured model names are
+  reserved and never folded.
+- **reqlog** is written after the response, off the client's critical path.
+  The per-request open is kept deliberately so logrotate keeps working with no
+  signal.
+- **Phase timings are per-request** (`Response.Phases` / the `Stream` return);
+  the shared `Pipeline.lastPhases` field and `LastPhases()` are gone.
+
+### Fixed
+
+- Data race and cross-request mis-attribution of `p.lastPhases` on concurrent
+  requests.
+- A missing provider key classified as `ErrNetwork`, causing a full candidate
+  sweep and a 2s..5min cooldown on every provider.
+- `Router.Reset` orphaning the `*ProviderState` held by in-flight requests.
+- Unbounded model-label maps in metrics and usage.
+- First-byte watchdog race: a single CAS winner decides between the first byte
+  and the timeout, and the timeout is now attributed as `ErrTimeout`.
+- Unbounded SSE usage carry (capped at 64 KiB) and an unbounded stream-capture
+  tee (bounded by the cache's single-entry cap, and skipped entirely for
+  uncacheable requests).
+
 ## [0.5.0] — 2026-09-17
 
 ### Changed

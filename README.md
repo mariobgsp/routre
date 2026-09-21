@@ -298,12 +298,12 @@ opencode run --model <provider>/<model> "hello"
 | **2 — RTK** | 12 heuristic filters on `tool_result` bodies — ≥90% fewer tokens, fail-open, no LM, 500 B–10 MiB window | `internal/rtk/` |
 | **3 — Cache** | SHA-256 of canonical JSON (post-RTK) → LRU hit/miss; streaming & JSON never cross; `shape_mismatch` tracked | `internal/cache/` |
 | **4 — Router** | Tiered `subscription → cheap → free`, per-provider cooldown `2s→30m`, `Retry-After` honored, `forward_unknown` | `internal/router/` |
-| **5 — candidateRunner** | 1× transient retry (500 ms) + 1 free auth-refresh on 401/403 + `Emitted` guard | `internal/proxy/runner.go` |
+| **5 — candidateRunner** | 1× immediate connection-level retry + 1 free auth-refresh on 401/403 + `Emitted` guard; hard failover budget 15 s/candidate, 30 s/request | `internal/proxy/runner.go` |
 | **6 — Dialect** | OpenAI ↔ Anthropic ↔ Gemini SSE state machine, flushed frame-by-frame, no buffering | `internal/proxy/dialect/` |
-| **7 — Relay** | `http.Transport` tuned (MaxConns 64, H2, `firstByteTimeout 30s` kills p99 stalls) | `internal/proxy/` |
+| **7 — Relay** | `http.Transport` tuned (MaxConns 64, H2), 15 s first-byte watchdog, 5-minute generation backstop | `internal/proxy/` |
 <!-- markdownlint-enable MD060 -->
 
-> **Observability** (left out of the hot path): per-phase `dial_ms / headers_ms / ttfb_ms / total_ms` → JSONL, `GET /metrics` (Prometheus), `routre doctor` + `probe`. **Footprint**: 10.6 MiB binary, ~10 MiB idle RSS, ~11 ms overhead (see *Benchmarks*).
+> **Observability** (left out of the hot path): per-phase `dial_ms / headers_ms / ttfb_ms / total_ms` → JSONL, `GET /metrics` (Prometheus), `routre doctor` + `probe`. **Footprint**: 10.6 MiB binary, ~10 MiB idle RSS, ~26 ms p50 added on a 1 MiB tool-heavy body (see *Benchmarks*).
 
 ---
 
@@ -313,14 +313,14 @@ opencode run --model <provider>/<model> "hello"
 
 *Source: [`docs/request-lifecycle.puml`](docs/request-lifecycle.puml)*
 
-> Per request: ingest → RTK compress → cache lookup (hit replays immediately) → tiered candidates → failover loop (retry once, refresh auth once, honor `Retry-After`) → honest error if all fail. Full policy in [`docs/SPEC.md`](docs/SPEC.md).
+> Per request: ingest → RTK compress → cache lookup (hit replays immediately) → tiered candidates → failover loop (one immediate connection-level retry, one auth refresh, `Retry-After` honored, bounded at 15 s/candidate and 30 s/request) → honest error if all fail. Full policy in [`docs/SPEC.md`](docs/SPEC.md).
 
 **Read it left → right, top → bottom:**
 
 1. **Ingest & compress** — body → format detect → RTK (strictly never grows).
 2. **Cache lookup** — `keyFor(CanonicalJSON(post-RTK))` → `GetWithReason` → hit = immediate replay (`X-Llrouter-Cache: hit`, no upstream), miss reason emitted as `routre_cache_misses_by_reason_total{reason}`.
 3. **Candidate selection** — `Router.CandidatesWithFallbacks(model)` respects tiers, cooldowns, and `forward_unknown` (unknown model tries every tier).
-4. **Failover loop** — for each candidate: try → on `401/403` refresh `routre.env` key and retry once → on `5xx`/network retry once after 500 ms → on `429` with `Retry-After` set cooldown floor → on `400/404/422` surface immediately → on `200` capture SSE frames with in-flight dialect translation and flush. Once first byte is emitted, failover is *disabled* (no duplicated output); mid-stream aborts are never cached.
+4. **Failover loop** — for each candidate, bounded by the failover budget (15 s per candidate, 30 s across the request, then a 5-minute generation backstop once the first byte lands): try → on `401/403` refresh `routre.env` key and retry once → on a connection-level error retry once immediately (no sleep) → on `5xx`/`429` fail over without a same-candidate retry → on `400/404/422` surface immediately → on `200` capture SSE frames with in-flight dialect translation and flush. Once first byte is emitted, failover is *disabled* (no duplicated output); mid-stream aborts are never cached.
 5. **All-failed → honest error** — `model_not_found` (no provider can serve) vs `providers_unavailable` (every capable provider cooling, `Retry-After` tells you to wait) vs `all_providers_failed` with full `attempts[]` the same shape `doctor` shows.
 
 ---
@@ -335,15 +335,15 @@ opencode run --model <provider>/<model> "hello"
 
 **Left — RTK (12 filters):** autodetect `tool_result` kind → matched filter (git-diff 10 lines/hunk + 80/30 head/tail, git-log 50/15, grep 80/40, dedup for tree/ls/find, build-output 50/25, smart-truncate head 120/tail 60) → fail-open guard. Bench-gated: `routre bench` fails the build if aggregate <90% or worst payload <90% (measured 91.5% / 90.3%).
 
-**Middle — Cache:** canonical JSON (sorted keys, stable numbers) → SHA-256 hex key → `prefix_order` moves system prompt first for stable upstream prompt-cache → `GetWithReason` classifies misses (`disabled`/`absent`/`expired`/`shape_mismatch` → `/v1/status` + Prometheus) → streaming replay is byte-identical & shape-aware (SSE entry never served to JSON request) → billing-accurate hit (credits stored `promptTokens`, not length estimate) → LRU `16k entries / 7d / 128 MiB`, sliding TTL refreshes hot hits, 8 MiB/entry cap, abort never stored.
+**Middle — Cache:** canonical JSON (sorted keys, stable numbers, `<` `>` `&` left literal so a JS client's body never grows) → SHA-256 hex key, versioned `v2:` so the first upgrade invalidates old entries explicitly → `prefix_order` moves system prompt first for stable upstream prompt-cache → `GetWithReason` classifies misses (`disabled`/`absent`/`expired`/`shape_mismatch` → `/v1/status` + Prometheus) → streaming replay is byte-identical & shape-aware (SSE entry never served to JSON request) → billing-accurate hit (credits stored `promptTokens`, not length estimate) → LRU `16k entries / 7d / 128 MiB`, sliding TTL refreshes hot hits, 8 MiB/entry cap, abort never stored.
 
-**Right — Router & failover:** tiers in config order (`subscription → cheap → free`) → `forward_unknown` switch → per-provider exponential cooldown `2s → 30m` (isolated — one 503 never cools others) → `Retry-After` as floor → `candidateRunner` (transient retry + auth-refresh + Emitted guard) → background `GET {base}/models` every 6h + startup + `SIGHUP` (`routre models sync` persists to `config.json`).
+**Right — Router & failover:** tiers in config order (`subscription → cheap → free`) → `forward_unknown` switch → per-provider exponential cooldown `2s → 30m` (isolated — one 503 never cools others) → `Retry-After` as floor → `candidateRunner` (one immediate connection-level retry + auth-refresh + Emitted guard, hard failover budget) → background `GET {base}/models` every 6h + startup + `SIGHUP` (`routre models sync` persists to `config.json`). Cooldowns **survive** a reload.
 
 ---
 
 ### Automatic failover
 
-> Tiers tried in order, per-provider `2s→30m` cooldowns, one transient retry + one auth-refresh before failover, `Retry-After` honored, streams fail over only before the first byte. Failover policy table in [`docs/SPEC.md`](docs/SPEC.md).
+> Tiers tried in order, per-provider `2s→30m` cooldowns (surviving reload), one immediate connection-level retry + one auth-refresh before failover, hard budget 15 s/candidate and 30 s/request, `Retry-After` honored, streams fail over only before the first byte. Failover policy table in [`docs/SPEC.md`](docs/SPEC.md).
 
 - Providers are configured in **tiers** (`subscription` → `cheap` → `free`)
   and tried in order; within a tier, providers are tried in order.
@@ -351,9 +351,20 @@ opencode run --model <provider>/<model> "hello"
   provider; the failed one enters an **exponential cooldown** (2 s base →
   30 min cap). Success resets. Cooldowns are per provider — one failing
   provider never cools down the others.
-- **Transient blips are retried first**: a network error or 5xx is retried
-  once on the same provider (500 ms delay) before failover — an hour-long
-  upstream 503 no longer burns every fallback in the same window.
+- **Only connection-level errors are retried**: a dial refused/reset or an
+  unroutable host is retried once on the same provider, immediately (no
+  sleep) and only while it fits that candidate's share of the budget. A
+  5xx/429/overloaded response fails over instead — an identical immediate
+  retry cannot change the answer, and the client can retry after
+  `Retry-After`. Each candidate gets a fair slice of the request budget, so
+  one provider's retry can never starve an untried healthy one.
+- **The failover budget is hard**: 15 s per candidate to reach the upstream's
+  first byte, 30 s across the whole request while still choosing a candidate,
+  then a 5-minute generation backstop once the first byte arrives (a
+  legitimate long generation is never killed by the candidate budget). If the
+  budget runs out before a candidate is tried, the 503 says so with a
+  `failover_budget` attempt instead of blaming a provider that was never
+  asked.
 - **Auth rotation is recovered**: on a 401/403 the gateway re-reads the
   `routre.env` key file and, if the API key changed, retries the same
   provider once with the fresh key before failing over.
@@ -504,7 +515,10 @@ cache savings, and estimated cost.
 uptime checks. It reports: uptime seconds, request totals by
 client/provider/model/outcome class, upstream failover totals by
 provider/class, cache hits/misses and the hit ratio, RTK compression applied
-count and saved tokens, and provider-reported prompt-cache read tokens. The
+count and saved tokens, and provider-reported prompt-cache read tokens.
+Distinct model labels are capped at 512 (overflow folds into `_other`, and
+configured model names are never folded); the ledger caps distinct
+`(provider, model)` rows the same way. The
 per-request JSONL log (`request_log` in config, tailed with
 `routre logs`) and the `/v1/status` + `/v1/usage` JSON endpoints cover
 the structured detail.
@@ -699,7 +713,7 @@ internal/proxy/          HTTP gateway, SSE relay, key injection, translation, lo
 internal/proxy/dialect/  cross-kind SSE state machine (OpenAI ↔ Anthropic ↔ Gemini)
 internal/proxy/failures/ shared failure.Outcome shape + 3 render functions (wire 503/404, human doctor)
 internal/usage/          token/cost ledger (persisted to ~/.routre/)
-internal/tokenize/       token estimator (benchmark instrument)
+internal/tokenize/       token estimator: exact BPE ≤64 KiB, estimate above (benchmark instrument)
 internal/mock/           mock upstream (tests + keyless e2e)
 benchdata/               tool-heavy request bodies for the bench gate
 scripts/measure-ram.sh   RSS/peak/growth measurement
