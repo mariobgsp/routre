@@ -9,33 +9,151 @@ import (
 	"io"
 	"net/http"
 	"strings"
-	"sync"
+	"sync/atomic"
 	"time"
 
+	"github.com/mariobgsp/routre/internal/cache"
 	"github.com/mariobgsp/routre/internal/proxy/dialect"
 	"github.com/mariobgsp/routre/internal/router"
 )
 
-// firstByteTimeout caps the wait for the FIRST upstream body byte; after it
-// the relay runs unbounded. A slow first byte means a stuck provider —
-// fail over instead of hanging the client.
-// ponytail: generous tail-killer; tighten to 10s once latency data shows p99.
-const firstByteTimeout = 30 * time.Second
+// generationBackstop bounds a single upstream attempt once its response
+// headers have arrived. The failover budget governs only how long the gateway
+// spends CHOOSING a candidate; a legitimate long generation must be allowed to
+// finish, so after the first byte the relay is unbounded except by this.
+const generationBackstop = 5 * time.Minute
 
-// firstByteBody closes firstByte on its first successful Read (pre-first-byte
-// failures are retryable → failover).
+// firstByteBody closes firstByte on its first successful Read. The watchdog
+// and the reader race for the body through a single CAS, so exactly one of
+// {first byte, timeout} wins: the timeout closes the body only if it won, and
+// a byte that arrives after the timeout already won is never surfaced as the
+// start of a live stream.
 type firstByteBody struct {
 	io.ReadCloser
 	firstByte chan struct{}
-	once      sync.Once
+	claimed   atomic.Bool
+	sawByte   atomic.Bool // this reader has already surfaced its first byte
+	timedOut  atomic.Bool
+	timer     *time.Timer
 }
 
 func (b *firstByteBody) Read(p []byte) (int, error) {
 	n, err := b.ReadCloser.Read(p)
-	if n > 0 {
-		b.once.Do(func() { close(b.firstByte) })
+	if n > 0 && !b.sawByte.Load() {
+		// First successful read: race the watchdog for the body. Only the
+		// outcome of THIS race decides whether the byte counts; later reads
+		// are ordinary pass-throughs.
+		if !b.claim() {
+			return 0, errFirstByteTimeout
+		}
+		b.sawByte.Store(true)
 	}
 	return n, err
+}
+
+// claim marks the first byte as arrived. It reports whether this call won the
+// race against the watchdog.
+func (b *firstByteBody) claim() bool {
+	if !b.claimed.CompareAndSwap(false, true) {
+		return false
+	}
+	if b.firstByte != nil {
+		close(b.firstByte)
+	}
+	if b.timer != nil {
+		b.timer.Stop()
+	}
+	return true
+}
+
+// onTimeout claims the body for the watchdog and closes it, which makes the
+// in-flight read fail so the caller can fail over. It does nothing if a first
+// byte already won.
+//
+// timedOut is stored AFTER Close so that observing timedOut==true publishes
+// the completed close (a store/release pairs with the reader's load/acquire),
+// and so the body is fully closed before the relay attributes a timeout.
+func (b *firstByteBody) onTimeout() {
+	if b.claimed.CompareAndSwap(false, true) {
+		_ = b.ReadCloser.Close()
+		b.timedOut.Store(true)
+	}
+}
+
+// errFirstByteTimeout is returned when the watchdog claimed the body before a
+// byte was surfaced.
+var errFirstByteTimeout = errors.New("no upstream body byte within budget")
+
+// watchFirstByte arms a first-byte watchdog on body. Callers must Stop b.timer
+// when done; the first successful read stops it via claim.
+func watchFirstByte(body io.ReadCloser, budget time.Duration) *firstByteBody {
+	b := &firstByteBody{ReadCloser: body, firstByte: make(chan struct{})}
+	b.timer = time.AfterFunc(budget, b.onTimeout)
+	return b
+}
+
+// headerWait gives exactly one of {response returned by Do, header timer} the
+// right to decide the outcome, the same way firstByteBody does for the first
+// body byte. Without it a timer that fires just as Do returns a LIVE response
+// would cancel the request context out from under the body read: a spurious
+// failover, or on a stream a committed 200 followed by StreamAborted.
+type headerWait struct {
+	claimed atomic.Bool
+	timer   *time.Timer
+	cancel  context.CancelFunc
+}
+
+// claim marks the response as arrived. It reports whether this call won the
+// race against the timer; only the winner may use the response.
+func (w *headerWait) claim() bool {
+	if !w.claimed.CompareAndSwap(false, true) {
+		return false
+	}
+	if w.timer != nil {
+		w.timer.Stop()
+	}
+	return true
+}
+
+// onTimeout claims the wait for the timer. It cancels the request context only
+// if the response had not already arrived, so a live body is never killed.
+func (w *headerWait) onTimeout() {
+	if w.claimed.CompareAndSwap(false, true) {
+		w.cancel()
+	}
+}
+
+// doWithBudget bounds the wait for response HEADERS by budget. A provider that
+// accepts the connection and then sends nothing must fail over instead of
+// holding the request until the transport's own header timeout. Exactly one of
+// {headers, timeout} wins; the returned release closes the request context once
+// the caller is done with the body. The caller bounds the body separately.
+func (h *Handlers) doWithBudget(req *http.Request, budget time.Duration) (*http.Response, context.CancelFunc, error) {
+	reqCtx, cancel := context.WithCancel(req.Context())
+	w := &headerWait{cancel: cancel}
+	w.timer = time.AfterFunc(budget, w.onTimeout)
+	resp, err := h.HTTPClient.Do(req.WithContext(reqCtx))
+	if err != nil {
+		if !w.claim() {
+			// The timer won and already cancelled the context: this error is
+			// the budget expiring, not an upstream failure.
+			cancel()
+			return nil, nil, fmt.Errorf("no upstream response headers within %s: %w", budget, context.DeadlineExceeded)
+		}
+		cancel()
+		return nil, nil, err
+	}
+	if !w.claim() {
+		// The timer fired while the response was in flight, so the context is
+		// already cancelled and this body is dead. Closing it and reporting the
+		// timeout keeps a live-looking 200 from failing on first read — or, on
+		// a stream, from reaching the client before it aborts.
+		_ = resp.Body.Close()
+		cancel()
+		return nil, nil, fmt.Errorf("no upstream response headers within %s: %w", budget, context.DeadlineExceeded)
+	}
+	// Headers arrived before the deadline: keep the context alive for the body.
+	return resp, cancel, nil
 }
 
 // buildUpstreamRequest prepares the upstream request (key + passthrough
@@ -61,7 +179,7 @@ func (h *Handlers) buildUpstreamRequest(ctx context.Context, baseURL, kind, path
 	// Authorization header is a placeholder and must not reach upstream.
 	providerKey, missing := h.providerKey(apiKeyEnv)
 	if missing {
-		return nil, fmt.Errorf("provider key %s is not set (use `routre setup` or export it)", apiKeyEnv)
+		return nil, fmt.Errorf("provider key %s is not set (use `routre setup` or export it): %w", apiKeyEnv, router.ErrMissingProviderKey)
 	}
 	if kind == "anthropic" {
 		req.Header.Set("X-Api-Key", providerKey)
@@ -114,9 +232,9 @@ func upstreamPath(fmt apiFormat, kind, baseURL string, payload []byte, stream bo
 	}
 }
 
-func (h *Handlers) relay(ctx context.Context, w http.ResponseWriter, baseURL string, r *http.Request, payload []byte, streaming bool, kind, apiKeyEnv string, from apiFormat, clientFmt apiFormat) (int, []byte, string, time.Duration, streamUsage, error) {
+func (h *Handlers) relay(ctx context.Context, w http.ResponseWriter, baseURL string, r *http.Request, payload []byte, streaming bool, kind, apiKeyEnv string, _ apiFormat, clientFmt apiFormat, firstByteBudget time.Duration, capture bool) (int, []byte, string, time.Duration, streamUsage, error) {
 	if streaming {
-		return h.relayStream(ctx, w, baseURL, r, payload, kind, apiKeyEnv, clientFmt)
+		return h.relayStream(ctx, w, baseURL, r, payload, kind, apiKeyEnv, clientFmt, firstByteBudget, capture)
 	}
 	path := upstreamPath(clientFmt, kind, baseURL, payload, false)
 	req, err := h.buildUpstreamRequest(ctx, baseURL, kind, path, payload, r, apiKeyEnv, false)
@@ -124,10 +242,26 @@ func (h *Handlers) relay(ctx context.Context, w http.ResponseWriter, baseURL str
 		return 0, nil, "", 0, streamUsage{}, err
 	}
 
-	resp, err := h.HTTPClient.Do(req)
+	headerStart := time.Now()
+	resp, release, err := h.doWithBudget(req, firstByteBudget)
 	if err != nil {
 		return 0, nil, "", 0, streamUsage{}, err
 	}
+	defer release()
+
+	// The candidate's slice bounds BOTH the header wait and the first body
+	// byte: the header wait has already consumed part of it, so the watchdog
+	// gets the remainder (one candidate never occupies twice its slice). Once
+	// the first byte arrives claim() stops the timer and only the attempt
+	// context (generationBackstop) bounds the rest of the generation.
+	bodyBudget := firstByteBudget - time.Since(headerStart)
+	if bodyBudget <= 0 {
+		_ = resp.Body.Close()
+		return 0, nil, "", 0, streamUsage{}, fmt.Errorf("no upstream body byte within %s: %w", firstByteBudget, context.DeadlineExceeded)
+	}
+	fb := watchFirstByte(resp.Body, bodyBudget)
+	defer fb.timer.Stop()
+	resp.Body = fb
 	defer resp.Body.Close()
 
 	// Error bodies are capped well below the success-body limit: a
@@ -139,6 +273,9 @@ func (h *Handlers) relay(ctx context.Context, w http.ResponseWriter, baseURL str
 	}
 	body, err := readBody(resp.Body, limit)
 	if err != nil {
+		if fb.timedOut.Load() || errors.Is(err, errFirstByteTimeout) {
+			return 0, nil, "", 0, streamUsage{}, fmt.Errorf("no upstream body byte within %s: %w", bodyBudget, context.DeadlineExceeded)
+		}
 		return 0, nil, "", 0, streamUsage{}, fmt.Errorf("read upstream response: %w", err)
 	}
 	return resp.StatusCode, body, resp.Header.Get("Content-Type"), parseRetryAfter(resp.Header.Get("Retry-After")), streamUsage{}, nil
@@ -147,36 +284,41 @@ func (h *Handlers) relay(ctx context.Context, w http.ResponseWriter, baseURL str
 // relayStream streams an SSE response to the client. Non-2xx upstreams are
 // returned (not streamed) so the caller can classify and fail over.
 // Pre-first-byte errors are retryable; post-first-byte is StreamAborted.
-func (h *Handlers) relayStream(ctx context.Context, w http.ResponseWriter, baseURL string, r *http.Request, payload []byte, kind, apiKeyEnv string, from apiFormat) (int, []byte, string, time.Duration, streamUsage, error) {
+func (h *Handlers) relayStream(ctx context.Context, w http.ResponseWriter, baseURL string, r *http.Request, payload []byte, kind, apiKeyEnv string, from apiFormat, firstByteBudget time.Duration, capture bool) (int, []byte, string, time.Duration, streamUsage, error) {
 	path := upstreamPath(from, kind, baseURL, payload, true)
 	req, err := h.buildUpstreamRequest(ctx, baseURL, kind, path, payload, r, apiKeyEnv, true)
 	if err != nil {
 		return 0, nil, "", 0, streamUsage{}, err
 	}
 
-	resp, err := h.HTTPClient.Do(req)
+	headerStart := time.Now()
+	resp, release, err := h.doWithBudget(req, firstByteBudget)
 	if err != nil {
 		return 0, nil, "", 0, streamUsage{}, err
 	}
-	defer resp.Body.Close()
+	defer release()
 
-	// Fail pre-first-byte (retryable → failover) if the upstream stalls.
-	firstByteOK := make(chan struct{})
-	firstByteTimer := time.AfterFunc(firstByteTimeout, func() {
-		select {
-		case <-firstByteOK:
-			// Already succeeded; no-op.
-		default:
-			resp.Body.Close()
-		}
-	})
-	defer firstByteTimer.Stop()
-	resp.Body = &firstByteBody{ReadCloser: resp.Body, firstByte: firstByteOK}
+	// Fail pre-first-byte (retryable → failover) if the upstream stalls. For a
+	// stream the first byte is a body byte, so the watchdog gets whatever the
+	// header wait left of this candidate's slice; after it fires the relay runs
+	// unbounded.
+	bodyBudget := firstByteBudget - time.Since(headerStart)
+	if bodyBudget <= 0 {
+		_ = resp.Body.Close()
+		return 0, nil, "", 0, streamUsage{}, fmt.Errorf("no upstream body byte within %s: %w", firstByteBudget, context.DeadlineExceeded)
+	}
+	fb := watchFirstByte(resp.Body, bodyBudget)
+	defer fb.timer.Stop()
+	resp.Body = fb
+	defer resp.Body.Close()
 
 	// A non-2xx response is NOT a stream: return it for classify + failover.
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		body, rerr := readBody(resp.Body, maxUpstreamError)
 		if rerr != nil {
+			if fb.timedOut.Load() || errors.Is(rerr, errFirstByteTimeout) {
+				return 0, nil, "", 0, streamUsage{}, fmt.Errorf("no upstream body byte within %s: %w", bodyBudget, context.DeadlineExceeded)
+			}
 			return 0, nil, "", 0, streamUsage{}, rerr
 		}
 		if h.Logger != nil {
@@ -189,8 +331,11 @@ func (h *Handlers) relayStream(ctx context.Context, w http.ResponseWriter, baseU
 	if from == fmtResponses && isNativeResponses(baseURL) {
 		to = fmtResponses
 	}
-	susage, serr := h.streamRelay(w, resp, from, to)
+	susage, serr := h.streamRelay(w, resp, from, to, capture)
 	if serr != nil {
+		if fb.timedOut.Load() || errors.Is(serr, errFirstByteTimeout) {
+			return 0, nil, "", 0, streamUsage{}, fmt.Errorf("no upstream body byte within %s: %w", bodyBudget, context.DeadlineExceeded)
+		}
 		return 0, nil, "", 0, streamUsage{}, serr
 	}
 	return http.StatusOK, nil, "", 0, susage, nil
@@ -198,11 +343,16 @@ func (h *Handlers) relayStream(ctx context.Context, w http.ResponseWriter, baseU
 
 // streamRelay copies an SSE stream to the client (translating across dialects)
 // and returns the usage captured from it.
-func (h *Handlers) streamRelay(w http.ResponseWriter, resp *http.Response, from, to apiFormat) (streamUsage, error) {
-	// Tee client-dialect bytes for the replay cache; a failed capture
-	// (client went away) is abandoned so truncated streams never cache.
-	cap := &captureWriter{ResponseWriter: w, max: 8 << 20}
-	w = cap
+func (h *Handlers) streamRelay(w http.ResponseWriter, resp *http.Response, from, to apiFormat, capture bool) (streamUsage, error) {
+	// Tee client-dialect bytes for the replay cache, bounded by the cache's
+	// single-entry cap; a failed capture (client went away) is abandoned so
+	// truncated streams never cache. Skipped entirely when the request cannot
+	// be cached anyway, so an uncacheable stream pays no tee at all.
+	var cap *captureWriter
+	if capture {
+		cap = &captureWriter{ResponseWriter: w, max: cache.MaxSingleEntryBytes}
+		w = cap
+	}
 
 	for k, vv := range resp.Header {
 		for _, v := range vv {
@@ -212,7 +362,9 @@ func (h *Handlers) streamRelay(w http.ResponseWriter, resp *http.Response, from,
 	w.Header().Set("X-Llrouter-Streaming", "true")
 	// Lazy status commit: a pre-first-byte death stays retryable only while
 	// no header reached the client.
-	cap.pending = resp.StatusCode
+	if cap != nil {
+		cap.pending = resp.StatusCode
+	}
 
 	flusher, _ := w.(http.Flusher)
 
@@ -329,7 +481,7 @@ func (c *captureWriter) Flush() {
 
 // withCaptured attaches the captured bytes to a successful stream usage.
 func (u streamUsage) withCaptured(c *captureWriter) streamUsage {
-	if !c.failed && len(c.buf) > 0 {
+	if c != nil && !c.failed && len(c.buf) > 0 {
 		u.captured = c.buf
 	}
 	return u

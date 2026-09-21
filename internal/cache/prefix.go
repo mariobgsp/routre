@@ -50,37 +50,43 @@ func OrderPrompt(body []byte) []byte {
 	if err := dec.Decode(&doc); err != nil {
 		return body
 	}
-	msgs, ok := doc["messages"].([]any)
-	if !ok || len(msgs) < 2 {
+	if !OrderPromptDoc(doc) {
 		return body
 	}
-	firstIsSystem := false
+	out, err := json.Marshal(doc)
+	if err != nil {
+		return body
+	}
+	return out
+}
+
+// OrderPromptDoc is the document half of OrderPrompt: it reorders the
+// messages array in place and reports whether anything moved. It exists so a
+// caller that already decoded the request body does not decode it again.
+//
+// Conservative contract (identical to OrderPrompt):
+//   - returns false if anything looks unusual (missing messages, non-array,
+//     already ordered);
+//   - only writes when a reorder actually happened;
+//   - never reorders when the first message is already a system message.
+func OrderPromptDoc(doc map[string]any) bool {
+	msgs, ok := doc["messages"].([]any)
+	if !ok || len(msgs) < 2 {
+		return false
+	}
 	sysIdx := -1
 	for i, m := range msgs {
 		mm, ok := m.(map[string]any)
 		if !ok {
-			return body
+			return false
 		}
-		role, _ := mm["role"].(string)
-		if role == "system" {
-			if i == 0 {
-				firstIsSystem = true
-			} else if sysIdx == -1 {
-				sysIdx = i
-			}
-			continue
-		}
-		if sysIdx == -1 && i > 0 {
-			// A non-system message before any system message: order is
-			// already "system later"; only reorder if there IS a system
-			// message after a non-system one.
+		if role, _ := mm["role"].(string); role == "system" && i != 0 && sysIdx == -1 {
+			sysIdx = i
 		}
 	}
-	_ = firstIsSystem
 	if sysIdx == -1 {
-		return body
+		return false
 	}
-	// Ensure no system message appears after a non-system one.
 	// Build: [systems..., non-systems...] preserving relative order.
 	var systems, rest []any
 	for _, m := range msgs {
@@ -92,7 +98,7 @@ func OrderPrompt(body []byte) []byte {
 		}
 	}
 	if len(systems) == 0 || len(rest) == 0 {
-		return body
+		return false
 	}
 	// Already ordered? First message system and no system later.
 	ordered := true
@@ -109,12 +115,8 @@ func OrderPrompt(body []byte) []byte {
 		}
 	}
 	if ordered {
-		return body
+		return false
 	}
 	doc["messages"] = append(systems, rest...)
-	out, err := json.Marshal(doc)
-	if err != nil {
-		return body
-	}
-	return out
+	return true
 }

@@ -3,6 +3,7 @@ package proxy
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"time"
@@ -78,8 +79,7 @@ func streamFinished(res runnerResult) (err error, handled bool) {
 	}
 }
 
-func (p *Pipeline) Stream(ctx context.Context, req Request, w http.ResponseWriter) error {
-	p.lastPhases = nil
+func (p *Pipeline) Stream(ctx context.Context, req Request, w http.ResponseWriter) (*Phases, error) {
 	body := req.Body
 	path := req.Path
 	client := req.Client
@@ -94,26 +94,28 @@ func (p *Pipeline) Stream(ctx context.Context, req Request, w http.ResponseWrite
 	if clientFmt == fmtResponses {
 		sanitizedBody = sanitizeResponsesPayload(body)
 	}
-	requested := modelFromBody(sanitizedBody)
-	processed, rtkChanged := p.rtk.Apply(sanitizedBody)
-	rtkSaved := 0
-	if rtkChanged {
-		rtkSaved = tokenize.Count(string(sanitizedBody), tokenize.KindOpenAI) - tokenize.Count(string(processed), tokenize.KindOpenAI)
+	env := newEnvelope(sanitizedBody)
+	requested := env.requested
+	env.applyRTK(p.rtk)
+	if cfg := p.cfg.Get(); cfg.Cache.PrefixOrder {
+		env.orderPrompt()
+	}
+	// finish may discard the RTK mutation (never-grow contract), so report the
+	// compression metrics only for the delta that actually shipped.
+	env.finish(p.cfg.Get().Cache.CanonicalKeys)
+	if env.rtkChanged {
 		p.metrics.RTKApplied()
 	}
-	p.metrics.RTKSaved(int64(rtkSaved))
-	if cfg := p.cfg.Get(); cfg.Cache.PrefixOrder {
-		processed = orderPrompt(processed)
-	}
+	p.metrics.RTKSaved(int64(env.rtkSaved))
+	processed := env.body
 	// Streaming replay cache: byte-identical SSE captures stay
 	// self-consistent (tool ids, finish_reason, [DONE]) by construction.
 	if cacheableRequest(clientFmt, processed) {
-		streamKey := p.keyFor(processed)
-		e, got, missReason := p.cache.GetWithReason(streamKey)
+		e, got, missReason := p.cache.GetWithReason(env.key)
 		if got && e.SSE {
 			cacheSaved := e.PromptTokens
 			if cacheSaved == 0 {
-				cacheSaved = int64(tokenize.Count(string(processed), tokenize.KindOpenAI))
+				cacheSaved = tokenize.CountCapped(string(processed))
 			}
 			if cacheSaved > 0 {
 				p.usage.Record(client, requested, 0, 0, 0, cacheSaved, usage.Prices{}, 0)
@@ -127,7 +129,7 @@ func (p *Pipeline) Stream(ctx context.Context, req Request, w http.ResponseWrite
 			if f, ok := w.(http.Flusher); ok {
 				f.Flush()
 			}
-			return nil
+			return nil, nil
 		}
 		if got && !e.SSE {
 			// Entry exists but is a JSON (non-streaming) capture; the client
@@ -150,26 +152,29 @@ func (p *Pipeline) Stream(ctx context.Context, req Request, w http.ResponseWrite
 			// Report the status that reached the wire: returning nil here
 			// made route log a client-visible 503 as status=200 class="ok",
 			// so `routre logs -errors` never showed it.
-			return &streamWritten{Status: http.StatusServiceUnavailable}
+			return nil, &streamWritten{Status: http.StatusServiceUnavailable}
 		}
 		failures.Render(w, failures.KindModelNotFound, requested, nil, 0)
-		return &streamWritten{Status: http.StatusServiceUnavailable}
+		return nil, &streamWritten{Status: http.StatusServiceUnavailable}
 	}
 	// Per-cand retry + auth refresh + tryLog accumulation now flow
 	// through candidateRunner (internal/proxy/runner.go). The eval
 	// closure below is the per-attempt work; the runner owns the
 	// iteration policy.
 	runner := newRunner(p.router, p.handlers.refreshCredentials)
-	result := runner.Run(ctx, cands, func(ctx context.Context, cand router.Candidate, attempt int) evalResult {
-		return p.streamEval(ctx, cand, attempt, w, header, api, requested, body, processed, client, rtkSaved, clientFmt)
+	result := runner.Run(ctx, cands, func(ctx context.Context, cand router.Candidate, attempt int, budget time.Duration) evalResult {
+		return p.streamEval(ctx, cand, attempt, w, header, api, requested, body, env, client, clientFmt, budget)
 	})
 	// Terminal check: a candidate succeeded (bytes written), the round
 	// committed a deterministic 4xx verbatim, or the stream aborted
 	// mid-flight (partial 200 — report a true nil, never a typed-nil
 	// *streamWritten, or callers' `err != nil` checks fire).
 	if err, done := streamFinished(result); done {
-		return err
+		return result.Phases, err
 	}
+	// An all-overloaded round renders immediately with Retry-After: 1 — no
+	// sleep and no extra candidate round. The client retries; the gateway does
+	// not hold the request open to gamble on capacity.
 	allOverloaded := len(result.TryLog) > 0
 	for _, e := range result.TryLog {
 		if e.Class != router.ErrOverloaded.String() {
@@ -177,40 +182,12 @@ func (p *Pipeline) Stream(ctx context.Context, req Request, w http.ResponseWrite
 			break
 		}
 	}
-	if allOverloaded {
-		debugf("all overloaded (stream) for %q, retry after 1s", requested)
-		time.Sleep(time.Second)
-		retry := runner.Run(ctx, cands, func(ctx context.Context, cand router.Candidate, attempt int) evalResult {
-			return p.streamEval(ctx, cand, attempt, w, header, api, requested, body, processed, client, rtkSaved, clientFmt)
+	if result.BudgetExhausted {
+		result.TryLog = append(result.TryLog, failures.Outcome{
+			Provider: "*",
+			Class:    "failover_budget",
+			Err:      fmt.Sprintf("failover budget %s exhausted before trying %d candidate(s)", result.Budget, result.Untried),
 		})
-		// The retry round can itself commit a terminal response (a
-		// deterministic 4xx surfaced verbatim, or a mid-stream abort).
-		// It must be checked here — before the reassignment below — or the
-		// all-failed render writes a second status over the committed one.
-		if err, done := streamFinished(retry); done {
-			return err
-		}
-		result = retry
-		if len(retry.TryLog) > 0 {
-			stillOverloaded := true
-			for _, e := range retry.TryLog {
-				if e.Class != router.ErrOverloaded.String() {
-					stillOverloaded = false
-					break
-				}
-			}
-			if stillOverloaded {
-				debugf("still overloaded (stream) for %q, second retry after 1s", requested)
-				time.Sleep(time.Second)
-				retry2 := runner.Run(ctx, cands, func(ctx context.Context, cand router.Candidate, attempt int) evalResult {
-					return p.streamEval(ctx, cand, attempt, w, header, api, requested, body, processed, client, rtkSaved, clientFmt)
-				})
-				if err, done := streamFinished(retry2); done {
-					return err
-				}
-				result = retry2
-			}
-		}
 	}
 	if len(result.TryLog) == 0 {
 		// No attempt recorded and nothing committed: safe to write the
@@ -220,19 +197,20 @@ func (p *Pipeline) Stream(ctx context.Context, req Request, w http.ResponseWrite
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusBadGateway)
 		_, _ = w.Write(emptyAttemptsBody(requested))
-		return &streamWritten{Status: http.StatusBadGateway}
+		return result.Phases, &streamWritten{Status: http.StatusBadGateway}
 	}
 	retryAfter := 5 * time.Second
 	if allOverloaded {
 		retryAfter = time.Second
 	}
 	failures.Render(w, failures.KindAllFailed, requested, result.TryLog, retryAfter)
-	return &streamWritten{Status: http.StatusServiceUnavailable}
+	return result.Phases, &streamWritten{Status: http.StatusServiceUnavailable}
 }
 
 // streamEval is the per-attempt streaming eval: prep + relay, then report
 // stop (OK) / retry (Retryable) / next-candidate to the runner.
-func (p *Pipeline) streamEval(ctx context.Context, cand router.Candidate, _ int, w http.ResponseWriter, header http.Header, api apiFormat, requested string, body, processed []byte, client string, rtkSaved int, clientFmt apiFormat) evalResult {
+func (p *Pipeline) streamEval(ctx context.Context, cand router.Candidate, _ int, w http.ResponseWriter, header http.Header, api apiFormat, requested string, body []byte, env *envelope, client string, clientFmt apiFormat, budget time.Duration) evalResult {
+	processed := env.body
 	payload, perr := p.preparePayload(api, clientFmt, cand, requested, processed)
 	if perr != nil {
 		p.router.ReportFailure(cand.Provider, router.ErrClient)
@@ -243,22 +221,26 @@ func (p *Pipeline) streamEval(ctx context.Context, cand router.Candidate, _ int,
 	streamCtx, cancel := context.WithCancel(ctx) // streams run unbounded
 	defer cancel()
 	relayStart := time.Now()
-	status, errBody, ct, retryAfter, susage, rerr := p.handlers.relay(streamCtx, w, cand.Provider.Provider.BaseURL, dummyReq, payload, true, kind, cand.Provider.Provider.APIKeyEnv, api, clientFmt)
+	status, errBody, ct, retryAfter, susage, rerr := p.handlers.relay(streamCtx, w, cand.Provider.Provider.BaseURL, dummyReq, payload, true, kind, cand.Provider.Provider.APIKeyEnv, api, clientFmt, budget, cacheableRequest(clientFmt, processed))
 	// One sanitized retry for providers that renamed a caller-bound field.
 	if rerr == nil && clientFmt == fmtResponses && isReasoningStateError(status, errBody) {
 		if sanitized := sanitizeResponsesPayload(processed); string(sanitized) != string(processed) {
 			if sp, serr := p.preparePayload(api, clientFmt, cand, requested, sanitized); serr == nil {
 				debugf("reasoning-state retry for %q", requested)
-				status, errBody, ct, retryAfter, susage, rerr = p.handlers.relay(streamCtx, w, cand.Provider.Provider.BaseURL, dummyReq, sp, true, kind, cand.Provider.Provider.APIKeyEnv, api, clientFmt)
+				status, errBody, ct, retryAfter, susage, rerr = p.handlers.relay(streamCtx, w, cand.Provider.Provider.BaseURL, dummyReq, sp, true, kind, cand.Provider.Provider.APIKeyEnv, api, clientFmt, budget, cacheableRequest(clientFmt, processed))
 			}
 		}
 	}
-	relayDur := time.Since(relayStart).Milliseconds()
-	p.lastPhases = &Phases{TotalMS: relayDur}
+	phases := &Phases{TotalMS: time.Since(relayStart).Milliseconds()}
 	if rerr != nil {
 		if router.IsStreamAborted(rerr) {
 			// Client already received bytes; failover would duplicate output.
-			return evalResult{OK: true, Err: rerr, Class: router.ErrStream, Emitted: true}
+			return evalResult{OK: true, Err: rerr, Class: router.ErrStream, Emitted: true, Phases: phases}
+		}
+		if errors.Is(rerr, router.ErrMissingProviderKey) {
+			// Fail over to a provider that DOES have its key, but never
+			// cooldown and never burn a same-candidate retry on a config typo.
+			return evalResult{Err: rerr, Class: router.ErrConfig, Retryable: false}
 		}
 		class := router.Classify(rerr)
 		p.metrics.Failure(cand.Provider.Provider.Name, class.String())
@@ -269,7 +251,7 @@ func (p *Pipeline) streamEval(ctx context.Context, cand router.Candidate, _ int,
 				[]byte(fmt.Sprintf(`{"error":{"message":%q,"type":"upstream_error","model":%q}}`, rerr.Error(), requested)),
 				"application/json")
 			return evalResult{
-				OK: true, Err: rerr, Class: class, Retryable: false, Emitted: true,
+				OK: true, Err: rerr, Class: class, Retryable: false, Emitted: true, Phases: phases,
 				Written: &streamWritten{Status: http.StatusBadGateway, Provider: cand.Provider.Provider.Name},
 			}
 		}
@@ -281,21 +263,21 @@ func (p *Pipeline) streamEval(ctx context.Context, cand router.Candidate, _ int,
 		// Usage comes from the in-relay SSE sniffer, never buffered.
 		prompt := susage.prompt
 		if prompt == 0 {
-			prompt = int64(tokenize.Count(string(processed), tokenize.KindOpenAI))
+			prompt = tokenize.CountCapped(string(processed))
 		}
-		p.usage.RecordFull(client, modelFromBody(body), prompt, susage.completion, int64(rtkSaved), 0, susage.cacheRead, susage.cacheCreation, pricesOf(p.cfg.Get(), cand.Provider.Provider.Name), 0)
+		p.usage.RecordFull(client, modelFromBody(body), prompt, susage.completion, int64(env.rtkSaved), 0, susage.cacheRead, susage.cacheCreation, pricesOf(p.cfg.Get(), cand.Provider.Provider.Name), 0)
 		p.metrics.CacheRead(cand.Provider.Provider.Name, susage.cacheRead)
 		p.metrics.CacheCreation(cand.Provider.Provider.Name, susage.cacheCreation)
 		p.metrics.Request(client, cand.Provider.Provider.Name, requested, "ok")
 		// Streaming replay cache: safe-prefix only, never caller-bound state.
 		if cacheableRequest(clientFmt, processed) && len(susage.captured) > 0 {
-			p.cache.Put(p.keyFor(processed), cache.Entry{
+			p.cache.Put(env.key, cache.Entry{
 				Body: susage.captured, ContentType: "text/event-stream",
 				PromptTokens: susage.prompt, CompletionTokens: susage.completion,
 				SSE: true,
 			})
 		}
-		return evalResult{OK: true}
+		return evalResult{OK: true, Phases: phases}
 	}
 	class := router.ClassifyStatusBody(status, errBody)
 	if class == router.ErrAuth {
@@ -332,6 +314,7 @@ func (p *Pipeline) streamEval(ctx context.Context, cand router.Candidate, _ int,
 			Class:     class,
 			Retryable: false,
 			Emitted:   true,
+			Phases:    phases,
 			Written:   &streamWritten{Status: status, Provider: cand.Provider.Provider.Name},
 		}
 	}

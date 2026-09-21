@@ -4,6 +4,7 @@ import (
 	"errors"
 	"io"
 	"strings"
+	"sync/atomic"
 	"testing"
 )
 
@@ -83,17 +84,21 @@ func TestFirstByteBodyClosePropagates(t *testing.T) {
 	if err := r.Close(); err != nil {
 		t.Fatalf("Close: %v", err)
 	}
-	if rc.closed != 1 {
-		t.Errorf("Close not forwarded: closed=%d", rc.closed)
+	if c := rc.CloseCount(); c != 1 {
+		t.Errorf("Close not forwarded: closed=%d", c)
 	}
 }
 
 type countingCloser struct {
 	io.ReadCloser
-	closed int
+	closed atomic.Int64
 }
 
+// CloseCount is the number of Close calls, safe to read from the test
+// goroutine while the watchdog's timer goroutine may still be closing.
+func (c *countingCloser) CloseCount() int64 { return c.closed.Load() }
+
 func (c *countingCloser) Close() error {
-	c.closed++
+	c.closed.Add(1)
 	return c.ReadCloser.Close()
 }

@@ -100,12 +100,37 @@ type Store struct {
 	mu   sync.Mutex
 	rows map[string]*Row // key: provider + "\x00" + model
 	path string
+	// reserved holds the configured model names, which are never folded into
+	// the "_other" row: the operator must be able to see which real model
+	// spent the money.
+	reserved map[string]struct{}
 }
+
+// maxRows caps distinct (provider, model) ledger rows. The model dimension is
+// client-supplied (forward_unknown), so it would otherwise grow without bound.
+const maxRows = 512
 
 // New creates an empty store. path is the persistence file ("" = no
 // persistence).
 func New(path string) *Store {
-	return &Store{rows: make(map[string]*Row), path: path}
+	return &Store{rows: make(map[string]*Row), path: path, reserved: map[string]struct{}{}}
+}
+
+// SetReservedModels records the configured model names. They always keep their
+// own row, even at the cap; anything else folds into a per-provider "_other"
+// row. Called from the gateway on startup and on config reload.
+func (s *Store) SetReservedModels(models []string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.reserved = make(map[string]struct{}, len(models))
+	for _, m := range models {
+		if m != "" {
+			s.reserved[m] = struct{}{}
+		}
+	}
+	if len(s.rows) > maxRows {
+		s.foldOverCap()
+	}
 }
 
 // Load reads persisted usage from path (missing file = empty store).
@@ -127,7 +152,84 @@ func Load(path string) (*Store, error) {
 			s.rows[keyOf(r.Provider, r.Model)] = r
 		}
 	}
+	// Deliberately do NOT fold here: the reserved model set is not known until
+	// SetReservedModels (the gateway calls it immediately after Load), and
+	// folding without it can bury a CONFIGURED model under "_other" for the
+	// rest of the session. SetReservedModels folds the over-cap rows once the
+	// reservations are known.
 	return s, nil
+}
+
+// rowFor returns the row for (provider, model), creating it if needed. At the
+// cap, a reserved (configured) model makes room by evicting an unreserved row;
+// anything else folds into the per-provider "_other" row. Callers hold s.mu.
+func (s *Store) rowFor(provider, model string) *Row {
+	k := keyOf(provider, model)
+	if row, ok := s.rows[k]; ok {
+		return row
+	}
+	if len(s.rows) >= maxRows {
+		if _, reserved := s.reserved[model]; reserved {
+			s.foldOneUnreserved()
+		} else {
+			model = "_other"
+			k = keyOf(provider, model)
+			if row, ok := s.rows[k]; ok {
+				return row
+			}
+		}
+	}
+	row := &Row{Provider: provider, Model: model}
+	s.rows[k] = row
+	return row
+}
+
+// foldOneUnreserved merges one unreserved, non-_other row into its provider's
+// "_other" row so a configured model can take a slot without losing any
+// counters. Order is unspecified: any unreserved row is expendable, but its
+// totals are preserved.
+func (s *Store) foldOneUnreserved() {
+	for k, r := range s.rows {
+		if r.Model == "_other" {
+			continue
+		}
+		if _, reserved := s.reserved[r.Model]; reserved {
+			continue
+		}
+		otherKey := keyOf(r.Provider, "_other")
+		other, ok := s.rows[otherKey]
+		if !ok {
+			other = &Row{Provider: r.Provider, Model: "_other"}
+			s.rows[otherKey] = other
+		}
+		other.Add(*r)
+		delete(s.rows, k)
+		return
+	}
+}
+
+// foldOverCap merges unreserved rows into per-provider "_other" rows until the
+// cap holds, preserving every total. Reserved models are never folded.
+func (s *Store) foldOverCap() {
+	for k, r := range s.rows {
+		if len(s.rows) <= maxRows {
+			return
+		}
+		if r.Model == "_other" {
+			continue
+		}
+		if _, reserved := s.reserved[r.Model]; reserved {
+			continue
+		}
+		otherKey := keyOf(r.Provider, "_other")
+		other, ok := s.rows[otherKey]
+		if !ok {
+			other = &Row{Provider: r.Provider, Model: "_other"}
+			s.rows[otherKey] = other
+		}
+		other.Add(*r)
+		delete(s.rows, k)
+	}
 }
 
 // Record adds a usage delta. Cost is taken from providerReportedCost when
@@ -161,14 +263,9 @@ func (s *Store) RecordFull(provider, model string, prompt, completion int64, rtk
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	k := keyOf(provider, model)
-	row, ok := s.rows[k]
-	if !ok {
-		row = &Row{Provider: provider, Model: model}
-		s.rows[k] = row
-	}
+	row := s.rowFor(provider, model)
 	row.Add(Row{
-		Provider: provider, Model: model,
+		Provider: row.Provider, Model: row.Model,
 		PromptTokens: prompt, CompletionTokens: completion,
 		RTKSavedTokens: rtkSaved, CacheSavedTokens: cacheSaved,
 		CacheReadTokens: cacheRead, CacheCreationTokens: cacheCreation,

@@ -208,14 +208,55 @@ func (r *Router) Status() []Status {
 	return out
 }
 
-// Reset replaces the provider list and policy (config reload). The old
-// failure state is discarded; cooldowns restart fresh.
+// providerInstanceKey identifies a configured upstream instance. A reload that
+// changes the endpoint (base_url) or the kind is a DIFFERENT upstream, so it
+// must start with a fresh cooldown instead of inheriting the old one's.
+func providerInstanceKey(name, kind, baseURL string) string {
+	return name + "\x00" + kind + "\x00" + baseURL
+}
+
+// Reset reconciles the provider list and policy in place (config reload).
+// Providers that still exist with the same endpoint keep their *ProviderState
+// — and therefore their failures and cooldown — so a report from a request
+// already in flight is not orphaned, and an unrelated config edit does not
+// silently wipe every cooldown. A provider removed from the config, or the
+// same name pointed at a different kind/base_url, loses its state so a repaired
+// endpoint is not stuck in the old one's cooldown.
 func (r *Router) Reset(tiers []TierInput, policy CooldownPolicy) {
-	newR := New(tiers, policy)
 	r.mu.Lock()
-	r.provs = newR.provs
-	r.policy = newR.policy
-	r.mu.Unlock()
+	defer r.mu.Unlock()
+	existing := make(map[string]*ProviderState, len(r.provs))
+	for _, p := range r.provs {
+		existing[providerInstanceKey(p.Provider.Name, p.Provider.Kind, p.Provider.BaseURL)] = p
+	}
+	next := make([]*ProviderState, 0, len(r.provs))
+	for ti, t := range tiers {
+		for _, in := range t.Providers {
+			key := providerInstanceKey(in.Name, in.Kind, in.BaseURL)
+			st, ok := existing[key]
+			if !ok {
+				st = &ProviderState{}
+			}
+			// Update only the static fields; failures/until are preserved.
+			st.Provider = ProviderInfo{
+				Name:      in.Name,
+				Kind:      in.Kind,
+				BaseURL:   in.BaseURL,
+				APIKeyEnv: in.APIKeyEnv,
+				Models:    in.Models,
+				Tier:      t.Name,
+				TierIndex: ti,
+				MaxTokens: in.MaxTokens,
+			}
+			next = append(next, st)
+			// Consume the key so a duplicated provider later in the config gets
+			// its own state rather than aliasing this one (deterministic: the
+			// first occurrence reuses, later ones start fresh, in config order).
+			delete(existing, key)
+		}
+	}
+	r.provs = next
+	r.policy = policy
 }
 
 // Policy returns the cooldown policy (used when rebuilding the router on
@@ -247,10 +288,7 @@ func (r *Router) Reconfigure(cfg config.Config) {
 	r.SetForwardUnknown(cfg.ForwardUnknown)
 }
 
-var (
-	errMidStream            = errors.New("stream aborted after first byte")
-	contextDeadlineExceeded = deadlineErr{}
-)
+var errMidStream = errors.New("stream aborted after first byte")
 
 // StreamAborted wraps an error that occurred after the first stream byte was
 // sent to the client. Failover must NOT retry these.
@@ -258,10 +296,3 @@ func StreamAborted() error { return errMidStream }
 
 // IsStreamAborted reports whether err is a stream-abort sentinel.
 func IsStreamAborted(err error) bool { return errors.Is(err, errMidStream) }
-
-type deadlineErr struct{}
-
-func (deadlineErr) Error() string { return "context deadline exceeded" }
-func (deadlineErr) Is(target error) bool {
-	return target.Error() == "context deadline exceeded"
-}

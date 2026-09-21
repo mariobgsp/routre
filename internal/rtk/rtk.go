@@ -15,6 +15,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"github.com/mariobgsp/routre/internal/config"
+	"github.com/mariobgsp/routre/internal/tokenize"
 	"sync"
 )
 
@@ -86,30 +87,72 @@ func (r *RTK) Enabled() bool {
 // whether compression happened. Never returns an error for malformed input;
 // malformed input is returned unchanged with changed=false.
 func (r *RTK) Apply(in []byte) (out []byte, changed bool) {
+	out, changed, _ = r.applyWithDelta(in)
+	return out, changed
+}
+
+// applyWithDelta is Apply plus the capped-token delta (before - after) summed
+// over the segments it actually rewrote. The delta is measured per changed
+// segment, not over the whole body, so it costs O(changed bytes) and never a
+// whole-body BPE pass.
+func (r *RTK) applyWithDelta(in []byte) (out []byte, changed bool, savedTokens int) {
 	r.mu.RLock()
 	cfg := r.cfg
 	r.mu.RUnlock()
 
 	if !cfg.Enabled {
-		return in, false
+		return in, false, 0
 	}
 	if !json.Valid(in) {
-		return in, false
+		return in, false, 0
 	}
 	dec := json.NewDecoder(bytes.NewReader(in))
 	dec.UseNumber()
 	var doc map[string]any
 	if err := dec.Decode(&doc); err != nil {
-		return in, false
+		return in, false, 0
 	}
+	mutated, saved := applyDoc(cfg, doc)
+	if !mutated {
+		return in, false, 0
+	}
+	out, err := json.Marshal(doc)
+	if err != nil {
+		return in, false, 0
+	}
+	// Never grow: if re-marshaling somehow produced a larger payload
+	// (whitespace normalization), keep the original.
+	if len(out) >= len(in) {
+		return in, false, 0
+	}
+	return out, true, saved
+}
+
+// ApplyDoc compresses tool content in doc in place. It reports whether
+// anything changed and the capped-token delta (before - after) summed over the
+// segments rewritten. The caller owns the document and the marshal, so the
+// whole body is decoded exactly once.
+func (r *RTK) ApplyDoc(doc map[string]any) (changed bool, savedTokens int) {
+	r.mu.RLock()
+	cfg := r.cfg
+	r.mu.RUnlock()
+	if !cfg.Enabled {
+		return false, 0
+	}
+	return applyDoc(cfg, doc)
+}
+
+// applyDoc is the mutation half shared by Apply and ApplyDoc.
+func applyDoc(cfg Config, doc map[string]any) (changed bool, savedTokens int) {
 	mutated := false
+	saved := 0
 	if messages, ok := doc["messages"].([]any); ok {
 		for _, m := range messages {
 			msg, ok := m.(map[string]any)
 			if !ok {
 				continue
 			}
-			if compressMessage(cfg, msg) {
+			if compressMessage(cfg, msg, &saved) {
 				mutated = true
 			}
 		}
@@ -122,30 +165,27 @@ func (r *RTK) Apply(in []byte) (out []byte, changed bool) {
 			if !ok {
 				continue
 			}
-			if compressResponsesItem(cfg, m) {
+			if compressResponsesItem(cfg, m, &saved) {
 				mutated = true
 			}
 		}
 	}
-	if !mutated {
-		return in, false
-	}
-	out, err := json.Marshal(doc)
-	if err != nil {
-		return in, false
-	}
-	// Never grow: if re-marshaling somehow produced a larger payload
-	// (whitespace normalization), keep the original.
-	if len(out) >= len(in) {
-		return in, false
-	}
-	return out, true
+	return mutated, saved
+}
+
+// recordSaved accumulates the estimated token delta of one rewritten segment.
+// It deliberately uses Estimate, not CountCapped: CountCapped is exact below
+// the 64 KiB cap, and a tool-heavy body has many sub-cap segments, so a
+// per-segment exact BPE count would put whole-body-scale work (hundreds of ms)
+// back on the request path. Estimate is O(segment bytes) with a tiny constant.
+func recordSaved(saved *int, before, after string) {
+	*saved += tokenize.Estimate(before) - tokenize.Estimate(after)
 }
 
 // compressResponsesItem compresses one Responses input item in place.
 // function_call_output output + message text blocks only; reasoning items
 // are left to the sanitizer. Same fail-open compressText contract.
-func compressResponsesItem(cfg Config, m map[string]any) bool {
+func compressResponsesItem(cfg Config, m map[string]any, saved *int) bool {
 	typ, _ := m["type"].(string)
 	switch typ {
 	case "function_call_output":
@@ -158,6 +198,7 @@ func compressResponsesItem(cfg Config, m map[string]any) bool {
 			return false
 		}
 		m["output"] = nc
+		recordSaved(saved, s, nc)
 		return true
 	case "message":
 		// Chat path only compresses tool output; user/developer prompts
@@ -175,6 +216,7 @@ func compressResponsesItem(cfg Config, m map[string]any) bool {
 				return false
 			}
 			m["content"] = nc
+			recordSaved(saved, s, nc)
 			return true
 		}
 		arr, ok := c.([]any)
@@ -194,6 +236,7 @@ func compressResponsesItem(cfg Config, m map[string]any) bool {
 			if ts, ok := bm["text"].(string); ok {
 				if nc, ok := compressText(cfg, ts); ok {
 					bm["text"] = nc
+					recordSaved(saved, ts, nc)
 					changed = true
 				}
 			}
@@ -205,8 +248,8 @@ func compressResponsesItem(cfg Config, m map[string]any) bool {
 }
 
 // compressMessage compresses one message's content in place. Reports whether
-// anything changed.
-func compressMessage(cfg Config, msg map[string]any) bool {
+// anything changed. saved accumulates the capped-token delta of each rewrite.
+func compressMessage(cfg Config, msg map[string]any, saved *int) bool {
 	role, _ := msg["role"].(string)
 	content, ok := msg["content"]
 	if !ok {
@@ -220,6 +263,7 @@ func compressMessage(cfg Config, msg map[string]any) bool {
 				return false
 			}
 			msg["content"] = nc
+			recordSaved(saved, c, nc)
 			return true
 		}
 		return false
@@ -237,6 +281,7 @@ func compressMessage(cfg Config, msg map[string]any) bool {
 				if tc, ok := b["content"].(string); ok {
 					if nc, ok2 := compressText(cfg, tc); ok2 {
 						b["content"] = nc
+						recordSaved(saved, tc, nc)
 						changed = true
 					}
 				} else if arr, ok := b["content"].([]any); ok {
@@ -248,6 +293,7 @@ func compressMessage(cfg Config, msg map[string]any) bool {
 						if ts, ok := tbm["text"].(string); ok {
 							if nc, ok2 := compressText(cfg, ts); ok2 {
 								tbm["text"] = nc
+								recordSaved(saved, ts, nc)
 								changed = true
 							}
 						}
@@ -259,6 +305,7 @@ func compressMessage(cfg Config, msg map[string]any) bool {
 					if ts, ok := b["text"].(string); ok {
 						if nc, ok2 := compressText(cfg, ts); ok2 {
 							b["text"] = nc
+							recordSaved(saved, ts, nc)
 							changed = true
 						}
 					}

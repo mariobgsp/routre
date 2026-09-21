@@ -57,12 +57,13 @@ type evalResult struct {
 }
 
 // evalFn runs a single attempt against a candidate. The runner invokes
-// it once per retry, with attempt starting at 0 and the current cand
-// passed in. eval is responsible for building the payload
+// it once per retry, with attempt starting at 0, the current cand, and the
+// wall-clock budget this attempt may use (never more than the candidate's
+// fair slice of the remaining request budget). eval is responsible for building the payload
 // (translate/clamp/prompt-cache) and for all post-success side effects
 // (usage, metrics, cache write); the runner only owns iteration,
 // retry, refresh, and tryLog accumulation.
-type evalFn func(ctx context.Context, cand router.Candidate, attempt int) evalResult
+type evalFn func(ctx context.Context, cand router.Candidate, attempt int, budget time.Duration) evalResult
 
 // refreshFn returns true if it actually changed credentials, signaling
 // the runner to retry the same candidate. Routre injects this from
@@ -77,10 +78,19 @@ type refreshFn func(apiKeyEnv string) bool
 // (Stream) call sites.
 type candidateRunner struct {
 	router     *router.Router
-	maxAttempt int           // total attempts per candidate (1 + retryTransientAttempts)
-	retryDelay time.Duration // pause between retries of the same candidate
-	refresh    refreshFn     // nil disables the auth-refresh-and-retry path
+	maxAttempt int       // total attempts per candidate (1 + retryTransientAttempts)
+	refresh    refreshFn // nil disables the auth-refresh-and-retry path
 }
+
+// FailoverBudget bounds how long the runner spends CHOOSING a candidate. It
+// never cancels an attempt already in flight (the generation backstop does
+// that). Vars rather than consts only so the budget tests can shrink them;
+// TestFailoverBudgetsAreHardcoded pins the shipped values. Deliberately not
+// config keys.
+var (
+	candidateFailoverBudget = 15 * time.Second // per candidate, pre-first-byte
+	requestFailoverBudget   = 30 * time.Second // whole request, across candidates
+)
 
 // newRunner builds a runner with the project's default policy. Tests
 // can construct one directly with custom retry knobs.
@@ -88,7 +98,6 @@ func newRunner(r *router.Router, refresh refreshFn) *candidateRunner {
 	return &candidateRunner{
 		router:     r,
 		maxAttempt: 1 + retryTransientAttempts,
-		retryDelay: transientRetryDelay,
 		refresh:    refresh,
 	}
 }
@@ -110,29 +119,57 @@ type runnerResult struct {
 	// response (nil when nothing was written or the stream succeeded).
 	Written *streamWritten
 	Phases  *Phases
+	// BudgetExhausted is true when the request budget ran out before some
+	// candidate was attempted. Untried is how many were never tried; the
+	// caller renders a failover_budget outcome so the 503 never claims a
+	// provider failed when it was never asked.
+	BudgetExhausted bool
+	Untried         int
+	// Budget is the request budget this run actually used, so callers report
+	// the effective value rather than re-reading the (mutable) package var.
+	Budget time.Duration
 }
 
 // Run iterates over cands, invoking eval once per attempt per candidate.
 // On the first success it returns. On exhaustion, it returns the
 // accumulated TryLog (one entry per attempted candidate) so the caller
 // can render an "all providers failed" response.
+//
+// Each candidate is allocated a fair slice of the remaining request budget,
+// so every candidate that has not been tried yet is guaranteed a window: a
+// same-candidate retry can never consume the share a healthy untried
+// candidate still needs.
 func (r *candidateRunner) Run(ctx context.Context, cands []router.Candidate, eval evalFn) runnerResult {
 	tryLog := make([]failures.Outcome, 0, len(cands))
-	for _, cand := range cands {
+	requestBudget := requestFailoverBudget
+	deadline := time.Now().Add(requestBudget)
+	untried := len(cands)
+	skipped := 0
+	for i, cand := range cands {
+		if time.Until(deadline) <= 0 {
+			skipped = len(cands) - i
+			break
+		}
+		slice := time.Until(deadline) / time.Duration(untried)
+		if slice > candidateFailoverBudget {
+			slice = candidateFailoverBudget
+		}
+		candDeadline := time.Now().Add(slice)
+		untried--
+
 		var (
 			lastErr   error
 			lastClass router.ErrClass
-			appended  bool // record this cand's outcome the first time we leave the inner loop on a failure
+			appended  bool
+			attempted bool
 		)
 		for attempt := 0; attempt < r.maxAttempt; attempt++ {
-			if attempt > 0 {
-				if lastClass == router.ErrClient {
-					// 4xx-class failures never recover with a same-cand retry.
-					break
-				}
-				time.Sleep(r.retryDelay)
+			budget := time.Until(candDeadline)
+			if budget <= 0 {
+				break
 			}
-			res := eval(ctx, cand, attempt)
+			attempted = true
+			res := eval(ctx, cand, attempt, budget)
 			// OK means "stop iterating candidates" — either a real
 			// success (Err == nil) or a streaming eval that already
 			// committed bytes (Err != nil, Emitted == true). In both
@@ -141,9 +178,7 @@ func (r *candidateRunner) Run(ctx context.Context, cands []router.Candidate, eva
 				return runnerResult{OK: res.Err == nil, Emitted: res.Emitted, Response: res.Response, TryLog: tryLog, Written: res.Written, Phases: res.Phases}
 			}
 			// Once a streaming eval emitted bytes, failover would
-			// duplicate output. Stop trying immediately. The current
-			// cand is not added to the tryLog because the client
-			// already has its bytes.
+			// duplicate output. Stop immediately.
 			if res.Emitted {
 				return runnerResult{OK: false, TryLog: tryLog, Written: res.Written}
 			}
@@ -152,33 +187,39 @@ func (r *candidateRunner) Run(ctx context.Context, cands []router.Candidate, eva
 				lastClass = res.Class
 			}
 			// Auth-refresh-and-retry: on ErrAuth with a successful
-			// credential refresh, loop immediately (no sleep, no
-			// attempt budget consumed for the refresh itself — the
-			// refresh attempt counts as the current `attempt`).
+			// credential refresh, loop immediately (no sleep).
 			if res.Class == router.ErrAuth && r.refresh != nil {
 				if r.refresh(cand.Provider.Provider.APIKeyEnv) {
 					continue
 				}
 			}
-			// Terminal failure for this cand: record it once so a
-			// later success carries the failure history. Retryable
-			// failures retry the same cand and don't record yet.
-			if !res.Retryable || !router.IsRetryableClass(res.Class) {
-				if !appended {
-					tryLog = append(tryLog, buildOutcome(cand, lastErr, lastClass, r.router))
-					appended = true
-				}
-				break
+			// A same-candidate retry is only for connection-level errors
+			// (dial refused/reset, no route): an immediate identical retry
+			// cannot change a 5xx/429/overloaded answer, so those fail over
+			// instead of burning another candidate's window.
+			if attempt+1 < r.maxAttempt && res.Retryable && res.Class == router.ErrNetwork {
+				continue
+			}
+			if !appended {
+				tryLog = append(tryLog, buildOutcome(cand, lastErr, lastClass, r.router))
+				appended = true
+			}
+			break
+		}
+		if !appended {
+			if attempted {
+				tryLog = append(tryLog, buildOutcome(cand, lastErr, lastClass, r.router))
+			} else {
+				// The candidate's slice was already spent when its turn came, so
+				// no attempt ran. Reporting it via buildOutcome would send
+				// lastClass at its zero value (ErrNetwork) with a nil error —
+				// blaming a provider that was never called. Count it as untried
+				// instead; the caller renders the honest failover_budget entry.
+				skipped++
 			}
 		}
-		// Inner loop exhausted via retry budget without a terminal
-		// signal (every attempt was retryable but the budget ran
-		// out). Record now.
-		if !appended {
-			tryLog = append(tryLog, buildOutcome(cand, lastErr, lastClass, r.router))
-		}
 	}
-	return runnerResult{OK: false, TryLog: tryLog}
+	return runnerResult{OK: false, TryLog: tryLog, BudgetExhausted: skipped > 0, Untried: skipped, Budget: requestBudget}
 }
 
 // buildOutcome converts a candidate + last error/class into the
@@ -203,11 +244,8 @@ func buildOutcome(cand router.Candidate, lastErr error, lastClass router.ErrClas
 }
 
 // retryTransientAttempts: how many times a candidate is retried on a
-// transient failure (network error or 5xx) before failover moves on.
-// Upstream 503 blips are common (opencode.ai had an hour-long one in
-// production); a single fast retry absorbs them without escalating the
-// provider's cooldown and burning every fallback in the same window.
+// connection-level failure (dial refused/reset, no route) before failover
+// moves on. Upstream 5xx/429/overloaded responses are NOT retried on the same
+// candidate: an immediate identical retry cannot change the answer, so they
+// fail over instead. No sleep is involved.
 const retryTransientAttempts = 1
-
-// transientRetryDelay: pause between retries of the same candidate.
-const transientRetryDelay = 500 * time.Millisecond

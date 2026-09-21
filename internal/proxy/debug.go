@@ -13,8 +13,11 @@ func SetDebug(enabled bool, logger *log.Logger) {
 }
 
 func debugf(format string, args ...any) {
-	// Forced on for trace session — user requested DEBUG for a while.
-	// Use the injected logger when available, otherwise fall back to stdlog.
+	// Honour the debug flag: this runs on every request, so an unconditional
+	// log call is per-request stderr I/O on the hot path.
+	if !debugEnabled {
+		return
+	}
 	if debugLogger != nil {
 		debugLogger.Printf("[DEBUG proxy] "+format, args...)
 		return

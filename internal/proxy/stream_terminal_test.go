@@ -44,31 +44,21 @@ func captureStderr(t *testing.T, fn func()) string {
 	return string(piped) + logBuf.String()
 }
 
-// TestStreamingOverloadedThenClientErrorSingleWrite is the regression test for
-// the overloaded-retry double write: when round 1 ends all-overloaded the
-// pipeline retries, and if that retry round surfaces a deterministic 4xx
-// verbatim, the retry round has ALREADY committed the response. Reassigning
-// the retry result and then checking only `len(TryLog) == 0` wrote a second
-// status over it — the client got the 400 JSON immediately followed by the
-// internal-error JSON, and reqlog recorded a 502 the client never received.
-func TestStreamingOverloadedThenClientErrorSingleWrite(t *testing.T) {
+// TestStreamingAllOverloadedSingleWriteNoSleep is the regression test for the
+// overloaded-retry double write, updated for the hard failover budget: an
+// all-overloaded round no longer sleeps and re-runs. It renders once, as a 503
+// with Retry-After: 1, and the upstream sees exactly one request per candidate
+// (an immediate identical retry cannot change an overloaded answer).
+func TestStreamingAllOverloadedSingleWriteNoSleep(t *testing.T) {
 	var mu sync.Mutex
 	calls := 0
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		mu.Lock()
 		calls++
-		n := calls
 		mu.Unlock()
 		w.Header().Set("Content-Type", "application/json")
-		if n <= 2 {
-			// Both attempts of round 1: transient capacity, classifies as
-			// overloaded so the pipeline takes its retry round.
-			w.WriteHeader(http.StatusServiceUnavailable)
-			_, _ = w.Write([]byte(`{"error":{"message":"model is currently overloaded, try again later"}}`))
-			return
-		}
-		w.WriteHeader(http.StatusBadRequest)
-		_, _ = w.Write([]byte(contextLengthBody))
+		w.WriteHeader(http.StatusServiceUnavailable)
+		_, _ = w.Write([]byte(`{"error":{"message":"model is currently overloaded, try again later"}}`))
 	}))
 	defer upstream.Close()
 
@@ -77,18 +67,26 @@ func TestStreamingOverloadedThenClientErrorSingleWrite(t *testing.T) {
 		`"rtk":{"enabled":false},"cache":{"enabled":true,"max_entries":64,"ttl_seconds":3600}}`
 	base, _ := testEnv(t, cfg)
 
+	start := time.Now()
 	resp, data := post(t, base, "/v1/chat/completions", chatBody(true, ""))
+	elapsed := time.Since(start)
 	mu.Lock()
 	got := calls
 	mu.Unlock()
-	if resp.StatusCode != http.StatusBadRequest {
-		t.Fatalf("expected the retry round's 400 to reach the client, got %d: %s", resp.StatusCode, data)
+
+	if resp.StatusCode != http.StatusServiceUnavailable {
+		t.Fatalf("expected 503 for an all-overloaded round, got %d: %s", resp.StatusCode, data)
 	}
-	if string(data) != contextLengthBody {
-		t.Fatalf("the surfaced 4xx must be written exactly once — got a second body appended:\n%s", data)
+	if got != 1 {
+		t.Fatalf("expected exactly one request per candidate (no retry round), upstream saw %d", got)
 	}
-	if got < 3 {
-		t.Fatalf("expected 2 overloaded attempts + 1 retry request, upstream saw %d", got)
+	if ra := resp.Header.Get("Retry-After"); ra != "1" {
+		t.Errorf("Retry-After: want %q, got %q", "1", ra)
+	}
+	// No sleep, no second round: the whole request must be far under the old
+	// 2 x time.Sleep(1s).
+	if elapsed > 200*time.Millisecond {
+		t.Errorf("all-overloaded round slept: %v (retry rounds must be gone)", elapsed)
 	}
 }
 

@@ -73,7 +73,10 @@ func DefaultConfig() Config {
 	return Config{Enabled: true, MaxEntries: 16384, TTLSeconds: 604800, PrefixOrder: true, MaxBytes: 128 << 20, SlidingTTL: true}
 }
 
-// Cache is a concurrency-safe exact-match LRU with TTL.
+// MaxSingleEntryBytes is the largest response body the cache will store. The
+// streaming capture tee is bounded by the same value so it never buffers more
+// than an entry could hold.
+const MaxSingleEntryBytes = 8 << 20 // 8 MiB per entry
 type Cache struct {
 	mu   sync.Mutex
 	cfg  Config
@@ -161,8 +164,7 @@ func (c *Cache) Put(key string, e Entry) {
 	if !c.cfg.Enabled {
 		return
 	}
-	const maxSingle = 8 << 20 // 8 MiB per entry
-	if len(e.Body) > maxSingle {
+	if len(e.Body) > MaxSingleEntryBytes {
 		return
 	}
 	now := time.Now()

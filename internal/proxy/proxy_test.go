@@ -167,10 +167,11 @@ func TestFailoverOrder(t *testing.T) {
 	if resp.StatusCode != 200 {
 		t.Fatalf("expected 200 from c after failover, got %d: %s", resp.StatusCode, data)
 	}
-	// Transient 5xx are retried once per candidate before failover, so a
-	// and b each see 2 attempts (original + 1 retry); c serves first try.
-	if a.Requests() != 2 || b.Requests() != 2 || c.Requests() != 1 {
-		t.Fatalf("expected retry-then-failover counts a=2 b=2 c=1, got a=%d b=%d c=%d", a.Requests(), b.Requests(), c.Requests())
+	// A 5xx is NOT retried on the same candidate (only connection-level
+	// errors are), so a and b each see exactly one attempt and c serves first
+	// try. The old behaviour retried transient 5xx once per candidate.
+	if a.Requests() != 1 || b.Requests() != 1 || c.Requests() != 1 {
+		t.Fatalf("expected failover without same-candidate 5xx retries a=1 b=1 c=1, got a=%d b=%d c=%d", a.Requests(), b.Requests(), c.Requests())
 	}
 	if got := resp.Header.Get("X-Llrouter-Provider"); got != "c" {
 		t.Fatalf("expected provider c to serve, got %q", got)

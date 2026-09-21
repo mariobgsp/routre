@@ -20,6 +20,7 @@ func main() {
 	addr := flag.String("addr", "127.0.0.1:19999", "listen address")
 	fail := flag.Int("fail", 0, "always respond with this status (0 = disabled)")
 	stream := flag.Bool("stream", false, "always stream SSE responses")
+	delay := flag.Duration("delay", 0, "delay each response by this duration (e.g. 60s to simulate a hung provider)")
 	portStr := flag.String("port", "", "shorthand for -addr 127.0.0.1:<port>")
 	flag.Parse()
 	if *portStr != "" {
@@ -39,7 +40,10 @@ func main() {
 	if *stream {
 		m.SetStream(true)
 	}
-	log.Printf("mock upstream listening on %s (fail=%d stream=%v)", m.URL(), *fail, *stream)
+	if *delay > 0 {
+		m.Delay = *delay
+	}
+	log.Printf("mock upstream listening on %s (fail=%d stream=%v delay=%s)", m.URL(), *fail, *stream, *delay)
 
 	// Admin endpoint for the harness: request count and last body size.
 	http.HandleFunc("/__mock/health", func(w http.ResponseWriter, _ *http.Request) {

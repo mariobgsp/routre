@@ -34,14 +34,7 @@ type Pipeline struct {
 	metrics    *metrics.Metrics
 	keys       *keystore.Store
 	logger     *log.Logger
-	lastPhases *Phases
 }
-
-// LastPhases returns the per-phase timing from the most recent
-// upstream attempt, or nil if the request was served from cache or
-// eval didn't measure. Read once, immediately after Stream/Process
-// returns.
-func (p *Pipeline) LastPhases() *Phases { return p.lastPhases }
 
 func NewPipeline(h *Handlers) *Pipeline {
 	return &Pipeline{
@@ -78,6 +71,9 @@ type Response struct {
 	Header      http.Header
 	FromCache   bool
 	Provider    string
+	// Phases is this request's own per-attempt timing. Never shared: the
+	// pipeline serves concurrent requests from one instance.
+	Phases *Phases
 }
 
 func (p *Pipeline) Process(ctx context.Context, req Request) (Response, error) {
@@ -85,7 +81,6 @@ func (p *Pipeline) Process(ctx context.Context, req Request) (Response, error) {
 }
 
 func (p *Pipeline) processInternal(ctx context.Context, req Request) (Response, error) {
-	p.lastPhases = nil
 	body := req.Body
 	path := req.Path
 	client := req.Client
@@ -97,25 +92,27 @@ func (p *Pipeline) processInternal(ctx context.Context, req Request) (Response, 
 	if clientFmt == fmtResponses {
 		sanitizedBody = sanitizeResponsesPayload(body)
 	}
-	requested := modelFromBody(sanitizedBody)
+	env := newEnvelope(sanitizedBody)
+	requested := env.requested
 	debugf("process request %q streaming=%v client=%q api=%v", requested, streaming, client, api)
-	processed, rtkChanged := p.rtk.Apply(sanitizedBody)
-	rtkSaved := 0
-	if rtkChanged {
-		rtkSaved = tokenize.Count(string(sanitizedBody), tokenize.KindOpenAI) - tokenize.Count(string(processed), tokenize.KindOpenAI)
+	env.applyRTK(p.rtk)
+	if cfg := p.cfg.Get(); cfg.Cache.PrefixOrder {
+		env.orderPrompt()
+	}
+	// finish may discard the RTK mutation (never-grow contract), so report the
+	// compression metrics only for the delta that actually shipped.
+	env.finish(p.cfg.Get().Cache.CanonicalKeys)
+	if env.rtkChanged {
 		p.metrics.RTKApplied()
 	}
-	p.metrics.RTKSaved(int64(rtkSaved))
-	if cfg := p.cfg.Get(); cfg.Cache.PrefixOrder {
-		processed = orderPrompt(processed)
-	}
-	key := p.keyFor(processed)
+	p.metrics.RTKSaved(int64(env.rtkSaved))
+	processed := env.body
 	if !streaming && cacheableRequest(clientFmt, processed) {
-		e, got, missReason := p.cache.GetWithReason(key)
+		e, got, missReason := p.cache.GetWithReason(env.key)
 		if got && !e.SSE {
 			cacheSaved := e.PromptTokens
 			if cacheSaved == 0 {
-				cacheSaved = int64(tokenize.Count(string(processed), tokenize.KindOpenAI))
+				cacheSaved = tokenize.CountCapped(string(processed))
 			}
 			if cacheSaved > 0 {
 				p.usage.Record(client, modelFromBody(processed), 0, 0, 0, cacheSaved, usage.Prices{}, 0)
@@ -155,54 +152,23 @@ func (p *Pipeline) processInternal(ctx context.Context, req Request) (Response, 
 	}
 	if !streaming {
 		runner := newRunner(p.router, p.handlers.refreshCredentials)
-		result := runner.Run(ctx, cands, func(ctx context.Context, cand router.Candidate, attempt int) evalResult {
-			return p.tryEval(ctx, cand, req, api, requested, body, processed, streaming, client, rtkSaved, clientFmt)
+		result := runner.Run(ctx, cands, func(ctx context.Context, cand router.Candidate, attempt int, budget time.Duration) evalResult {
+			return p.tryEval(ctx, cand, req, api, requested, body, env, streaming, client, clientFmt, budget)
 		})
 		if result.OK && result.Response != nil {
-			return *result.Response, nil
+			r := *result.Response
+			r.Phases = result.Phases
+			return r, nil
 		}
 		tryLog := result.TryLog
-		allOverloaded := len(tryLog) > 0
-		for _, e := range tryLog {
-			if e.Class != router.ErrOverloaded.String() {
-				allOverloaded = false
-				break
-			}
-		}
-		if allOverloaded {
-			debugf("all overloaded for %q, retry after 1s", requested)
-			time.Sleep(time.Second)
-			retry := runner.Run(ctx, cands, func(ctx context.Context, cand router.Candidate, attempt int) evalResult {
-				return p.tryEval(ctx, cand, req, api, requested, body, processed, streaming, client, rtkSaved, clientFmt)
+		// An all-overloaded round renders immediately with Retry-After: 1 (see
+		// the render path below) — no sleep and no extra candidate round.
+		if result.BudgetExhausted {
+			tryLog = append(tryLog, failures.Outcome{
+				Provider: "*",
+				Class:    "failover_budget",
+				Err:      fmt.Sprintf("failover budget %s exhausted before trying %d candidate(s)", result.Budget, result.Untried),
 			})
-			if retry.OK && retry.Response != nil {
-				debugf("overloaded retry success for %q", requested)
-				return *retry.Response, nil
-			}
-			if len(retry.TryLog) > 0 {
-				stillOverloaded := true
-				for _, e := range retry.TryLog {
-					if e.Class != router.ErrOverloaded.String() {
-						stillOverloaded = false
-						break
-					}
-				}
-				if stillOverloaded {
-					debugf("still overloaded for %q, second retry after 1s", requested)
-					time.Sleep(time.Second)
-					retry2 := runner.Run(ctx, cands, func(ctx context.Context, cand router.Candidate, attempt int) evalResult {
-						return p.tryEval(ctx, cand, req, api, requested, body, processed, streaming, client, rtkSaved, clientFmt)
-					})
-					if retry2.OK && retry2.Response != nil {
-						return *retry2.Response, nil
-					}
-					tryLog = retry2.TryLog
-				} else {
-					tryLog = retry.TryLog
-				}
-			} else {
-				tryLog = retry.TryLog
-			}
 		}
 		// Uniform failures get honest statuses: all-4xx → 404 (unknown
 		// model, not an outage), all-auth → 502 (bad keys), all-billing

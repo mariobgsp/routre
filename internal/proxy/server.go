@@ -22,7 +22,6 @@ const (
 	maxRequestBody   = 64 << 20  // 64 MiB inbound
 	maxResponseRead  = 128 << 20 // 128 MiB non-streaming upstream response
 	maxUpstreamError = 1 << 20   // error body read cap
-	flushInterval    = 32 << 10  // SSE flush granularity
 )
 
 // Server is the HTTP gateway.
