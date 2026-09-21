@@ -670,6 +670,10 @@ Reproduce:
 ```bash
 make build test bench        # bench gates 90% (fails on regression)
 ./scripts/measure-ram.sh ./routre ./config.example.json 30
+
+# Gateway-added latency harness (prints p50/p95/p99 for a 1 MiB body;
+# asserts <10 ms p99 only on a deliberate run):
+ROUTRE_ASSERT_LATENCY=1 go test ./internal/proxy -run=^$ -bench=GatewayAddedLatency1MB -benchtime=50x
 ```
 
 ---
