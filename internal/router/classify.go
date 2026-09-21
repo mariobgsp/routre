@@ -1,6 +1,7 @@
 package router
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"strings"
@@ -102,7 +103,7 @@ func Classify(err error) ErrClass {
 	if errors.Is(err, ErrMissingProviderKey) {
 		return ErrConfig
 	}
-	if errors.Is(err, contextDeadlineExceeded) {
+	if errors.Is(err, context.DeadlineExceeded) {
 		return ErrTimeout
 	}
 	return ErrNetwork

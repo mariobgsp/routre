@@ -1,7 +1,9 @@
 package router
 
 import (
+	"context"
 	"errors"
+	"fmt"
 	"testing"
 	"time"
 )
@@ -121,8 +123,16 @@ func TestClassifyError(t *testing.T) {
 	if Classify(errors.New("dial tcp: connection refused")) != ErrNetwork {
 		t.Fatal("network error must classify as ErrNetwork")
 	}
-	if Classify(contextDeadlineExceeded) != ErrTimeout {
-		t.Fatal("deadline error must classify as ErrTimeout")
+	// A WRAPPED deadline error must classify as ErrTimeout (the relay wraps
+	// context.DeadlineExceeded). Asserting on a hand-rolled sentinel instead
+	// made this vacuous: the old sentinel matched by message string and only
+	// ever matched itself, so real watchdog timeouts fell through to
+	// ErrNetwork and the class was unreachable in production.
+	if Classify(fmt.Errorf("upstream: %w", context.DeadlineExceeded)) != ErrTimeout {
+		t.Fatal("a wrapped context deadline error must classify as ErrTimeout")
+	}
+	if Classify(context.DeadlineExceeded) != ErrTimeout {
+		t.Fatal("a bare deadline error must classify as ErrTimeout")
 	}
 }
 

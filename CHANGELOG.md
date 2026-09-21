@@ -38,7 +38,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   `generationBackstop = 5m` once the first byte has arrived. Each candidate
   gets a fair slice of the request budget so a same-candidate retry cannot
   starve an untried provider; a same-candidate retry is now allowed only for
-  connection-level errors and never sleeps. `transientRetryDelay 500ms`
+  connection-level errors and never sleeps. **Calibration note:** the slice is
+  `min(candidateFailoverBudget, remaining/untried)`, so the full 15 s is only
+  reachable with one candidate left (two candidates share 30 s exactly, three
+  get ~10 s each). A deployment that wants every candidate to have the full
+  15 s should raise `requestFailoverBudget` to `3 × candidateFailoverBudget`
+  (45 s) in `internal/proxy/runner.go` — one constant, no config key.
+  `transientRetryDelay 500ms`
   deleted; `firstByteTimeout 30s` → the candidate budget; `attemptTimeout 30s`
   deleted. The overloaded retry rounds (2 × `time.Sleep(1s)` and a third
   candidate round) are deleted on both paths — an all-overloaded round now
@@ -84,7 +90,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 - `Router.Reset` orphaning the `*ProviderState` held by in-flight requests.
 - Unbounded model-label maps in metrics and usage.
 - First-byte watchdog race: a single CAS winner decides between the first byte
-  and the timeout, and the timeout is now attributed as `ErrTimeout`.
+  and the timeout, and the timeout is now attributed as `ErrTimeout`. That
+  attribution was previously unreachable: `Classify` tested `errors.Is` against
+  a hand-rolled sentinel that compared **message strings** and therefore only
+  ever matched itself, so a watchdog timeout was labelled `class="network"`
+  and drew a same-candidate retry meant for connection-level errors. It now
+  matches the real `context.DeadlineExceeded` the relay wraps.
 - Unbounded SSE usage carry (capped at 64 KiB) and an unbounded stream-capture
   tee (bounded by the cache's single-entry cap, and skipped entirely for
   uncacheable requests).

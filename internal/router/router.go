@@ -288,10 +288,7 @@ func (r *Router) Reconfigure(cfg config.Config) {
 	r.SetForwardUnknown(cfg.ForwardUnknown)
 }
 
-var (
-	errMidStream            = errors.New("stream aborted after first byte")
-	contextDeadlineExceeded = deadlineErr{}
-)
+var errMidStream = errors.New("stream aborted after first byte")
 
 // StreamAborted wraps an error that occurred after the first stream byte was
 // sent to the client. Failover must NOT retry these.
@@ -299,10 +296,3 @@ func StreamAborted() error { return errMidStream }
 
 // IsStreamAborted reports whether err is a stream-abort sentinel.
 func IsStreamAborted(err error) bool { return errors.Is(err, errMidStream) }
-
-type deadlineErr struct{}
-
-func (deadlineErr) Error() string { return "context deadline exceeded" }
-func (deadlineErr) Is(target error) bool {
-	return target.Error() == "context deadline exceeded"
-}
