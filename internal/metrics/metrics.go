@@ -30,26 +30,74 @@ type Metrics struct {
 	cacheSv    int64            // estimated prompt-cache savings tokens, global sum
 	cacheSvBy  map[string]int64 // per-provider net savings (provider -> net tokens)
 	discTS     int64            // last successful model-discovery unix seconds (0 = never)
+	// models is the set of model labels already minted; reservedModels holds
+	// the configured model names, which are never folded into "_other".
+	// client/provider/class are naturally bounded; only the model dimension is
+	// client-supplied (forward_unknown) and therefore unbounded.
+	models         map[string]struct{}
+	reservedModels map[string]struct{}
 }
+
+// maxModelLabels caps distinct model labels in the request counter. Whatever
+// overflows is folded into "_other" so a client rotating model names cannot
+// grow the map without bound.
+const maxModelLabels = 512
 
 // New creates an empty registry with start time now.
 func New() *Metrics {
 	return &Metrics{
-		start:     time.Now(),
-		req:       map[string]int64{},
-		fail:      map[string]int64{},
-		cacheMBy:  map[string]int64{},
-		cacheCrBy: map[string]int64{},
-		cacheSvBy: map[string]int64{},
+		start:          time.Now(),
+		req:            map[string]int64{},
+		fail:           map[string]int64{},
+		cacheMBy:       map[string]int64{},
+		cacheCrBy:      map[string]int64{},
+		cacheSvBy:      map[string]int64{},
+		models:         map[string]struct{}{},
+		reservedModels: map[string]struct{}{},
+	}
+}
+
+// SetReservedModels records the configured model names. They always keep their
+// own label so real traffic is never folded into "_other". Called from the
+// gateway on startup and on config reload.
+func (m *Metrics) SetReservedModels(models []string) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.reservedModels = make(map[string]struct{}, len(models))
+	for _, s := range models {
+		if s != "" {
+			m.reservedModels[s] = struct{}{}
+		}
 	}
 }
 
 // Request records one completed chat request (any outcome).
 func (m *Metrics) Request(client, provider, model, class string) {
-	label := strings.Join([]string{client, provider, model, class}, "|")
 	m.mu.Lock()
+	model = m.modelLabelLocked(model)
+	label := strings.Join([]string{client, provider, model, class}, "|")
 	m.req[label]++
 	m.mu.Unlock()
+}
+
+// modelLabelLocked folds a model label into "_other" once the cap is reached.
+// Caller holds m.mu.
+func (m *Metrics) modelLabelLocked(model string) string {
+	if model == "" {
+		return model
+	}
+	if _, ok := m.models[model]; ok {
+		return model
+	}
+	if _, reserved := m.reservedModels[model]; reserved {
+		m.models[model] = struct{}{}
+		return model
+	}
+	if len(m.models) >= maxModelLabels {
+		return "_other"
+	}
+	m.models[model] = struct{}{}
+	return model
 }
 
 // Failure records one upstream failure that triggered failover.

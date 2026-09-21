@@ -78,6 +78,12 @@ func NewHandlers(st *config.Store, rtr *router.Router, cch *cache.Cache, tk *rtk
 		Keys:       keystore.New(),
 	}
 	h.pipeline = NewPipeline(h)
+	// Reserve the configured model names in both label-capped stores so a real
+	// model is never folded into "_other".
+	h.Metrics.SetReservedModels(configuredModels(st.Get()))
+	if use != nil {
+		use.SetReservedModels(configuredModels(st.Get()))
+	}
 	// Register reconfigurables for SIGHUP reload (deep module seam)
 	st.Register(rtr)
 	st.Register(cch)
@@ -100,9 +106,26 @@ func NewHandlers(st *config.Store, rtr *router.Router, cch *cache.Cache, tk *rtk
 	st.SetOnLoad(func(c config.Config) {
 		rtr.Reset(tiersFromConfig(c), rtrPolicy(rtr))
 		rtr.SetForwardUnknown(c.ForwardUnknown)
+		models := configuredModels(c)
+		h.Metrics.SetReservedModels(models)
+		if h.Usage != nil {
+			h.Usage.SetReservedModels(models)
+		}
 		logger.Printf("config reloaded: %d tiers, %d providers", len(c.Tiers), rtr.Len())
 	})
 	return h
+}
+
+// configuredModels collects every model name from the config so the metric and
+// usage label caps can reserve them and never fold a real model into "_other".
+func configuredModels(c config.Config) []string {
+	var out []string
+	for _, t := range c.Tiers {
+		for _, p := range t.Providers {
+			out = append(out, p.Models...)
+		}
+	}
+	return out
 }
 
 // MetricsHandler renders Prometheus exposition text for the gateway.
