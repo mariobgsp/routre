@@ -186,7 +186,7 @@ func (p *Pipeline) Stream(ctx context.Context, req Request, w http.ResponseWrite
 		result.TryLog = append(result.TryLog, failures.Outcome{
 			Provider: "*",
 			Class:    "failover_budget",
-			Err:      fmt.Sprintf("failover budget %s exhausted before trying %d candidate(s)", requestFailoverBudget, result.Untried),
+			Err:      fmt.Sprintf("failover budget %s exhausted before trying %d candidate(s)", result.Budget, result.Untried),
 		})
 	}
 	if len(result.TryLog) == 0 {

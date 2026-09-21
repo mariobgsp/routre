@@ -167,7 +167,7 @@ func (p *Pipeline) processInternal(ctx context.Context, req Request) (Response, 
 			tryLog = append(tryLog, failures.Outcome{
 				Provider: "*",
 				Class:    "failover_budget",
-				Err:      fmt.Sprintf("failover budget %s exhausted before trying %d candidate(s)", requestFailoverBudget, result.Untried),
+				Err:      fmt.Sprintf("failover budget %s exhausted before trying %d candidate(s)", result.Budget, result.Untried),
 			})
 		}
 		// Uniform failures get honest statuses: all-4xx → 404 (unknown

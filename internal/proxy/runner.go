@@ -125,6 +125,9 @@ type runnerResult struct {
 	// provider failed when it was never asked.
 	BudgetExhausted bool
 	Untried         int
+	// Budget is the request budget this run actually used, so callers report
+	// the effective value rather than re-reading the (mutable) package var.
+	Budget time.Duration
 }
 
 // Run iterates over cands, invoking eval once per attempt per candidate.
@@ -138,7 +141,8 @@ type runnerResult struct {
 // candidate still needs.
 func (r *candidateRunner) Run(ctx context.Context, cands []router.Candidate, eval evalFn) runnerResult {
 	tryLog := make([]failures.Outcome, 0, len(cands))
-	deadline := time.Now().Add(requestFailoverBudget)
+	requestBudget := requestFailoverBudget
+	deadline := time.Now().Add(requestBudget)
 	untried := len(cands)
 	skipped := 0
 	for i, cand := range cands {
@@ -157,12 +161,14 @@ func (r *candidateRunner) Run(ctx context.Context, cands []router.Candidate, eva
 			lastErr   error
 			lastClass router.ErrClass
 			appended  bool
+			attempted bool
 		)
 		for attempt := 0; attempt < r.maxAttempt; attempt++ {
 			budget := time.Until(candDeadline)
 			if budget <= 0 {
 				break
 			}
+			attempted = true
 			res := eval(ctx, cand, attempt, budget)
 			// OK means "stop iterating candidates" — either a real
 			// success (Err == nil) or a streaming eval that already
@@ -201,10 +207,19 @@ func (r *candidateRunner) Run(ctx context.Context, cands []router.Candidate, eva
 			break
 		}
 		if !appended {
-			tryLog = append(tryLog, buildOutcome(cand, lastErr, lastClass, r.router))
+			if attempted {
+				tryLog = append(tryLog, buildOutcome(cand, lastErr, lastClass, r.router))
+			} else {
+				// The candidate's slice was already spent when its turn came, so
+				// no attempt ran. Reporting it via buildOutcome would send
+				// lastClass at its zero value (ErrNetwork) with a nil error —
+				// blaming a provider that was never called. Count it as untried
+				// instead; the caller renders the honest failover_budget entry.
+				skipped++
+			}
 		}
 	}
-	return runnerResult{OK: false, TryLog: tryLog, BudgetExhausted: skipped > 0, Untried: skipped}
+	return runnerResult{OK: false, TryLog: tryLog, BudgetExhausted: skipped > 0, Untried: skipped, Budget: requestBudget}
 }
 
 // buildOutcome converts a candidate + last error/class into the
