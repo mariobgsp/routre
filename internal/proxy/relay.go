@@ -242,16 +242,24 @@ func (h *Handlers) relay(ctx context.Context, w http.ResponseWriter, baseURL str
 		return 0, nil, "", 0, streamUsage{}, err
 	}
 
+	headerStart := time.Now()
 	resp, release, err := h.doWithBudget(req, firstByteBudget)
 	if err != nil {
 		return 0, nil, "", 0, streamUsage{}, err
 	}
 	defer release()
 
-	// The body's first byte is bounded by the generation backstop, not by the
-	// candidate budget: a non-streaming response's body can legitimately take
-	// the whole generation time.
-	fb := watchFirstByte(resp.Body, generationBackstop)
+	// The candidate's slice bounds BOTH the header wait and the first body
+	// byte: the header wait has already consumed part of it, so the watchdog
+	// gets the remainder (one candidate never occupies twice its slice). Once
+	// the first byte arrives claim() stops the timer and only the attempt
+	// context (generationBackstop) bounds the rest of the generation.
+	bodyBudget := firstByteBudget - time.Since(headerStart)
+	if bodyBudget <= 0 {
+		_ = resp.Body.Close()
+		return 0, nil, "", 0, streamUsage{}, fmt.Errorf("no upstream body byte within %s: %w", firstByteBudget, context.DeadlineExceeded)
+	}
+	fb := watchFirstByte(resp.Body, bodyBudget)
 	defer fb.timer.Stop()
 	resp.Body = fb
 	defer resp.Body.Close()
@@ -266,7 +274,7 @@ func (h *Handlers) relay(ctx context.Context, w http.ResponseWriter, baseURL str
 	body, err := readBody(resp.Body, limit)
 	if err != nil {
 		if fb.timedOut.Load() || errors.Is(err, errFirstByteTimeout) {
-			return 0, nil, "", 0, streamUsage{}, fmt.Errorf("no upstream body byte within %s: %w", generationBackstop, context.DeadlineExceeded)
+			return 0, nil, "", 0, streamUsage{}, fmt.Errorf("no upstream body byte within %s: %w", bodyBudget, context.DeadlineExceeded)
 		}
 		return 0, nil, "", 0, streamUsage{}, fmt.Errorf("read upstream response: %w", err)
 	}
@@ -283,6 +291,7 @@ func (h *Handlers) relayStream(ctx context.Context, w http.ResponseWriter, baseU
 		return 0, nil, "", 0, streamUsage{}, err
 	}
 
+	headerStart := time.Now()
 	resp, release, err := h.doWithBudget(req, firstByteBudget)
 	if err != nil {
 		return 0, nil, "", 0, streamUsage{}, err
@@ -290,9 +299,15 @@ func (h *Handlers) relayStream(ctx context.Context, w http.ResponseWriter, baseU
 	defer release()
 
 	// Fail pre-first-byte (retryable → failover) if the upstream stalls. For a
-	// stream the first byte is a body byte, so the watchdog uses the candidate
-	// budget; after it fires the relay runs unbounded.
-	fb := watchFirstByte(resp.Body, firstByteBudget)
+	// stream the first byte is a body byte, so the watchdog gets whatever the
+	// header wait left of this candidate's slice; after it fires the relay runs
+	// unbounded.
+	bodyBudget := firstByteBudget - time.Since(headerStart)
+	if bodyBudget <= 0 {
+		_ = resp.Body.Close()
+		return 0, nil, "", 0, streamUsage{}, fmt.Errorf("no upstream body byte within %s: %w", firstByteBudget, context.DeadlineExceeded)
+	}
+	fb := watchFirstByte(resp.Body, bodyBudget)
 	defer fb.timer.Stop()
 	resp.Body = fb
 	defer resp.Body.Close()
@@ -302,7 +317,7 @@ func (h *Handlers) relayStream(ctx context.Context, w http.ResponseWriter, baseU
 		body, rerr := readBody(resp.Body, maxUpstreamError)
 		if rerr != nil {
 			if fb.timedOut.Load() || errors.Is(rerr, errFirstByteTimeout) {
-				return 0, nil, "", 0, streamUsage{}, fmt.Errorf("no upstream body byte within %s: %w", firstByteBudget, context.DeadlineExceeded)
+				return 0, nil, "", 0, streamUsage{}, fmt.Errorf("no upstream body byte within %s: %w", bodyBudget, context.DeadlineExceeded)
 			}
 			return 0, nil, "", 0, streamUsage{}, rerr
 		}
@@ -319,7 +334,7 @@ func (h *Handlers) relayStream(ctx context.Context, w http.ResponseWriter, baseU
 	susage, serr := h.streamRelay(w, resp, from, to, capture)
 	if serr != nil {
 		if fb.timedOut.Load() || errors.Is(serr, errFirstByteTimeout) {
-			return 0, nil, "", 0, streamUsage{}, fmt.Errorf("no upstream body byte within %s: %w", firstByteBudget, context.DeadlineExceeded)
+			return 0, nil, "", 0, streamUsage{}, fmt.Errorf("no upstream body byte within %s: %w", bodyBudget, context.DeadlineExceeded)
 		}
 		return 0, nil, "", 0, streamUsage{}, serr
 	}

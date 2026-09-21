@@ -103,7 +103,82 @@ func TestRunnerBudgetExhaustedSkipsUntriedCandidate(t *testing.T) {
 	}
 }
 
-// gatewayAgainst wires a gateway whose tier providers point at the given URLs.
+// headersThenStallBody commits 200 headers and then never sends a body byte,
+// so the gateway's first-byte watchdog is the only thing that can bound it
+// (bounded at 2s so httptest.Server.Close can never block).
+func headersThenStallBody(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	if f, ok := w.(http.Flusher); ok {
+		f.Flush()
+	}
+	select {
+	case <-r.Context().Done():
+	case <-time.After(2 * time.Second):
+	}
+}
+
+// fastJSON answers immediately with a minimal 200 body.
+func fastJSON(w http.ResponseWriter, _ *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	_, _ = w.Write([]byte(`{"id":"ok","object":"chat.completion","choices":[],"usage":{"prompt_tokens":1,"completion_tokens":1}}`))
+}
+
+// TestNonStreamingBodyStallFailsOverWithinCandidateSlice: headers arrive but
+// no first body byte ever does. The candidate's slice must bound that wait —
+// not the 5-minute generation backstop — so the request fails over quickly.
+// On the pre-fix bound this test would sit on p0 for ~2s (the handler's cap)
+// and return p0's result.
+func TestNonStreamingBodyStallFailsOverWithinCandidateSlice(t *testing.T) {
+	setBudgets(t, 40*time.Millisecond, 200*time.Millisecond)
+	stalled := httptest.NewServer(http.HandlerFunc(headersThenStallBody))
+	defer stalled.Close()
+	good := httptest.NewServer(http.HandlerFunc(fastJSON))
+	defer good.Close()
+	base := gatewayAgainst(t, "openai", stalled.URL, good.URL)
+
+	start := time.Now()
+	resp, data := post(t, base, "/v1/chat/completions", chatBody(false, ""))
+	elapsed := time.Since(start)
+
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("want 200 from the healthy provider after a body stall, got %d: %s", resp.StatusCode, data)
+	}
+	if got := resp.Header.Get("X-Llrouter-Provider"); got != "p1" {
+		t.Fatalf("want failover to p1, got provider %q", got)
+	}
+	if elapsed > 500*time.Millisecond {
+		t.Fatalf("body stall took %v; the candidate slice (40ms), not the 5m backstop, must bound the first body byte", elapsed)
+	}
+}
+
+// TestFirstByteBudgetIsSpentOncePerCandidate: the header wait and the first
+// body byte draw on the SAME candidate slice. With a 100ms slice and a ~95ms
+// header wait, the body stall must be abandoned at ~100ms — not at the ~195ms
+// a second full slice would allow.
+func TestFirstByteBudgetIsSpentOncePerCandidate(t *testing.T) {
+	setBudgets(t, 100*time.Millisecond, 500*time.Millisecond)
+	slowHeaders := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		time.Sleep(95 * time.Millisecond) // spends most of the candidate's slice
+		headersThenStallBody(w, r)
+	}))
+	defer slowHeaders.Close()
+	good := httptest.NewServer(http.HandlerFunc(fastJSON))
+	defer good.Close()
+	base := gatewayAgainst(t, "openai", slowHeaders.URL, good.URL)
+
+	start := time.Now()
+	resp, data := post(t, base, "/v1/chat/completions", chatBody(false, ""))
+	elapsed := time.Since(start)
+
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("want 200 from p1, got %d: %s", resp.StatusCode, data)
+	}
+	if elapsed > 170*time.Millisecond {
+		t.Fatalf("candidate spent %v; the header wait and the first byte must fit ONE 100ms slice (~195ms means the slice was spent twice)", elapsed)
+	}
+}
+
 func gatewayAgainst(t *testing.T, kind string, urls ...string) string {
 	t.Helper()
 	keys := []string{"TEST_KEY_A", "TEST_KEY_B", "TEST_KEY_C"}
@@ -196,20 +271,23 @@ func TestNonStreamingFirstByteTimeoutFailsOver(t *testing.T) {
 	}
 }
 
-// TestNonStreamingLongGenerationSurvives: the candidate budget is a
-// FIRST-BYTE bound. A response whose headers arrive fast and whose body takes
-// longer than the candidate budget must still succeed — killing it at 15 s was
-// the bug the generation backstop removes.
+// TestNonStreamingLongGenerationSurvives: the candidate budget bounds the
+// header wait and the FIRST body byte, not the whole generation. Once a first
+// byte has arrived, the rest of the body may take as long as the generation
+// backstop allows.
 func TestNonStreamingLongGenerationSurvives(t *testing.T) {
 	setBudgets(t, 20*time.Millisecond, 40*time.Millisecond)
 	slow := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusOK)
+		// The first body byte (plus flush) is what disarms the first-byte
+		// watchdog; the remaining generation may then exceed the budget.
+		_, _ = w.Write([]byte("{"))
 		if f, ok := w.(http.Flusher); ok {
 			f.Flush()
 		}
 		time.Sleep(80 * time.Millisecond) // well past the 20ms candidate budget
-		_, _ = w.Write([]byte(`{"id":"slow","object":"chat.completion","choices":[],"usage":{"prompt_tokens":1,"completion_tokens":1}}`))
+		_, _ = w.Write([]byte(`"id":"slow","object":"chat.completion","choices":[],"usage":{"prompt_tokens":1,"completion_tokens":1}}`))
 	}))
 	defer slow.Close()
 	other := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
