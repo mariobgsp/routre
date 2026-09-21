@@ -138,7 +138,7 @@ func (h *Handlers) buildUpstreamRequest(ctx context.Context, baseURL, kind, path
 	// Authorization header is a placeholder and must not reach upstream.
 	providerKey, missing := h.providerKey(apiKeyEnv)
 	if missing {
-		return nil, fmt.Errorf("provider key %s is not set (use `routre setup` or export it)", apiKeyEnv)
+		return nil, fmt.Errorf("provider key %s is not set (use `routre setup` or export it): %w", apiKeyEnv, router.ErrMissingProviderKey)
 	}
 	if kind == "anthropic" {
 		req.Header.Set("X-Api-Key", providerKey)

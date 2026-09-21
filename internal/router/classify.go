@@ -40,7 +40,17 @@ const (
 	// The upstream's Retry-After (when present) is still respected,
 	// but capped at 30s so a long Retry-After doesn't deny service.
 	ErrOverloaded
+	// ErrConfig: a deterministic gateway-configuration error (e.g. a provider
+	// key env var that is not set). No cooldown and no same-candidate retry:
+	// retrying cannot fix a typo, and escalating would lock every provider out
+	// for minutes on a config mistake.
+	ErrConfig
 )
+
+// ErrMissingProviderKey marks a provider whose API key env var is unset. It is
+// a gateway misconfiguration, not an upstream failure, so it must never put a
+// provider into cooldown.
+var ErrMissingProviderKey = errors.New("provider key is not set")
 
 var errClassNames = map[ErrClass]string{
 	ErrNetwork:    "network",
@@ -52,6 +62,7 @@ var errClassNames = map[ErrClass]string{
 	ErrCredits:    "credits",
 	ErrStream:     "stream",
 	ErrOverloaded: "overloaded",
+	ErrConfig:     "config",
 }
 
 func (c ErrClass) String() string {
@@ -87,6 +98,9 @@ func Classify(err error) ErrClass {
 	}
 	if errors.Is(err, errMidStream) {
 		return ErrStream
+	}
+	if errors.Is(err, ErrMissingProviderKey) {
+		return ErrConfig
 	}
 	if errors.Is(err, contextDeadlineExceeded) {
 		return ErrTimeout
@@ -202,7 +216,8 @@ func bodyHasOverloaded(body []byte) bool {
 // trigger failover. Stream aborts and client-caused 4xx do not. Credits
 // failures fail over but never escalate cooldown (see ReportFailure).
 // Overloaded errors fail over with a short Retry-After but do not
-// stack the gateway's own exponential backoff.
+// stack the gateway's own exponential backoff. Config errors are terminal
+// for the candidate: they fail over without a cooldown or a retry.
 func IsRetryableClass(c ErrClass) bool {
 	switch c {
 	case ErrNetwork, ErrTimeout, ErrRateLimit, ErrAuth, ErrServer, ErrCredits, ErrOverloaded:

@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"strings"
@@ -109,6 +110,11 @@ func (p *Pipeline) tryEval(ctx context.Context, cand router.Candidate, req Reque
 	if rerr != nil {
 		if router.IsStreamAborted(rerr) {
 			return evalResult{OK: true, Err: rerr, Class: router.ErrStream}
+		}
+		if errors.Is(rerr, router.ErrMissingProviderKey) {
+			// Fail over to a provider that DOES have its key, but never
+			// cooldown and never burn a same-candidate retry on a config typo.
+			return evalResult{Err: rerr, Class: router.ErrConfig, Retryable: false}
 		}
 		class := router.Classify(rerr)
 		if !router.IsRetryableClass(class) {

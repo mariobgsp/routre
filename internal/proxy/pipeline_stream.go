@@ -3,6 +3,7 @@ package proxy
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"time"
@@ -235,6 +236,11 @@ func (p *Pipeline) streamEval(ctx context.Context, cand router.Candidate, _ int,
 		if router.IsStreamAborted(rerr) {
 			// Client already received bytes; failover would duplicate output.
 			return evalResult{OK: true, Err: rerr, Class: router.ErrStream, Emitted: true}
+		}
+		if errors.Is(rerr, router.ErrMissingProviderKey) {
+			// Fail over to a provider that DOES have its key, but never
+			// cooldown and never burn a same-candidate retry on a config typo.
+			return evalResult{Err: rerr, Class: router.ErrConfig, Retryable: false}
 		}
 		class := router.Classify(rerr)
 		p.metrics.Failure(cand.Provider.Provider.Name, class.String())
