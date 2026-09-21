@@ -12,7 +12,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 > (2026-08-25). Sections marked `legacy` use the pre-rebrand
 > routre-cli numbering and are kept for history only.
 
-## [Unreleased]
+## [0.6.0] — 2026-09-21
 
 ### Changed
 

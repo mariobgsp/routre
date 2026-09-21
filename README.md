@@ -24,9 +24,17 @@ routre models sync        # pull new provider models into config.json
 Point any agent at `http://127.0.0.1:20128` via `OPENAI_BASE_URL` /
 `ANTHROPIC_BASE_URL` — failover, compression, and caching come for free.
 
-### Latest (v0.5.1 — 2026-09-21)
+### Latest (v0.6.0 — 2026-09-21)
+
+- **~57x faster on tool-heavy traffic** — gateway-added latency for a 1 MiB body fell from ~1474 ms p50 / ~1623 ms p99 to ~26 ms / ~28 ms. The dominant cost was an exact BPE token count running over the whole body on the request path (up to three times per request, and per candidate in the `max_tokens` clamp); counting now sits off that path, so a 1 MiB request no longer allocates hundreds of MB. `routre bench` and the ≥90% RTK gate stay exact. See [CHANGELOG.md](CHANGELOG.md).
+- **Failover is bounded** — up to 15 s per candidate, or an equal share of the 30 s request budget when several providers remain (the budget bounds candidate selection and the wait for the upstream's first byte; a generation that has begun running is allowed to finish, up to a 5-minute backstop). Every untried provider is reserved a slice so a same-candidate retry can never starve it, retries are narrowed to connection-level errors, and no sleep remains on the failure path. A provider that was never actually called is never reported as a network failure.
+- **Honest attribution** — a missing provider key is a config error instead of a fleet-wide sweep plus a 5-minute cooldown per provider, phase timings are per-request instead of racy, cooldowns survive a `SIGHUP` reload (while a repaired `base_url` starts fresh), and model-label maps are bounded.
+
+<details><summary>Previous — v0.5.1</summary>
 
 - **A cooling provider is no longer replaced by a misleading one** — with `forward_unknown: true`, a model that *is* configured used to be forwarded to providers that never advertised it while its real provider cooled, so the client saw that stranger's error (a 402 credit wall) instead of the cooldown. Such a model now answers `503 providers_unavailable` with `cooldown_seconds` + `Retry-After`, naming the model and the wait. See [CHANGELOG.md](CHANGELOG.md).
+
+</details>
 
 <details><summary>Previous — v0.5.0</summary>
 
