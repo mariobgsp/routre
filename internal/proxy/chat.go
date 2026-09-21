@@ -173,24 +173,22 @@ func streamOutcomeEntry(client, model string, err error) reqlog.Entry {
 }
 
 // cacheKey strips the "stream" flag so stream:true/false share cache entries.
+// The re-marshal is escape-free for the same reason the canonical form is: a
+// JS client never escapes < > &, so escaping here would change the key of a
+// body the client sent literally.
 func cacheKey(processed []byte) string {
 	if bytes.Contains(processed, []byte(`"stream"`)) {
 		var m map[string]json.RawMessage
 		if err := json.Unmarshal(processed, &m); err == nil {
 			if _, ok := m["stream"]; ok {
 				delete(m, "stream")
-				if b, err := json.Marshal(m); err == nil {
+				if b := marshalNoEscape(m); b != nil {
 					return cache.Key(b)
 				}
 			}
 		}
 	}
 	return cache.Key(processed)
-}
-
-// orderPrompt moves system messages to the front (stable prefix).
-func orderPrompt(processed []byte) []byte {
-	return cache.OrderPrompt(processed)
 }
 
 // cacheEntry wraps a response for the cache with provider-accurate usage.

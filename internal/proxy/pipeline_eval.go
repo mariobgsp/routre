@@ -9,7 +9,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/mariobgsp/routre/internal/cache"
 	"github.com/mariobgsp/routre/internal/proxy/dialect"
 	"github.com/mariobgsp/routre/internal/router"
 	"github.com/mariobgsp/routre/internal/tokenize"
@@ -67,15 +66,6 @@ func (p *Pipeline) preparePayload(api apiFormat, clientFmt apiFormat, cand route
 	return payload, nil
 }
 
-// keyFor returns the cache key; with canonical_keys the body is reduced to
-// a deterministic JSON round-trip first (values untouched, so keys stay safe).
-func (p *Pipeline) keyFor(processed []byte) string {
-	if p.cfg.Get().Cache.CanonicalKeys {
-		return cacheKey(cache.CanonicalJSON(processed))
-	}
-	return cacheKey(processed)
-}
-
 // mustJSON marshals v, or "null" for the failures.Outcome[] body.
 func mustJSON(v any) string {
 	b, err := json.Marshal(v)
@@ -91,7 +81,8 @@ func crossKindRequest(api apiFormat, kind string) bool {
 	return api != fmtResponses && api != apiFormat(dialect.KindToFormat(kind))
 }
 
-func (p *Pipeline) tryEval(ctx context.Context, cand router.Candidate, req Request, api apiFormat, requested string, body, processed []byte, streaming bool, client string, rtkSaved int, clientFmt apiFormat) evalResult {
+func (p *Pipeline) tryEval(ctx context.Context, cand router.Candidate, req Request, api apiFormat, requested string, body []byte, env *envelope, streaming bool, client string, clientFmt apiFormat) evalResult {
+	processed := env.body
 	payload, perr := p.preparePayload(api, clientFmt, cand, requested, processed)
 	if perr != nil {
 		p.router.ReportFailure(cand.Provider, router.ErrClient)
@@ -158,14 +149,14 @@ func (p *Pipeline) tryEval(ctx context.Context, cand router.Candidate, req Reque
 		}
 		extractor := NewExtractor()
 		prompt, completion, reportedCost, cacheRead, cacheCreation := extractor.ExtractNonStreaming(respBody, body)
-		p.usage.RecordFull(client, modelFromBody(body), prompt, completion, int64(rtkSaved), 0, cacheRead, cacheCreation, pricesOf(p.cfg.Get(), cand.Provider.Provider.Name), reportedCost)
+		p.usage.RecordFull(client, modelFromBody(body), prompt, completion, int64(env.rtkSaved), 0, cacheRead, cacheCreation, pricesOf(p.cfg.Get(), cand.Provider.Provider.Name), reportedCost)
 		// ponytail: cache the post-translation body for non-native, raw responses for native
 		cacheBody := respBody
 		if clientFmt == fmtResponses && !isNativeResponses(cand.Provider.Provider.BaseURL) {
 			cacheBody = respBody
 		}
 		if cacheableRequest(clientFmt, processed) {
-			p.cache.Put(p.keyFor(processed), cacheEntry(cacheBody, ct, prompt, completion))
+			p.cache.Put(env.key, cacheEntry(cacheBody, ct, prompt, completion))
 		}
 		p.metrics.Request(client, cand.Provider.Provider.Name, requested, "ok")
 		p.metrics.CacheRead(cand.Provider.Provider.Name, cacheRead)

@@ -44,14 +44,47 @@ func fixtureToolHeavyBody(t testing.TB, size int, nonce int) []byte {
 	return body
 }
 
-// grepShapedContent returns ~4 KiB of `path:line:` output, the shape RTK's
-// grep filter scores highest, so the truncate/dedup pass genuinely shrinks
-// the payload.
+// grepShapedContent returns ~24 KiB of `path:line:` output, the shape RTK's
+// grep filter scores highest. It is deliberately longer than the filter's
+// 80+40 line head/tail window: a shorter block would be returned unchanged
+// and RTK would not fire, so the fixture would not exercise compression.
 func grepShapedContent(seed, nonce int) string {
 	var sb strings.Builder
-	for i := 0; sb.Len() < 4096; i++ {
+	for i := 0; sb.Len() < 24<<10; i++ {
 		fmt.Fprintf(&sb, "internal/proxy/fixture%04d.go:%d:func handler%04d(ctx context.Context) error { // nonce=%d\n",
 			i%97, seed*1000+i, seed*1000+i, nonce)
 	}
 	return sb.String()
+}
+
+// fixtureJSStyleBody builds the body a JavaScript client actually sends:
+// literal <, > and & inside string values (JSON.stringify does not escape
+// them) with only a little tool content, so RTK still fires. This is the
+// fixture that catches the HTML-escaping growth a canonical envelope would
+// otherwise introduce (json.Marshal rewrites < to \u003c).
+func fixtureJSStyleBody(t testing.TB, size int, nonce int) []byte {
+	t.Helper()
+	// No literal double quotes: they would need escaping and mask the effect
+	// under test (we care about < > &).
+	segment := fmt.Sprintf(`<T> && a->b <div class=x>c</div> typescript<Integer> nonce=%d`, nonce)
+	var sb strings.Builder
+	sb.WriteString(`{"model":"m","max_tokens":4096,"messages":[{"role":"user","content":"`)
+	for sb.Len() < size*9/10 {
+		sb.WriteString(segment)
+		sb.WriteByte(' ')
+	}
+	sb.WriteString(`"}`)
+	for seed := 0; seed < 3; seed++ {
+		content, err := json.Marshal(grepShapedContent(seed, nonce))
+		if err != nil {
+			t.Fatalf("marshal tool content: %v", err)
+		}
+		fmt.Fprintf(&sb, `,{"role":"tool","tool_call_id":"call_%d","content":%s}`, seed, content)
+	}
+	sb.WriteString(`]}`)
+	body := []byte(sb.String())
+	if !json.Valid(body) {
+		t.Fatalf("fixture body is not valid JSON (%d bytes)", len(body))
+	}
+	return body
 }

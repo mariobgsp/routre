@@ -97,21 +97,21 @@ func (p *Pipeline) processInternal(ctx context.Context, req Request) (Response, 
 	if clientFmt == fmtResponses {
 		sanitizedBody = sanitizeResponsesPayload(body)
 	}
-	requested := modelFromBody(sanitizedBody)
+	env := newEnvelope(sanitizedBody)
+	requested := env.requested
 	debugf("process request %q streaming=%v client=%q api=%v", requested, streaming, client, api)
-	processed, rtkChanged := p.rtk.Apply(sanitizedBody)
-	rtkSaved := 0
-	if rtkChanged {
-		rtkSaved = int(tokenize.CountCapped(string(sanitizedBody)) - tokenize.CountCapped(string(processed)))
+	env.applyRTK(p.rtk)
+	if env.rtkChanged {
 		p.metrics.RTKApplied()
 	}
-	p.metrics.RTKSaved(int64(rtkSaved))
+	p.metrics.RTKSaved(int64(env.rtkSaved))
 	if cfg := p.cfg.Get(); cfg.Cache.PrefixOrder {
-		processed = orderPrompt(processed)
+		env.orderPrompt()
 	}
-	key := p.keyFor(processed)
+	env.finish(p.cfg.Get().Cache.CanonicalKeys)
+	processed := env.body
 	if !streaming && cacheableRequest(clientFmt, processed) {
-		e, got, missReason := p.cache.GetWithReason(key)
+		e, got, missReason := p.cache.GetWithReason(env.key)
 		if got && !e.SSE {
 			cacheSaved := e.PromptTokens
 			if cacheSaved == 0 {
@@ -156,7 +156,7 @@ func (p *Pipeline) processInternal(ctx context.Context, req Request) (Response, 
 	if !streaming {
 		runner := newRunner(p.router, p.handlers.refreshCredentials)
 		result := runner.Run(ctx, cands, func(ctx context.Context, cand router.Candidate, attempt int) evalResult {
-			return p.tryEval(ctx, cand, req, api, requested, body, processed, streaming, client, rtkSaved, clientFmt)
+			return p.tryEval(ctx, cand, req, api, requested, body, env, streaming, client, clientFmt)
 		})
 		if result.OK && result.Response != nil {
 			return *result.Response, nil
@@ -173,7 +173,7 @@ func (p *Pipeline) processInternal(ctx context.Context, req Request) (Response, 
 			debugf("all overloaded for %q, retry after 1s", requested)
 			time.Sleep(time.Second)
 			retry := runner.Run(ctx, cands, func(ctx context.Context, cand router.Candidate, attempt int) evalResult {
-				return p.tryEval(ctx, cand, req, api, requested, body, processed, streaming, client, rtkSaved, clientFmt)
+				return p.tryEval(ctx, cand, req, api, requested, body, env, streaming, client, clientFmt)
 			})
 			if retry.OK && retry.Response != nil {
 				debugf("overloaded retry success for %q", requested)
@@ -191,7 +191,7 @@ func (p *Pipeline) processInternal(ctx context.Context, req Request) (Response, 
 					debugf("still overloaded for %q, second retry after 1s", requested)
 					time.Sleep(time.Second)
 					retry2 := runner.Run(ctx, cands, func(ctx context.Context, cand router.Candidate, attempt int) evalResult {
-						return p.tryEval(ctx, cand, req, api, requested, body, processed, streaming, client, rtkSaved, clientFmt)
+						return p.tryEval(ctx, cand, req, api, requested, body, env, streaming, client, clientFmt)
 					})
 					if retry2.OK && retry2.Response != nil {
 						return *retry2.Response, nil

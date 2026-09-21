@@ -94,22 +94,22 @@ func (p *Pipeline) Stream(ctx context.Context, req Request, w http.ResponseWrite
 	if clientFmt == fmtResponses {
 		sanitizedBody = sanitizeResponsesPayload(body)
 	}
-	requested := modelFromBody(sanitizedBody)
-	processed, rtkChanged := p.rtk.Apply(sanitizedBody)
-	rtkSaved := 0
-	if rtkChanged {
-		rtkSaved = int(tokenize.CountCapped(string(sanitizedBody)) - tokenize.CountCapped(string(processed)))
+	env := newEnvelope(sanitizedBody)
+	requested := env.requested
+	env.applyRTK(p.rtk)
+	if env.rtkChanged {
 		p.metrics.RTKApplied()
 	}
-	p.metrics.RTKSaved(int64(rtkSaved))
+	p.metrics.RTKSaved(int64(env.rtkSaved))
 	if cfg := p.cfg.Get(); cfg.Cache.PrefixOrder {
-		processed = orderPrompt(processed)
+		env.orderPrompt()
 	}
+	env.finish(p.cfg.Get().Cache.CanonicalKeys)
+	processed := env.body
 	// Streaming replay cache: byte-identical SSE captures stay
 	// self-consistent (tool ids, finish_reason, [DONE]) by construction.
 	if cacheableRequest(clientFmt, processed) {
-		streamKey := p.keyFor(processed)
-		e, got, missReason := p.cache.GetWithReason(streamKey)
+		e, got, missReason := p.cache.GetWithReason(env.key)
 		if got && e.SSE {
 			cacheSaved := e.PromptTokens
 			if cacheSaved == 0 {
@@ -161,7 +161,7 @@ func (p *Pipeline) Stream(ctx context.Context, req Request, w http.ResponseWrite
 	// iteration policy.
 	runner := newRunner(p.router, p.handlers.refreshCredentials)
 	result := runner.Run(ctx, cands, func(ctx context.Context, cand router.Candidate, attempt int) evalResult {
-		return p.streamEval(ctx, cand, attempt, w, header, api, requested, body, processed, client, rtkSaved, clientFmt)
+		return p.streamEval(ctx, cand, attempt, w, header, api, requested, body, env, client, clientFmt)
 	})
 	// Terminal check: a candidate succeeded (bytes written), the round
 	// committed a deterministic 4xx verbatim, or the stream aborted
@@ -181,7 +181,7 @@ func (p *Pipeline) Stream(ctx context.Context, req Request, w http.ResponseWrite
 		debugf("all overloaded (stream) for %q, retry after 1s", requested)
 		time.Sleep(time.Second)
 		retry := runner.Run(ctx, cands, func(ctx context.Context, cand router.Candidate, attempt int) evalResult {
-			return p.streamEval(ctx, cand, attempt, w, header, api, requested, body, processed, client, rtkSaved, clientFmt)
+			return p.streamEval(ctx, cand, attempt, w, header, api, requested, body, env, client, clientFmt)
 		})
 		// The retry round can itself commit a terminal response (a
 		// deterministic 4xx surfaced verbatim, or a mid-stream abort).
@@ -203,7 +203,7 @@ func (p *Pipeline) Stream(ctx context.Context, req Request, w http.ResponseWrite
 				debugf("still overloaded (stream) for %q, second retry after 1s", requested)
 				time.Sleep(time.Second)
 				retry2 := runner.Run(ctx, cands, func(ctx context.Context, cand router.Candidate, attempt int) evalResult {
-					return p.streamEval(ctx, cand, attempt, w, header, api, requested, body, processed, client, rtkSaved, clientFmt)
+					return p.streamEval(ctx, cand, attempt, w, header, api, requested, body, env, client, clientFmt)
 				})
 				if err, done := streamFinished(retry2); done {
 					return err
@@ -232,7 +232,8 @@ func (p *Pipeline) Stream(ctx context.Context, req Request, w http.ResponseWrite
 
 // streamEval is the per-attempt streaming eval: prep + relay, then report
 // stop (OK) / retry (Retryable) / next-candidate to the runner.
-func (p *Pipeline) streamEval(ctx context.Context, cand router.Candidate, _ int, w http.ResponseWriter, header http.Header, api apiFormat, requested string, body, processed []byte, client string, rtkSaved int, clientFmt apiFormat) evalResult {
+func (p *Pipeline) streamEval(ctx context.Context, cand router.Candidate, _ int, w http.ResponseWriter, header http.Header, api apiFormat, requested string, body []byte, env *envelope, client string, clientFmt apiFormat) evalResult {
+	processed := env.body
 	payload, perr := p.preparePayload(api, clientFmt, cand, requested, processed)
 	if perr != nil {
 		p.router.ReportFailure(cand.Provider, router.ErrClient)
@@ -283,13 +284,13 @@ func (p *Pipeline) streamEval(ctx context.Context, cand router.Candidate, _ int,
 		if prompt == 0 {
 			prompt = tokenize.CountCapped(string(processed))
 		}
-		p.usage.RecordFull(client, modelFromBody(body), prompt, susage.completion, int64(rtkSaved), 0, susage.cacheRead, susage.cacheCreation, pricesOf(p.cfg.Get(), cand.Provider.Provider.Name), 0)
+		p.usage.RecordFull(client, modelFromBody(body), prompt, susage.completion, int64(env.rtkSaved), 0, susage.cacheRead, susage.cacheCreation, pricesOf(p.cfg.Get(), cand.Provider.Provider.Name), 0)
 		p.metrics.CacheRead(cand.Provider.Provider.Name, susage.cacheRead)
 		p.metrics.CacheCreation(cand.Provider.Provider.Name, susage.cacheCreation)
 		p.metrics.Request(client, cand.Provider.Provider.Name, requested, "ok")
 		// Streaming replay cache: safe-prefix only, never caller-bound state.
 		if cacheableRequest(clientFmt, processed) && len(susage.captured) > 0 {
-			p.cache.Put(p.keyFor(processed), cache.Entry{
+			p.cache.Put(env.key, cache.Entry{
 				Body: susage.captured, ContentType: "text/event-stream",
 				PromptTokens: susage.prompt, CompletionTokens: susage.completion,
 				SSE: true,
