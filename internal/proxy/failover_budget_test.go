@@ -153,14 +153,16 @@ func TestNonStreamingBodyStallFailsOverWithinCandidateSlice(t *testing.T) {
 }
 
 // TestFirstByteBudgetIsSpentOncePerCandidate: the header wait and the first
-// body byte draw on the SAME candidate slice. With a 300ms slice and a ~290ms
-// header wait, the body stall must be abandoned at ~300ms — not at the ~590ms
-// a second full slice would allow. The slice is deliberately long relative to
-// the assertion margin so a loaded CI runner cannot flake it.
+// body byte draw on the SAME candidate slice. With a 600ms slice and a ~590ms
+// header wait, the body stall must be abandoned at ~600ms — not at the
+// ~1200ms a second full slice would allow. (Teardown of the aborted body adds
+// a measured ~50ms on loopback, which is why the bound is not tighter.)
+// The slice is deliberately long relative to the assertion margin so a loaded
+// CI runner cannot flake it.
 func TestFirstByteBudgetIsSpentOncePerCandidate(t *testing.T) {
-	setBudgets(t, 300*time.Millisecond, 900*time.Millisecond)
+	setBudgets(t, 600*time.Millisecond, 1800*time.Millisecond)
 	slowHeaders := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		time.Sleep(290 * time.Millisecond) // spends most of the candidate's slice
+		time.Sleep(590 * time.Millisecond) // spends most of the candidate's slice
 		headersThenStallBody(w, r)
 	}))
 	defer slowHeaders.Close()
@@ -175,8 +177,8 @@ func TestFirstByteBudgetIsSpentOncePerCandidate(t *testing.T) {
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("want 200 from p1, got %d: %s", resp.StatusCode, data)
 	}
-	if elapsed > 420*time.Millisecond {
-		t.Fatalf("candidate spent %v; the header wait and the first byte must fit ONE 300ms slice (~590ms means the slice was spent twice)", elapsed)
+	if elapsed > 900*time.Millisecond {
+		t.Fatalf("candidate spent %v; the header wait and the first byte must fit ONE 600ms slice (~1200ms means the slice was spent twice)", elapsed)
 	}
 }
 
@@ -347,23 +349,46 @@ func TestNoOverloadSleepOnAllOverloaded(t *testing.T) {
 	}
 }
 
-// TestFailoverBudgetOutcomeOnOverrun: when an attempt overruns its slice the
-// next candidate is never tried, and the 503 must say so with a
-// failover_budget entry rather than blaming a provider.
-func TestFailoverBudgetOutcomeOnOverrun(t *testing.T) {
-	setBudgets(t, 20*time.Millisecond, 40*time.Millisecond)
-	// Commits a 503 status immediately, then stalls the body past the request
-	// budget. The attempt fails after the deadline, so the second provider is
-	// never tried.
+// TestOverrunIsBoundedToTheCandidateSlice: a provider that commits a status
+// and then stalls the body is abandoned at its OWN slice, and a healthy
+// candidate behind it is still tried.
+//
+// This replaced an earlier TestFailoverBudgetOutcomeOnOverrun, which encoded
+// the pre-FIX-1 behaviour: an unbounded body stall consumed the whole request
+// budget, so the second provider was skipped and the response rendered
+// failover_budget. Once the first body byte became bounded by the candidate's
+// slice that premise died, and the old test only passed locally by luck (it
+// failed on a fast CI runner: want 503, got 200).
+//
+// Why the request budget is generous here: the watchdog's DECISION lands at
+// its slice (20ms), but tearing the aborted body down costs a further ~50ms
+// (http.Response.Body.Close does not promptly unblock an in-flight Read on
+// loopback - measured, independent of the server's stall). An attempt
+// therefore costs slice+~50ms, so a 40ms request budget legitimately has
+// nothing left for the next candidate. The property under test is the slice,
+// not the request ceiling.
+//
+// Deterministic by construction: the mock stalls until the test releases it,
+// so "abandoned at the slice" (~100ms) and "waited for the body" (>=10s)
+// differ by two orders of magnitude, independent of runner speed.
+func TestOverrunIsBoundedToTheCandidateSlice(t *testing.T) {
+	setBudgets(t, 20*time.Millisecond, 5*time.Second)
+	// Blocks until the test ends instead of sleeping a fixed time, so
+	// httptest.Server.Close (which waits for outstanding handlers) stays fast.
+	released := make(chan struct{})
 	slowFail := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusServiceUnavailable)
 		if f, ok := w.(http.Flusher); ok {
 			f.Flush()
 		}
-		time.Sleep(150 * time.Millisecond)
+		select {
+		case <-released:
+		case <-time.After(10 * time.Second):
+		}
 		_, _ = w.Write([]byte(`{"error":{"message":"boom"}}`))
 	}))
 	defer slowFail.Close()
+	defer close(released) // registered after Close so it runs first (LIFO)
 	var mu sync.Mutex
 	bCalls := 0
 	second := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
@@ -371,9 +396,42 @@ func TestFailoverBudgetOutcomeOnOverrun(t *testing.T) {
 		bCalls++
 		mu.Unlock()
 		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{}`))
 	}))
 	defer second.Close()
 	base := gatewayAgainst(t, "openai", slowFail.URL, second.URL)
+
+	start := time.Now()
+	resp, data := post(t, base, "/v1/chat/completions", chatBody(false, ""))
+	elapsed := time.Since(start)
+
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("want 200 from the healthy candidate, got %d: %s", resp.StatusCode, data)
+	}
+	if got := resp.Header.Get("X-Llrouter-Provider"); got != "p1" {
+		t.Fatalf("want the healthy candidate p1 to serve it, got provider %q", got)
+	}
+	if elapsed > 500*time.Millisecond {
+		t.Fatalf("request took %v: the stalled body was waited on instead of being abandoned at its 20ms slice", elapsed)
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if bCalls != 1 {
+		t.Fatalf("want the healthy candidate tried exactly once, got %d call(s)", bCalls)
+	}
+}
+
+// TestBudgetExhaustionRendersFailoverBudget: when the request budget is gone
+// before a candidate can be attempted, the 503 must say failover_budget
+// instead of blaming a provider that was never called. A nanosecond budget
+// makes exhaustion certain rather than timing-dependent.
+func TestBudgetExhaustionRendersFailoverBudget(t *testing.T) {
+	setBudgets(t, time.Nanosecond, time.Nanosecond)
+	a := httptest.NewServer(http.HandlerFunc(fastJSON))
+	defer a.Close()
+	b := httptest.NewServer(http.HandlerFunc(fastJSON))
+	defer b.Close()
+	base := gatewayAgainst(t, "openai", a.URL, b.URL)
 
 	resp, data := post(t, base, "/v1/chat/completions", chatBody(false, ""))
 	if resp.StatusCode != http.StatusServiceUnavailable {
@@ -381,11 +439,6 @@ func TestFailoverBudgetOutcomeOnOverrun(t *testing.T) {
 	}
 	if !strings.Contains(string(data), "failover_budget") {
 		t.Fatalf("expected a failover_budget attempts entry, got: %s", data)
-	}
-	mu.Lock()
-	defer mu.Unlock()
-	if bCalls != 0 {
-		t.Fatalf("the second provider was tried after the budget was exhausted (calls=%d)", bCalls)
 	}
 }
 
