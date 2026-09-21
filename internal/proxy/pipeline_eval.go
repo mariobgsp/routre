@@ -14,10 +14,9 @@ import (
 	"github.com/mariobgsp/routre/internal/tokenize"
 )
 
-// attemptTimeout bounds a single non-streaming upstream attempt. Streaming
-// relays are exempt (they can legitimately run for minutes; the transport
-// already bounds dial + response headers).
-const attemptTimeout = 30 * time.Second
+// generationBackstop lives in relay.go; it bounds a single upstream attempt
+// after its response headers have arrived. The failover budget (runner.go)
+// governs only how long the gateway spends choosing a candidate.
 
 // isNativeResponses reports whether a base URL speaks /v1/responses natively
 // (opencode.ai/zen does; openrouter/others don't).
@@ -81,7 +80,7 @@ func crossKindRequest(api apiFormat, kind string) bool {
 	return api != fmtResponses && api != apiFormat(dialect.KindToFormat(kind))
 }
 
-func (p *Pipeline) tryEval(ctx context.Context, cand router.Candidate, req Request, api apiFormat, requested string, body []byte, env *envelope, streaming bool, client string, clientFmt apiFormat) evalResult {
+func (p *Pipeline) tryEval(ctx context.Context, cand router.Candidate, req Request, api apiFormat, requested string, body []byte, env *envelope, streaming bool, client string, clientFmt apiFormat, budget time.Duration) evalResult {
 	processed := env.body
 	payload, perr := p.preparePayload(api, clientFmt, cand, requested, processed)
 	if perr != nil {
@@ -91,17 +90,17 @@ func (p *Pipeline) tryEval(ctx context.Context, cand router.Candidate, req Reque
 	kind := cand.Provider.Provider.Kind
 	ph := req.Header
 	dummyReq := &http.Request{Header: ph}
-	attemptCtx, cancel := context.WithTimeout(ctx, attemptTimeout)
+	attemptCtx, cancel := context.WithTimeout(ctx, generationBackstop)
 	defer cancel()
 	rec := &responseRecorder{header: make(http.Header)}
 	relayStart := time.Now()
-	status, respBody, ct, retryAfter, _, rerr := p.handlers.relay(attemptCtx, rec, cand.Provider.Provider.BaseURL, dummyReq, payload, streaming, kind, cand.Provider.Provider.APIKeyEnv, api, clientFmt)
+	status, respBody, ct, retryAfter, _, rerr := p.handlers.relay(attemptCtx, rec, cand.Provider.Provider.BaseURL, dummyReq, payload, streaming, kind, cand.Provider.Provider.APIKeyEnv, api, clientFmt, budget, cacheableRequest(clientFmt, processed))
 	if rerr == nil && clientFmt == fmtResponses && isReasoningStateError(status, respBody) {
 		if sanitized := sanitizeResponsesPayload(processed); string(sanitized) != string(processed) {
 			if sp, serr := p.preparePayload(api, clientFmt, cand, requested, sanitized); serr == nil {
 				debugf("reasoning-state retry for %q", requested)
 				rec = &responseRecorder{header: make(http.Header)}
-				status, respBody, ct, retryAfter, _, rerr = p.handlers.relay(attemptCtx, rec, cand.Provider.Provider.BaseURL, dummyReq, sp, streaming, kind, cand.Provider.Provider.APIKeyEnv, api, clientFmt)
+				status, respBody, ct, retryAfter, _, rerr = p.handlers.relay(attemptCtx, rec, cand.Provider.Provider.BaseURL, dummyReq, sp, streaming, kind, cand.Provider.Provider.APIKeyEnv, api, clientFmt, budget, cacheableRequest(clientFmt, processed))
 			}
 		}
 	}

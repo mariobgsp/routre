@@ -155,54 +155,21 @@ func (p *Pipeline) processInternal(ctx context.Context, req Request) (Response, 
 	}
 	if !streaming {
 		runner := newRunner(p.router, p.handlers.refreshCredentials)
-		result := runner.Run(ctx, cands, func(ctx context.Context, cand router.Candidate, attempt int) evalResult {
-			return p.tryEval(ctx, cand, req, api, requested, body, env, streaming, client, clientFmt)
+		result := runner.Run(ctx, cands, func(ctx context.Context, cand router.Candidate, attempt int, budget time.Duration) evalResult {
+			return p.tryEval(ctx, cand, req, api, requested, body, env, streaming, client, clientFmt, budget)
 		})
 		if result.OK && result.Response != nil {
 			return *result.Response, nil
 		}
 		tryLog := result.TryLog
-		allOverloaded := len(tryLog) > 0
-		for _, e := range tryLog {
-			if e.Class != router.ErrOverloaded.String() {
-				allOverloaded = false
-				break
-			}
-		}
-		if allOverloaded {
-			debugf("all overloaded for %q, retry after 1s", requested)
-			time.Sleep(time.Second)
-			retry := runner.Run(ctx, cands, func(ctx context.Context, cand router.Candidate, attempt int) evalResult {
-				return p.tryEval(ctx, cand, req, api, requested, body, env, streaming, client, clientFmt)
+		// An all-overloaded round renders immediately with Retry-After: 1 (see
+		// the render path below) — no sleep and no extra candidate round.
+		if result.BudgetExhausted {
+			tryLog = append(tryLog, failures.Outcome{
+				Provider: "*",
+				Class:    "failover_budget",
+				Err:      fmt.Sprintf("failover budget %s exhausted before trying %d candidate(s)", requestFailoverBudget, result.Untried),
 			})
-			if retry.OK && retry.Response != nil {
-				debugf("overloaded retry success for %q", requested)
-				return *retry.Response, nil
-			}
-			if len(retry.TryLog) > 0 {
-				stillOverloaded := true
-				for _, e := range retry.TryLog {
-					if e.Class != router.ErrOverloaded.String() {
-						stillOverloaded = false
-						break
-					}
-				}
-				if stillOverloaded {
-					debugf("still overloaded for %q, second retry after 1s", requested)
-					time.Sleep(time.Second)
-					retry2 := runner.Run(ctx, cands, func(ctx context.Context, cand router.Candidate, attempt int) evalResult {
-						return p.tryEval(ctx, cand, req, api, requested, body, env, streaming, client, clientFmt)
-					})
-					if retry2.OK && retry2.Response != nil {
-						return *retry2.Response, nil
-					}
-					tryLog = retry2.TryLog
-				} else {
-					tryLog = retry.TryLog
-				}
-			} else {
-				tryLog = retry.TryLog
-			}
 		}
 		// Uniform failures get honest statuses: all-4xx → 404 (unknown
 		// model, not an outage), all-auth → 502 (bad keys), all-billing

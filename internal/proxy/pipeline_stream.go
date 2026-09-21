@@ -160,8 +160,8 @@ func (p *Pipeline) Stream(ctx context.Context, req Request, w http.ResponseWrite
 	// closure below is the per-attempt work; the runner owns the
 	// iteration policy.
 	runner := newRunner(p.router, p.handlers.refreshCredentials)
-	result := runner.Run(ctx, cands, func(ctx context.Context, cand router.Candidate, attempt int) evalResult {
-		return p.streamEval(ctx, cand, attempt, w, header, api, requested, body, env, client, clientFmt)
+	result := runner.Run(ctx, cands, func(ctx context.Context, cand router.Candidate, attempt int, budget time.Duration) evalResult {
+		return p.streamEval(ctx, cand, attempt, w, header, api, requested, body, env, client, clientFmt, budget)
 	})
 	// Terminal check: a candidate succeeded (bytes written), the round
 	// committed a deterministic 4xx verbatim, or the stream aborted
@@ -170,6 +170,9 @@ func (p *Pipeline) Stream(ctx context.Context, req Request, w http.ResponseWrite
 	if err, done := streamFinished(result); done {
 		return err
 	}
+	// An all-overloaded round renders immediately with Retry-After: 1 — no
+	// sleep and no extra candidate round. The client retries; the gateway does
+	// not hold the request open to gamble on capacity.
 	allOverloaded := len(result.TryLog) > 0
 	for _, e := range result.TryLog {
 		if e.Class != router.ErrOverloaded.String() {
@@ -177,40 +180,12 @@ func (p *Pipeline) Stream(ctx context.Context, req Request, w http.ResponseWrite
 			break
 		}
 	}
-	if allOverloaded {
-		debugf("all overloaded (stream) for %q, retry after 1s", requested)
-		time.Sleep(time.Second)
-		retry := runner.Run(ctx, cands, func(ctx context.Context, cand router.Candidate, attempt int) evalResult {
-			return p.streamEval(ctx, cand, attempt, w, header, api, requested, body, env, client, clientFmt)
+	if result.BudgetExhausted {
+		result.TryLog = append(result.TryLog, failures.Outcome{
+			Provider: "*",
+			Class:    "failover_budget",
+			Err:      fmt.Sprintf("failover budget %s exhausted before trying %d candidate(s)", requestFailoverBudget, result.Untried),
 		})
-		// The retry round can itself commit a terminal response (a
-		// deterministic 4xx surfaced verbatim, or a mid-stream abort).
-		// It must be checked here — before the reassignment below — or the
-		// all-failed render writes a second status over the committed one.
-		if err, done := streamFinished(retry); done {
-			return err
-		}
-		result = retry
-		if len(retry.TryLog) > 0 {
-			stillOverloaded := true
-			for _, e := range retry.TryLog {
-				if e.Class != router.ErrOverloaded.String() {
-					stillOverloaded = false
-					break
-				}
-			}
-			if stillOverloaded {
-				debugf("still overloaded (stream) for %q, second retry after 1s", requested)
-				time.Sleep(time.Second)
-				retry2 := runner.Run(ctx, cands, func(ctx context.Context, cand router.Candidate, attempt int) evalResult {
-					return p.streamEval(ctx, cand, attempt, w, header, api, requested, body, env, client, clientFmt)
-				})
-				if err, done := streamFinished(retry2); done {
-					return err
-				}
-				result = retry2
-			}
-		}
 	}
 	if len(result.TryLog) == 0 {
 		// No attempt recorded and nothing committed: safe to write the
@@ -232,7 +207,7 @@ func (p *Pipeline) Stream(ctx context.Context, req Request, w http.ResponseWrite
 
 // streamEval is the per-attempt streaming eval: prep + relay, then report
 // stop (OK) / retry (Retryable) / next-candidate to the runner.
-func (p *Pipeline) streamEval(ctx context.Context, cand router.Candidate, _ int, w http.ResponseWriter, header http.Header, api apiFormat, requested string, body []byte, env *envelope, client string, clientFmt apiFormat) evalResult {
+func (p *Pipeline) streamEval(ctx context.Context, cand router.Candidate, _ int, w http.ResponseWriter, header http.Header, api apiFormat, requested string, body []byte, env *envelope, client string, clientFmt apiFormat, budget time.Duration) evalResult {
 	processed := env.body
 	payload, perr := p.preparePayload(api, clientFmt, cand, requested, processed)
 	if perr != nil {
@@ -244,13 +219,13 @@ func (p *Pipeline) streamEval(ctx context.Context, cand router.Candidate, _ int,
 	streamCtx, cancel := context.WithCancel(ctx) // streams run unbounded
 	defer cancel()
 	relayStart := time.Now()
-	status, errBody, ct, retryAfter, susage, rerr := p.handlers.relay(streamCtx, w, cand.Provider.Provider.BaseURL, dummyReq, payload, true, kind, cand.Provider.Provider.APIKeyEnv, api, clientFmt)
+	status, errBody, ct, retryAfter, susage, rerr := p.handlers.relay(streamCtx, w, cand.Provider.Provider.BaseURL, dummyReq, payload, true, kind, cand.Provider.Provider.APIKeyEnv, api, clientFmt, budget, cacheableRequest(clientFmt, processed))
 	// One sanitized retry for providers that renamed a caller-bound field.
 	if rerr == nil && clientFmt == fmtResponses && isReasoningStateError(status, errBody) {
 		if sanitized := sanitizeResponsesPayload(processed); string(sanitized) != string(processed) {
 			if sp, serr := p.preparePayload(api, clientFmt, cand, requested, sanitized); serr == nil {
 				debugf("reasoning-state retry for %q", requested)
-				status, errBody, ct, retryAfter, susage, rerr = p.handlers.relay(streamCtx, w, cand.Provider.Provider.BaseURL, dummyReq, sp, true, kind, cand.Provider.Provider.APIKeyEnv, api, clientFmt)
+				status, errBody, ct, retryAfter, susage, rerr = p.handlers.relay(streamCtx, w, cand.Provider.Provider.BaseURL, dummyReq, sp, true, kind, cand.Provider.Provider.APIKeyEnv, api, clientFmt, budget, cacheableRequest(clientFmt, processed))
 			}
 		}
 	}

@@ -36,7 +36,7 @@ func TestRunnerSuccessFirstCand(t *testing.T) {
 	if len(cands) == 0 {
 		t.Fatal("setup: expected candidates")
 	}
-	got := runner.Run(context.Background(), cands, func(ctx context.Context, cand router.Candidate, attempt int) evalResult {
+	got := runner.Run(context.Background(), cands, func(ctx context.Context, cand router.Candidate, attempt int, budget time.Duration) evalResult {
 		return evalResult{OK: true, Response: want}
 	})
 	if !got.OK {
@@ -61,7 +61,7 @@ func TestRunnerFailoverOnRetryable(t *testing.T) {
 		t.Fatal("setup: need at least 2 candidates")
 	}
 	calls := 0
-	got := runner.Run(context.Background(), cands, func(ctx context.Context, cand router.Candidate, attempt int) evalResult {
+	got := runner.Run(context.Background(), cands, func(ctx context.Context, cand router.Candidate, attempt int, budget time.Duration) evalResult {
 		calls++
 		if calls == 1 {
 			// Non-retryable so the runner records the cand in
@@ -82,9 +82,10 @@ func TestRunnerFailoverOnRetryable(t *testing.T) {
 	}
 }
 
-// TestRunnerRetryThenFail: every attempt is retryable, so the inner
-// loop exhausts the retry budget on each cand before moving to the
-// next. Total eval calls = len(cands) * (1 + retryTransientAttempts).
+// TestRunnerRetryThenFail: a connection-level failure is the only class the
+// runner retries on the same candidate, so the inner loop exhausts the retry
+// budget on each cand before moving to the next. Total eval calls =
+// len(cands) * (1 + retryTransientAttempts).
 func TestRunnerRetryThenFail(t *testing.T) {
 	r := router.New(mkRunnerTiers(), router.DefaultCooldownPolicy())
 	runner := newRunner(r, nil)
@@ -93,9 +94,9 @@ func TestRunnerRetryThenFail(t *testing.T) {
 		t.Fatal("setup: expected candidates")
 	}
 	calls := 0
-	got := runner.Run(context.Background(), cands, func(ctx context.Context, cand router.Candidate, attempt int) evalResult {
+	got := runner.Run(context.Background(), cands, func(ctx context.Context, cand router.Candidate, attempt int, budget time.Duration) evalResult {
 		calls++
-		return evalResult{Err: errors.New("transient"), Class: router.ErrServer, Retryable: true}
+		return evalResult{Err: errors.New("dial refused"), Class: router.ErrNetwork, Retryable: true}
 	})
 	if got.OK {
 		t.Fatalf("want not-OK, got %+v", got)
@@ -119,7 +120,7 @@ func TestRunnerClientClassBreaksRetry(t *testing.T) {
 		t.Fatal("setup: expected candidates")
 	}
 	calls := 0
-	got := runner.Run(context.Background(), cands, func(ctx context.Context, cand router.Candidate, attempt int) evalResult {
+	got := runner.Run(context.Background(), cands, func(ctx context.Context, cand router.Candidate, attempt int, budget time.Duration) evalResult {
 		calls++
 		return evalResult{Err: errors.New("model not found"), Class: router.ErrClient, Retryable: false}
 	})
@@ -146,7 +147,7 @@ func TestRunnerEmittedStopsFailover(t *testing.T) {
 		t.Fatal("setup: need 2+ candidates")
 	}
 	calls := 0
-	got := runner.Run(context.Background(), cands, func(ctx context.Context, cand router.Candidate, attempt int) evalResult {
+	got := runner.Run(context.Background(), cands, func(ctx context.Context, cand router.Candidate, attempt int, budget time.Duration) evalResult {
 		calls++
 		return evalResult{Err: errors.New("client gone"), Class: router.ErrClient, Emitted: true}
 	})
@@ -177,7 +178,7 @@ func TestRunnerAuthRefreshRetries(t *testing.T) {
 		t.Fatal("setup: expected candidates")
 	}
 	calls := 0
-	got := runner.Run(context.Background(), cands, func(ctx context.Context, cand router.Candidate, attempt int) evalResult {
+	got := runner.Run(context.Background(), cands, func(ctx context.Context, cand router.Candidate, attempt int, budget time.Duration) evalResult {
 		calls++
 		if !refreshed {
 			return evalResult{Err: errors.New("401"), Class: router.ErrAuth, Retryable: false}
@@ -205,7 +206,7 @@ func TestRunnerAuthRefreshNoChange(t *testing.T) {
 	runner := newRunner(r, func(string) bool { return false })
 	cands := r.Candidates("deepseek-v4-flash")
 	calls := 0
-	got := runner.Run(context.Background(), cands, func(ctx context.Context, cand router.Candidate, attempt int) evalResult {
+	got := runner.Run(context.Background(), cands, func(ctx context.Context, cand router.Candidate, attempt int, budget time.Duration) evalResult {
 		calls++
 		return evalResult{Err: errors.New("401"), Class: router.ErrAuth, Retryable: false}
 	})
@@ -220,14 +221,15 @@ func TestRunnerAuthRefreshNoChange(t *testing.T) {
 	}
 }
 
-// TestRunnerExhaustsAllCands: every cand fails. Runner returns
-// TryLog with one entry per cand.
+// TestRunnerExhaustsAllCands: every cand fails with a 5xx. The runner does
+// NOT retry a 5xx on the same candidate (fail over instead), so each cand is
+// attempted exactly once and TryLog gets one entry per cand.
 func TestRunnerExhaustsAllCands(t *testing.T) {
 	r := router.New(mkRunnerTiers(), router.DefaultCooldownPolicy())
 	runner := newRunner(r, nil)
 	cands := r.Candidates("deepseek-v4-flash")
 	calls := 0
-	got := runner.Run(context.Background(), cands, func(ctx context.Context, cand router.Candidate, attempt int) evalResult {
+	got := runner.Run(context.Background(), cands, func(ctx context.Context, cand router.Candidate, attempt int, budget time.Duration) evalResult {
 		calls++
 		return evalResult{Err: errors.New("5xx"), Class: router.ErrServer, Retryable: true}
 	})
@@ -237,8 +239,8 @@ func TestRunnerExhaustsAllCands(t *testing.T) {
 	if len(got.TryLog) != len(cands) {
 		t.Errorf("tryLog: want %d entries, got %d", len(cands), len(got.TryLog))
 	}
-	if calls != len(cands)*(1+retryTransientAttempts) {
-		t.Errorf("attempts: want %d, got %d", len(cands)*(1+retryTransientAttempts), calls)
+	if calls != len(cands) {
+		t.Errorf("attempts: want %d (one per cand: a 5xx is not retried), got %d", len(cands), calls)
 	}
 }
 
@@ -271,7 +273,7 @@ func TestBuildOutcome(t *testing.T) {
 func TestRunnerZeroAttempts(t *testing.T) {
 	r := router.New(mkRunnerTiers(), router.DefaultCooldownPolicy())
 	runner := newRunner(r, nil)
-	got := runner.Run(context.Background(), nil, func(ctx context.Context, cand router.Candidate, attempt int) evalResult {
+	got := runner.Run(context.Background(), nil, func(ctx context.Context, cand router.Candidate, attempt int, budget time.Duration) evalResult {
 		t.Fatal("eval should not be called with zero cands")
 		return evalResult{}
 	})
@@ -293,7 +295,7 @@ func TestRunnerContextCancel(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 	calls := 0
-	got := runner.Run(ctx, cands, func(ctx context.Context, cand router.Candidate, attempt int) evalResult {
+	got := runner.Run(ctx, cands, func(ctx context.Context, cand router.Candidate, attempt int, budget time.Duration) evalResult {
 		calls++
 		if ctx.Err() == nil {
 			t.Error("eval: ctx not canceled")
@@ -308,18 +310,18 @@ func TestRunnerContextCancel(t *testing.T) {
 	}
 }
 
-// TestRunnerRetryDelayNotZero: a real (non-zero) retry delay would
-// slow tests. Confirm the runner honors an injected zero delay so
-// future test-friendly construction doesn't need a mock clock.
-func TestRunnerRetryDelayNotZero(t *testing.T) {
+// TestRunnerRetryDoesNotSleep: the same-candidate retry runs immediately — no
+// transientRetryDelay. A connection-level failure retries once per cand, and
+// the whole round must finish far faster than the old 500ms-per-retry sleep.
+func TestRunnerRetryDoesNotSleep(t *testing.T) {
 	r := router.New(mkRunnerTiers(), router.DefaultCooldownPolicy())
-	runner := &candidateRunner{router: r, maxAttempt: 2, retryDelay: 0, refresh: nil}
+	runner := newRunner(r, nil)
 	cands := r.Candidates("deepseek-v4-flash")
 	start := time.Now()
 	calls := 0
-	got := runner.Run(context.Background(), cands, func(ctx context.Context, cand router.Candidate, attempt int) evalResult {
+	got := runner.Run(context.Background(), cands, func(ctx context.Context, cand router.Candidate, attempt int, budget time.Duration) evalResult {
 		calls++
-		return evalResult{Err: errors.New("5xx"), Class: router.ErrServer, Retryable: true}
+		return evalResult{Err: errors.New("dial refused"), Class: router.ErrNetwork, Retryable: true}
 	})
 	elapsed := time.Since(start)
 	if got.OK {
@@ -328,9 +330,9 @@ func TestRunnerRetryDelayNotZero(t *testing.T) {
 	if calls != len(cands)*2 {
 		t.Errorf("attempts: want %d, got %d", len(cands)*2, calls)
 	}
-	// 0-delay must keep total runtime well under the real delay. The
-	// default 500ms x 1 retry x 3 cands = 1.5s; we cap at 200ms.
+	// The old 500ms sleep x 1 retry x 3 cands = 1.5s; even the retry itself
+	// now runs instantly, so cap at 200ms.
 	if elapsed > 200*time.Millisecond {
-		t.Errorf("runner slept too long: %v (zero-delay injection broken?)", elapsed)
+		t.Errorf("runner slept: %v (retry must not sleep)", elapsed)
 	}
 }

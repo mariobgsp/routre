@@ -33,6 +33,11 @@ type streamUsage struct {
 	captured []byte
 }
 
+// usageCarryMax bounds the partial-line carry buffer. An upstream that never
+// emits a newline would otherwise grow it without bound; the partial line is
+// dropped instead (a usage field split across >64 KiB is not a real frame).
+const usageCarryMax = 64 << 10
+
 // usageSniffer is a pass-through io.Reader that sits in front of an upstream
 // SSE body and captures usage/progress token counts as bytes flow by. It does
 // not alter the byte stream (proxy must stay byte-for-byte for same-kind
@@ -91,6 +96,9 @@ func (u *usageSniffer) Read(p []byte) (int, error) {
 				u.scan(chunk)
 			}
 			u.carry = append([]byte(nil), u.carry[last:]...)
+		}
+		if len(u.carry) > usageCarryMax {
+			u.carry = nil
 		}
 	}
 	return n, err
