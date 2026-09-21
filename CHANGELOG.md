@@ -12,6 +12,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 > (2026-08-25). Sections marked `legacy` use the pre-rebrand
 > routre-cli numbering and are kept for history only.
 
+## [0.5.1] — 2026-09-21
+
+### Fixed
+
+- **A cooling provider no longer gets replaced by a misleading one** (`internal/router/candidates.go`) — with `forward_unknown: true`, `Candidates()` checked cooldown *before* the model whitelist, so a model that **is** advertised produced an empty candidate list whenever its advertiser was cooling — and then fell into the wildcard fan-out meant for unknown/future models, forwarding the request verbatim to every available provider, including ones that never advertised it. The client saw that stranger's error as the cause: live case, `503 {"message":"all providers for model \"deepseek/deepseek-v4.1-flash\" failed","type":"all_providers_failed","attempts":[{"provider":"openrouter","class":"credits","error":"provider openrouter: status 402 (credits)"}]}` while the real advertiser (commandcode) was returning `429 rate_limit_error` and was not named in `attempts[]` at all. Because the wildcard branch always produced a non-empty candidate list, the gateway's honest `providers_unavailable` + `Retry-After` path (`len(cands) == 0`) was unreachable. `Candidates()` now records whether any configured provider advertises the model — whitelist hit, free variant, or provider-qualified `provider/model` prefix — independently of cooldown state, and only wildcard-forwards models that *nothing* advertises. A listed-but-cooling model therefore yields no candidates and the client gets `503 providers_unavailable` with `cooldown_seconds` and `Retry-After`; genuinely unknown models keep the zero-config fan-out, 402/404 cascade included.
+
 ## [0.5.0] — 2026-09-17
 
 ### Changed

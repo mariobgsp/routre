@@ -24,9 +24,15 @@ routre models sync        # pull new provider models into config.json
 Point any agent at `http://127.0.0.1:20128` via `OPENAI_BASE_URL` /
 `ANTHROPIC_BASE_URL` — failover, compression, and caching come for free.
 
-### Latest (v0.5.0 — 2026-09-17)
+### Latest (v0.5.1 — 2026-09-21)
+
+- **A cooling provider is no longer replaced by a misleading one** — with `forward_unknown: true`, a model that *is* configured used to be forwarded to providers that never advertised it while its real provider cooled, so the client saw that stranger's error (a 402 credit wall) instead of the cooldown. Such a model now answers `503 providers_unavailable` with `cooldown_seconds` + `Retry-After`, naming the model and the wait. See [CHANGELOG.md](CHANGELOG.md).
+
+<details><summary>Previous — v0.5.0</summary>
 
 - **Codebase simplification, no behavior change** — god files split (`router`/`chat`/`pipeline` → focused files, nothing over ~450 lines in `internal/proxy`), duplicate translate/response paths deleted, test + dialect helpers unified, endpoint routing de-nested. Go source 22222 → 20757 lines (−6.6%), CI green including `-race`. See [CHANGELOG.md](CHANGELOG.md).
+
+</details>
 
 <details><summary>Previous — v0.4.14 / v0.4.13</summary>
 
@@ -41,6 +47,8 @@ Point any agent at `http://127.0.0.1:20128` via `OPENAI_BASE_URL` /
 <details><summary>Previous — v0.4.11</summary>
 
 - **README rendering fix** — an unclosed `<details>` had collapsed the whole README and all three diagrams into one raw-HTML block. Fixed, and the How-it-works content is visible again (summaries kept as lead-ins). See [CHANGELOG.md](CHANGELOG.md).
+
+</details>
 
 </details>
 
@@ -73,6 +81,7 @@ Point any agent at `http://127.0.0.1:20128` via `OPENAI_BASE_URL` /
 - `routre doctor` per-provider probe + per-phase observability + latency hardening.
 - `candidateRunner` deep module, streaming `overloaded` double retry, `--debug` trace.
 
+</details>
 </details>
 </details>
 </details>
