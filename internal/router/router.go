@@ -208,14 +208,44 @@ func (r *Router) Status() []Status {
 	return out
 }
 
-// Reset replaces the provider list and policy (config reload). The old
-// failure state is discarded; cooldowns restart fresh.
+// Reset reconciles the provider list and policy in place (config reload).
+// Providers that still exist keep their *ProviderState — and therefore their
+// failures and cooldown — so a report from a request already in flight is not
+// orphaned, and an unrelated config edit does not silently wipe every
+// cooldown. Providers removed from the config lose their state.
 func (r *Router) Reset(tiers []TierInput, policy CooldownPolicy) {
-	newR := New(tiers, policy)
 	r.mu.Lock()
-	r.provs = newR.provs
-	r.policy = newR.policy
-	r.mu.Unlock()
+	defer r.mu.Unlock()
+	existing := make(map[string]*ProviderState, len(r.provs))
+	for _, p := range r.provs {
+		existing[p.Provider.Name] = p
+	}
+	next := make([]*ProviderState, 0, len(r.provs))
+	for ti, t := range tiers {
+		for _, in := range t.Providers {
+			st, ok := existing[in.Name]
+			if !ok {
+				st = &ProviderState{}
+			}
+			// Update only the static fields; failures/until are preserved.
+			st.Provider = ProviderInfo{
+				Name:      in.Name,
+				Kind:      in.Kind,
+				BaseURL:   in.BaseURL,
+				APIKeyEnv: in.APIKeyEnv,
+				Models:    in.Models,
+				Tier:      t.Name,
+				TierIndex: ti,
+				MaxTokens: in.MaxTokens,
+			}
+			next = append(next, st)
+			// Consume the name so a duplicated name later in the config gets
+			// its own state rather than aliasing this one.
+			delete(existing, in.Name)
+		}
+	}
+	r.provs = next
+	r.policy = policy
 }
 
 // Policy returns the cooldown policy (used when rebuilding the router on
