@@ -38,6 +38,49 @@ func chatBodyFor(model string, stream bool) []byte {
 	return b
 }
 
+// TestForwardUnknownDoesNotWildcardListedCoolingModel: with
+// forward_unknown on, a model that only provider a advertises must 503 with
+// providers_unavailable + Retry-After while a is cooling — never a wildcard
+// attempt against provider b, which never advertised it. This is the wire
+// symptom the wildcard fan-out used to produce: an upstream rate limit
+// surfacing on the client as provider b's unrelated error (a 402 credit
+// wall), with a as an unmentioned cause.
+func TestForwardUnknownDoesNotWildcardListedCoolingModel(t *testing.T) {
+	a, _ := mock.New("a")
+	defer a.Close()
+	b, _ := mock.New("b")
+	defer b.Close()
+
+	// a advertises the requested model; b does not.
+	provs := `{"name":"a","kind":"openai","base_url":"` + a.URL() + `/v1","api_key_env":"TEST_KEY_A","models":["m"]},` +
+		`{"name":"b","kind":"openai","base_url":"` + b.URL() + `/v1","api_key_env":"TEST_KEY_B","models":["other"]}`
+	cfg := `{"listen":"127.0.0.1:0",` +
+		`"tiers":[{"name":"t1","providers":[` + provs + `]}],` +
+		`"rtk":{"enabled":true,"min_bytes":500,"max_bytes":10485760},` +
+		`"cache":{"enabled":true,"max_entries":64,"ttl_seconds":3600,"prefix_order":false},` +
+		`"forward_unknown":true}`
+	base, _ := testEnv(t, cfg)
+
+	// Drive a — the only advertiser of "m" — into cooldown.
+	a.SetFail(500)
+	_, _ = post(t, base, "/v1/chat/completions", chatBodyFor("m", false))
+	_, _ = post(t, base, "/v1/chat/completions", chatBodyFor("m", false))
+
+	resp, data := post(t, base, "/v1/chat/completions", chatBodyFor("m", false))
+	if resp.StatusCode != 503 {
+		t.Fatalf("expected 503 providers_unavailable while a cools, got %d: %s", resp.StatusCode, data)
+	}
+	if !strings.Contains(string(data), "providers_unavailable") {
+		t.Fatalf("expected providers_unavailable (not all_providers_failed), got: %s", data)
+	}
+	if resp.Header.Get("Retry-After") == "" {
+		t.Fatal("expected Retry-After on providers_unavailable")
+	}
+	if b.Requests() != 0 {
+		t.Fatalf("provider b never advertised the model and must not receive a wildcard request, got %d", b.Requests())
+	}
+}
+
 // A wildcard-forwarded model rejected by the first provider (404 = "this
 // provider lacks it") must fail over to the next provider instead of
 // surfacing the first rejection.
