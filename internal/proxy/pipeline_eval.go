@@ -105,11 +105,10 @@ func (p *Pipeline) tryEval(ctx context.Context, cand router.Candidate, req Reque
 			}
 		}
 	}
-	relayDur := time.Since(relayStart).Milliseconds()
-	p.lastPhases = &Phases{TotalMS: relayDur}
+	phases := &Phases{TotalMS: time.Since(relayStart).Milliseconds()}
 	if rerr != nil {
 		if router.IsStreamAborted(rerr) {
-			return evalResult{OK: true, Err: rerr, Class: router.ErrStream}
+			return evalResult{OK: true, Err: rerr, Class: router.ErrStream, Phases: phases}
 		}
 		if errors.Is(rerr, router.ErrMissingProviderKey) {
 			// Fail over to a provider that DOES have its key, but never
@@ -118,7 +117,7 @@ func (p *Pipeline) tryEval(ctx context.Context, cand router.Candidate, req Reque
 		}
 		class := router.Classify(rerr)
 		if !router.IsRetryableClass(class) {
-			return evalResult{OK: true, Response: &Response{StatusCode: 502, Body: []byte(fmt.Sprintf(`{"error":{"message":%q,"type":"upstream_error"}}`, rerr.Error()))}, Err: rerr, Class: class, Retryable: false}
+			return evalResult{OK: true, Response: &Response{StatusCode: 502, Body: []byte(fmt.Sprintf(`{"error":{"message":%q,"type":"upstream_error"}}`, rerr.Error()))}, Err: rerr, Class: class, Retryable: false, Phases: phases}
 		}
 		p.metrics.Failure(cand.Provider.Provider.Name, class.String())
 		p.router.ReportFailureWithBackoff(cand.Provider, class, retryAfter)
@@ -170,7 +169,7 @@ func (p *Pipeline) tryEval(ctx context.Context, cand router.Candidate, req Reque
 		if cand.IsFree {
 			hdr.Set("X-Llrouter-Free", cand.Upstream)
 		}
-		return evalResult{OK: true, Response: &Response{StatusCode: status, Body: sendBody, ContentType: ct, Header: hdr, Provider: cand.Provider.Provider.Name}}
+		return evalResult{OK: true, Response: &Response{StatusCode: status, Body: sendBody, ContentType: ct, Header: hdr, Provider: cand.Provider.Provider.Name}, Phases: phases}
 	}
 	class := router.ClassifyStatusBody(status, respBody)
 	errStatus := func() error {

@@ -34,14 +34,7 @@ type Pipeline struct {
 	metrics    *metrics.Metrics
 	keys       *keystore.Store
 	logger     *log.Logger
-	lastPhases *Phases
 }
-
-// LastPhases returns the per-phase timing from the most recent
-// upstream attempt, or nil if the request was served from cache or
-// eval didn't measure. Read once, immediately after Stream/Process
-// returns.
-func (p *Pipeline) LastPhases() *Phases { return p.lastPhases }
 
 func NewPipeline(h *Handlers) *Pipeline {
 	return &Pipeline{
@@ -78,6 +71,9 @@ type Response struct {
 	Header      http.Header
 	FromCache   bool
 	Provider    string
+	// Phases is this request's own per-attempt timing. Never shared: the
+	// pipeline serves concurrent requests from one instance.
+	Phases *Phases
 }
 
 func (p *Pipeline) Process(ctx context.Context, req Request) (Response, error) {
@@ -85,7 +81,6 @@ func (p *Pipeline) Process(ctx context.Context, req Request) (Response, error) {
 }
 
 func (p *Pipeline) processInternal(ctx context.Context, req Request) (Response, error) {
-	p.lastPhases = nil
 	body := req.Body
 	path := req.Path
 	client := req.Client
@@ -159,7 +154,9 @@ func (p *Pipeline) processInternal(ctx context.Context, req Request) (Response, 
 			return p.tryEval(ctx, cand, req, api, requested, body, env, streaming, client, clientFmt, budget)
 		})
 		if result.OK && result.Response != nil {
-			return *result.Response, nil
+			r := *result.Response
+			r.Phases = result.Phases
+			return r, nil
 		}
 		tryLog := result.TryLog
 		// An all-overloaded round renders immediately with Retry-After: 1 (see

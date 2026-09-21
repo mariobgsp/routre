@@ -52,17 +52,20 @@ func (h *Handlers) route(w http.ResponseWriter, r *http.Request, _ apiFormat) {
 	// critical path, and defer keeps it firing on error paths too. The
 	// per-request open is deliberately kept — it is what makes logrotate
 	// (rename + create) work without a SIGHUP.
-	var entry reqlog.Entry
+	//
+	// phases is THIS request's own timing: the pipeline is shared across
+	// concurrent requests, so it can never stash them on itself.
+	var (
+		entry  reqlog.Entry
+		phases *Phases
+	)
 	defer func() {
 		entry.LatencyMS = time.Since(start).Milliseconds()
-		// Only successful upstream attempts populate phase timings.
-		if h.pipeline != nil {
-			if ph := h.pipeline.LastPhases(); ph != nil {
-				entry.DialMS = ph.DialMS
-				entry.HeadersMS = ph.HeadersMS
-				entry.TTFBMS = ph.TTFBMS
-				entry.TotalMS = ph.TotalMS
-			}
+		if phases != nil {
+			entry.DialMS = phases.DialMS
+			entry.HeadersMS = phases.HeadersMS
+			entry.TTFBMS = phases.TTFBMS
+			entry.TotalMS = phases.TotalMS
 		}
 		reqlog.Write(entry)
 	}()
@@ -91,7 +94,8 @@ func (h *Handlers) route(w http.ResponseWriter, r *http.Request, _ apiFormat) {
 		req := Request{Body: body, Path: r.URL.Path, Header: r.Header, Client: client}
 		if isStreaming(body) {
 			// Streaming: pipeline writes SSE directly to w and records usage.
-			serr := h.pipeline.Stream(ctx, req, w)
+			ph, serr := h.pipeline.Stream(ctx, req, w)
+			phases = ph
 			if serr == nil {
 				entry = reqlog.Entry{Client: client, Model: modelFromBody(body), Status: http.StatusOK, Class: "ok", Stream: true}
 				return
@@ -102,6 +106,7 @@ func (h *Handlers) route(w http.ResponseWriter, r *http.Request, _ apiFormat) {
 		} else {
 			resp, perr := h.pipeline.Process(ctx, req)
 			if perr == nil {
+				phases = resp.Phases
 				reqModel := modelFromBody(body)
 				if resp.Provider != "" {
 					reqModel = resp.Provider

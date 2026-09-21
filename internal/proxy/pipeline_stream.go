@@ -79,8 +79,7 @@ func streamFinished(res runnerResult) (err error, handled bool) {
 	}
 }
 
-func (p *Pipeline) Stream(ctx context.Context, req Request, w http.ResponseWriter) error {
-	p.lastPhases = nil
+func (p *Pipeline) Stream(ctx context.Context, req Request, w http.ResponseWriter) (*Phases, error) {
 	body := req.Body
 	path := req.Path
 	client := req.Client
@@ -128,7 +127,7 @@ func (p *Pipeline) Stream(ctx context.Context, req Request, w http.ResponseWrite
 			if f, ok := w.(http.Flusher); ok {
 				f.Flush()
 			}
-			return nil
+			return nil, nil
 		}
 		if got && !e.SSE {
 			// Entry exists but is a JSON (non-streaming) capture; the client
@@ -151,10 +150,10 @@ func (p *Pipeline) Stream(ctx context.Context, req Request, w http.ResponseWrite
 			// Report the status that reached the wire: returning nil here
 			// made route log a client-visible 503 as status=200 class="ok",
 			// so `routre logs -errors` never showed it.
-			return &streamWritten{Status: http.StatusServiceUnavailable}
+			return nil, &streamWritten{Status: http.StatusServiceUnavailable}
 		}
 		failures.Render(w, failures.KindModelNotFound, requested, nil, 0)
-		return &streamWritten{Status: http.StatusServiceUnavailable}
+		return nil, &streamWritten{Status: http.StatusServiceUnavailable}
 	}
 	// Per-cand retry + auth refresh + tryLog accumulation now flow
 	// through candidateRunner (internal/proxy/runner.go). The eval
@@ -169,7 +168,7 @@ func (p *Pipeline) Stream(ctx context.Context, req Request, w http.ResponseWrite
 	// mid-flight (partial 200 — report a true nil, never a typed-nil
 	// *streamWritten, or callers' `err != nil` checks fire).
 	if err, done := streamFinished(result); done {
-		return err
+		return result.Phases, err
 	}
 	// An all-overloaded round renders immediately with Retry-After: 1 — no
 	// sleep and no extra candidate round. The client retries; the gateway does
@@ -196,14 +195,14 @@ func (p *Pipeline) Stream(ctx context.Context, req Request, w http.ResponseWrite
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusBadGateway)
 		_, _ = w.Write(emptyAttemptsBody(requested))
-		return &streamWritten{Status: http.StatusBadGateway}
+		return result.Phases, &streamWritten{Status: http.StatusBadGateway}
 	}
 	retryAfter := 5 * time.Second
 	if allOverloaded {
 		retryAfter = time.Second
 	}
 	failures.Render(w, failures.KindAllFailed, requested, result.TryLog, retryAfter)
-	return &streamWritten{Status: http.StatusServiceUnavailable}
+	return result.Phases, &streamWritten{Status: http.StatusServiceUnavailable}
 }
 
 // streamEval is the per-attempt streaming eval: prep + relay, then report
@@ -230,12 +229,11 @@ func (p *Pipeline) streamEval(ctx context.Context, cand router.Candidate, _ int,
 			}
 		}
 	}
-	relayDur := time.Since(relayStart).Milliseconds()
-	p.lastPhases = &Phases{TotalMS: relayDur}
+	phases := &Phases{TotalMS: time.Since(relayStart).Milliseconds()}
 	if rerr != nil {
 		if router.IsStreamAborted(rerr) {
 			// Client already received bytes; failover would duplicate output.
-			return evalResult{OK: true, Err: rerr, Class: router.ErrStream, Emitted: true}
+			return evalResult{OK: true, Err: rerr, Class: router.ErrStream, Emitted: true, Phases: phases}
 		}
 		if errors.Is(rerr, router.ErrMissingProviderKey) {
 			// Fail over to a provider that DOES have its key, but never
@@ -251,7 +249,7 @@ func (p *Pipeline) streamEval(ctx context.Context, cand router.Candidate, _ int,
 				[]byte(fmt.Sprintf(`{"error":{"message":%q,"type":"upstream_error","model":%q}}`, rerr.Error(), requested)),
 				"application/json")
 			return evalResult{
-				OK: true, Err: rerr, Class: class, Retryable: false, Emitted: true,
+				OK: true, Err: rerr, Class: class, Retryable: false, Emitted: true, Phases: phases,
 				Written: &streamWritten{Status: http.StatusBadGateway, Provider: cand.Provider.Provider.Name},
 			}
 		}
@@ -277,7 +275,7 @@ func (p *Pipeline) streamEval(ctx context.Context, cand router.Candidate, _ int,
 				SSE: true,
 			})
 		}
-		return evalResult{OK: true}
+		return evalResult{OK: true, Phases: phases}
 	}
 	class := router.ClassifyStatusBody(status, errBody)
 	if class == router.ErrAuth {
@@ -314,6 +312,7 @@ func (p *Pipeline) streamEval(ctx context.Context, cand router.Candidate, _ int,
 			Class:     class,
 			Retryable: false,
 			Emitted:   true,
+			Phases:    phases,
 			Written:   &streamWritten{Status: status, Provider: cand.Provider.Provider.Name},
 		}
 	}
