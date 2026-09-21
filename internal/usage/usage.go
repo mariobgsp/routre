@@ -152,10 +152,11 @@ func Load(path string) (*Store, error) {
 			s.rows[keyOf(r.Provider, r.Model)] = r
 		}
 	}
-	// A stale file written before the cap existed must not re-open the hole.
-	if len(s.rows) > maxRows {
-		s.foldOverCap()
-	}
+	// Deliberately do NOT fold here: the reserved model set is not known until
+	// SetReservedModels (the gateway calls it immediately after Load), and
+	// folding without it can bury a CONFIGURED model under "_other" for the
+	// rest of the session. SetReservedModels folds the over-cap rows once the
+	// reservations are known.
 	return s, nil
 }
 

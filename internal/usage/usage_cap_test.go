@@ -53,17 +53,23 @@ func TestUsageRowsCapped(t *testing.T) {
 	}
 }
 
-// TestUsageLoadFoldsOverCap: a stale file written before the cap existed must
-// not re-open the memory hole at startup, and totals must survive folding.
-func TestUsageLoadFoldsOverCap(t *testing.T) {
+// TestUsageLoadDefersFoldToReservedModels: Load must NOT fold on its own (it
+// does not know the configured models yet — the gateway calls SetReservedModels
+// right after), because folding without the reserved set can bury a configured
+// model under "_other" for the whole session. Once reservations are known the
+// over-cap rows fold AROUND the configured model, preserving every total.
+func TestUsageLoadDefersFoldToReservedModels(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "usage.json")
 	rows := make([]map[string]any, 0, 600)
-	for i := 0; i < 600; i++ {
+	for i := 0; i < 599; i++ {
 		rows = append(rows, map[string]any{
 			"provider": "p", "model": fmt.Sprintf("m-%d", i),
 			"prompt_tokens": 2, "requests": 1,
 		})
 	}
+	rows = append(rows, map[string]any{
+		"provider": "p", "model": "real-model", "prompt_tokens": 5, "requests": 1,
+	})
 	data, err := json.Marshal(rows)
 	if err != nil {
 		t.Fatal(err)
@@ -76,15 +82,30 @@ func TestUsageLoadFoldsOverCap(t *testing.T) {
 	if err != nil {
 		t.Fatalf("load: %v", err)
 	}
+	if n := len(s.Snapshot()); n != 600 {
+		t.Fatalf("Load kept %d rows, want all 600: it must defer folding until the reserved set is known", n)
+	}
+
+	s.SetReservedModels([]string{"real-model"})
 	out := s.Snapshot()
 	if len(out) > maxRows+1 {
-		t.Fatalf("loaded rows = %d, want <= %d", len(out), maxRows+1)
+		t.Fatalf("rows after folding = %d, want <= %d", len(out), maxRows+1)
 	}
 	var prompt int64
+	sawReal := false
 	for _, r := range out {
 		prompt += r.PromptTokens
+		if r.Model == "real-model" {
+			sawReal = true
+			if r.Provider != "p" {
+				t.Errorf("real-model row provider = %q, want p", r.Provider)
+			}
+		}
 	}
-	if prompt != 1200 {
-		t.Errorf("prompt total after folding = %d, want 1200", prompt)
+	if !sawReal {
+		t.Fatal("a configured model was folded into _other at Load")
+	}
+	if want := int64(599*2 + 5); prompt != want {
+		t.Errorf("prompt total after folding = %d, want %d", prompt, want)
 	}
 }
