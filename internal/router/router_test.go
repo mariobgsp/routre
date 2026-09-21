@@ -464,3 +464,50 @@ func TestReportFailureWithBackoffHonorsRetryAfter(t *testing.T) {
 		t.Fatalf("expected cooldown ~2s (2s base > 1s RA), got %v", rem)
 	}
 }
+
+// TestCandidatesListedCoolingModelIsNotWildcarded: a model some provider
+// advertises must not fall through to the forward_unknown wildcard fan-out
+// just because that provider is cooling. Cooling is a scheduling problem,
+// so the honest answer is an empty candidate list — which callers turn into
+// providers_unavailable + Retry-After. Fanning out instead hands the
+// request to providers that never advertised the model and reports their
+// error (a 402 credit wall, say) as the cause of the outage.
+func TestCandidatesListedCoolingModelIsNotWildcarded(t *testing.T) {
+	tiers := []TierInput{
+		{Name: "primary", Providers: []ProviderInput{
+			{Name: "commandcode", Kind: "openai", BaseURL: "https://cc", APIKeyEnv: "CC",
+				Models: []string{"deepseek/deepseek-v4.1-flash"}},
+		}},
+		{Name: "spare", Providers: []ProviderInput{
+			{Name: "openrouter", Kind: "openai", BaseURL: "https://or", APIKeyEnv: "OR",
+				Models: []string{"openai/gpt-4o-mini"}},
+		}},
+	}
+	r := New(tiers, DefaultCooldownPolicy())
+	r.SetForwardUnknown(true)
+
+	cc := r.Next(0)
+	if cc == nil || cc.Provider.Name != "commandcode" {
+		t.Fatalf("expected commandcode as first tier: %+v", cc)
+	}
+	r.ReportFailure(cc, ErrRateLimit)
+
+	for _, model := range []string{
+		"deepseek/deepseek-v4.1-flash",             // listed name
+		"commandcode/deepseek/deepseek-v4.1-flash", // provider-qualified form
+	} {
+		if cands := r.Candidates(model); len(cands) != 0 {
+			t.Fatalf("%q is advertised by a cooling provider: want no wildcard candidate, got %+v", model, cands)
+		}
+		if after, served := r.MinCooldownForModel(model, true); !served || after <= 0 {
+			t.Fatalf("%q must report its cooldown (served=%v after=%v) so callers send providers_unavailable", model, served, after)
+		}
+	}
+
+	// A model nobody advertises still takes the zero-config wildcard path,
+	// and the cooling provider is still skipped there.
+	cands := r.Candidates("future-model-x")
+	if len(cands) != 1 || cands[0].Provider.Provider.Name != "openrouter" || !cands[0].IsWildcard {
+		t.Fatalf("unknown model must still fan out to the available provider: %+v", cands)
+	}
+}
