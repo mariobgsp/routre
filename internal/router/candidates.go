@@ -135,7 +135,7 @@ func clampMaxTokens(doc map[string]any, ceiling int64) {
 	promptEst := int64(0)
 	if msgs, ok := doc["messages"]; ok {
 		if mb, err := json.Marshal(msgs); err == nil {
-			promptEst = int64(tokenize.Count(string(mb), tokenize.KindOpenAI))
+			promptEst = tokenize.ClampCount(string(mb))
 		}
 	}
 	const margin = 512

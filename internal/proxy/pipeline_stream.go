@@ -98,7 +98,7 @@ func (p *Pipeline) Stream(ctx context.Context, req Request, w http.ResponseWrite
 	processed, rtkChanged := p.rtk.Apply(sanitizedBody)
 	rtkSaved := 0
 	if rtkChanged {
-		rtkSaved = tokenize.Count(string(sanitizedBody), tokenize.KindOpenAI) - tokenize.Count(string(processed), tokenize.KindOpenAI)
+		rtkSaved = int(tokenize.CountCapped(string(sanitizedBody)) - tokenize.CountCapped(string(processed)))
 		p.metrics.RTKApplied()
 	}
 	p.metrics.RTKSaved(int64(rtkSaved))
@@ -113,7 +113,7 @@ func (p *Pipeline) Stream(ctx context.Context, req Request, w http.ResponseWrite
 		if got && e.SSE {
 			cacheSaved := e.PromptTokens
 			if cacheSaved == 0 {
-				cacheSaved = int64(tokenize.Count(string(processed), tokenize.KindOpenAI))
+				cacheSaved = tokenize.CountCapped(string(processed))
 			}
 			if cacheSaved > 0 {
 				p.usage.Record(client, requested, 0, 0, 0, cacheSaved, usage.Prices{}, 0)
@@ -281,7 +281,7 @@ func (p *Pipeline) streamEval(ctx context.Context, cand router.Candidate, _ int,
 		// Usage comes from the in-relay SSE sniffer, never buffered.
 		prompt := susage.prompt
 		if prompt == 0 {
-			prompt = int64(tokenize.Count(string(processed), tokenize.KindOpenAI))
+			prompt = tokenize.CountCapped(string(processed))
 		}
 		p.usage.RecordFull(client, modelFromBody(body), prompt, susage.completion, int64(rtkSaved), 0, susage.cacheRead, susage.cacheCreation, pricesOf(p.cfg.Get(), cand.Provider.Provider.Name), 0)
 		p.metrics.CacheRead(cand.Provider.Provider.Name, susage.cacheRead)

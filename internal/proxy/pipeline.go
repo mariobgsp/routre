@@ -102,7 +102,7 @@ func (p *Pipeline) processInternal(ctx context.Context, req Request) (Response, 
 	processed, rtkChanged := p.rtk.Apply(sanitizedBody)
 	rtkSaved := 0
 	if rtkChanged {
-		rtkSaved = tokenize.Count(string(sanitizedBody), tokenize.KindOpenAI) - tokenize.Count(string(processed), tokenize.KindOpenAI)
+		rtkSaved = int(tokenize.CountCapped(string(sanitizedBody)) - tokenize.CountCapped(string(processed)))
 		p.metrics.RTKApplied()
 	}
 	p.metrics.RTKSaved(int64(rtkSaved))
@@ -115,7 +115,7 @@ func (p *Pipeline) processInternal(ctx context.Context, req Request) (Response, 
 		if got && !e.SSE {
 			cacheSaved := e.PromptTokens
 			if cacheSaved == 0 {
-				cacheSaved = int64(tokenize.Count(string(processed), tokenize.KindOpenAI))
+				cacheSaved = tokenize.CountCapped(string(processed))
 			}
 			if cacheSaved > 0 {
 				p.usage.Record(client, modelFromBody(processed), 0, 0, 0, cacheSaved, usage.Prices{}, 0)

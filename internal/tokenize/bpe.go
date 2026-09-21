@@ -84,6 +84,9 @@ func loadVocab() (map[string]uint16, error) {
 // vocab is missing/corrupt, it falls back to Estimate (fail-open). Results
 // are cached per (text-hash, kind).
 func Count(text string, kind Kind) int {
+	if obs := countObserver.Load(); obs != nil {
+		(*obs)(len(text))
+	}
 	if text == "" {
 		return 0
 	}

@@ -112,7 +112,7 @@ func (h *Handlers) route(w http.ResponseWriter, r *http.Request, api apiFormat) 
 				}
 				// Provider served (or tried to serve) this request; logged so
 				// `routre logs -provider <name>` filters on something real.
-				logReq(reqlog.Entry{Client: client, Model: reqModel, Provider: resp.Provider, Status: resp.StatusCode, Class: class, PromptTokens: int64(tokenize.Count(string(body), tokenize.KindOpenAI))})
+				logReq(reqlog.Entry{Client: client, Model: reqModel, Provider: resp.Provider, Status: resp.StatusCode, Class: class, PromptTokens: tokenize.CountCapped(string(body))})
 				for k, vv := range resp.Header {
 					for _, v := range vv {
 						w.Header().Add(k, v)
