@@ -271,6 +271,12 @@ func providerServes(models []string, provider, model string) bool {
 //     provider must list the model or a free variant of it. This preserves
 //     the OpenRouter 402-cascade guard (don't ask a provider for a model it
 //     has never advertised).
+//   - A model some provider advertises is never wildcard-forwarded, even
+//     when every such provider is in cooldown. Cooling is a scheduling
+//     problem, not an unknown model: the honest answer is the empty
+//     candidate list, which callers turn into providers_unavailable with a
+//     Retry-After. Fanning out instead would report a provider that never
+//     advertised the model (a 402 credit wall, say) as the cause.
 //
 // Free variants are preferred over the paid model when the request is
 // unqualified: a provider listing "m-free" serves "m" requests via the
@@ -291,25 +297,34 @@ func (r *Router) Candidates(model string) []Candidate {
 		}
 	}
 	var out []Candidate
+	// listed: some configured provider advertises this model (whitelist hit,
+	// free variant, or provider-qualified prefix), cooldown aside. It gates
+	// the wildcard fan-out below — see the routing contract above.
+	listed := false
 	for _, p := range r.provs {
-		if now.Before(p.until) {
+		if qualifiedFor != "" && p.Provider.Name != qualifiedFor {
 			continue
 		}
-		if qualifiedFor != "" && p.Provider.Name != qualifiedFor {
+		tail := stripProviderPrefix(p.Provider.Name, model)
+		fv := freeVariantOf(p.Provider.Models, model)
+		if tail != "" || providerServes(p.Provider.Models, p.Provider.Name, model) || fv != "" {
+			listed = true
+		}
+		if now.Before(p.until) {
 			continue
 		}
 		// Explicit provider-qualified routing: "opencode-go/muse-spark-1.2-contributor"
 		// -> provider opencode-go, upstream muse-spark-1.2-contributor. Forward
 		// verbatim regardless of the configured Models list (gateway is a
 		// forwarder; upstream is authoritative). Honors cooldown already checked.
-		if tail := stripProviderPrefix(p.Provider.Name, model); tail != "" {
+		if tail != "" {
 			isFree := strings.HasSuffix(tail, ":free") || strings.HasSuffix(tail, "-free")
 			out = append(out, Candidate{Provider: p, Upstream: tail, IsFree: isFree})
 			continue
 		}
 		if providerServes(p.Provider.Models, p.Provider.Name, model) {
 			// Prefer the free variant when the provider has one.
-			if fv := freeVariantOf(p.Provider.Models, model); fv != "" {
+			if fv != "" {
 				out = append(out, Candidate{Provider: p, Upstream: fv, IsFree: true})
 				continue
 			}
@@ -317,11 +332,11 @@ func (r *Router) Candidates(model string) []Candidate {
 			continue
 		}
 		// Provider does not list the model but has a free variant of it.
-		if fv := freeVariantOf(p.Provider.Models, model); fv != "" {
+		if fv != "" {
 			out = append(out, Candidate{Provider: p, Upstream: fv, IsFree: true})
 		}
 	}
-	if len(out) == 0 && r.forwardUnknown {
+	if len(out) == 0 && r.forwardUnknown && !listed {
 		// Unknown/future model: forward verbatim to every available
 		// provider in tier order so the request is attempted (and fails
 		// over automatically). This is the zero-config path — a model that
