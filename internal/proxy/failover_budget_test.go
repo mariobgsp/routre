@@ -153,13 +153,14 @@ func TestNonStreamingBodyStallFailsOverWithinCandidateSlice(t *testing.T) {
 }
 
 // TestFirstByteBudgetIsSpentOncePerCandidate: the header wait and the first
-// body byte draw on the SAME candidate slice. With a 100ms slice and a ~95ms
-// header wait, the body stall must be abandoned at ~100ms — not at the ~195ms
-// a second full slice would allow.
+// body byte draw on the SAME candidate slice. With a 300ms slice and a ~290ms
+// header wait, the body stall must be abandoned at ~300ms — not at the ~590ms
+// a second full slice would allow. The slice is deliberately long relative to
+// the assertion margin so a loaded CI runner cannot flake it.
 func TestFirstByteBudgetIsSpentOncePerCandidate(t *testing.T) {
-	setBudgets(t, 100*time.Millisecond, 500*time.Millisecond)
+	setBudgets(t, 300*time.Millisecond, 900*time.Millisecond)
 	slowHeaders := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		time.Sleep(95 * time.Millisecond) // spends most of the candidate's slice
+		time.Sleep(290 * time.Millisecond) // spends most of the candidate's slice
 		headersThenStallBody(w, r)
 	}))
 	defer slowHeaders.Close()
@@ -174,8 +175,8 @@ func TestFirstByteBudgetIsSpentOncePerCandidate(t *testing.T) {
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("want 200 from p1, got %d: %s", resp.StatusCode, data)
 	}
-	if elapsed > 170*time.Millisecond {
-		t.Fatalf("candidate spent %v; the header wait and the first byte must fit ONE 100ms slice (~195ms means the slice was spent twice)", elapsed)
+	if elapsed > 420*time.Millisecond {
+		t.Fatalf("candidate spent %v; the header wait and the first byte must fit ONE 300ms slice (~590ms means the slice was spent twice)", elapsed)
 	}
 }
 
