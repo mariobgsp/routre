@@ -92,7 +92,12 @@ func DefaultCooldownPolicy() CooldownPolicy {
 	return CooldownPolicy{Base: 2 * time.Second, Max: 5 * time.Minute, MaxHits: 30}
 }
 
-// Classify maps an error to a class.
+// Classify maps an error to a class. Timeout detection is deliberately
+// broad: stdlib surfaces slow-LLM stalls as context.DeadlineExceeded,
+// *url.Error with Timeout()==true, net.Error timeouts, or the transport's
+// "timeout awaiting response headers" string — all must land in ErrTimeout
+// (short cooldown) rather than ErrNetwork (exponential cooldown), or a
+// single slow provider locks itself out for minutes.
 func Classify(err error) ErrClass {
 	if err == nil {
 		return ErrClient
@@ -104,6 +109,13 @@ func Classify(err error) ErrClass {
 		return ErrConfig
 	}
 	if errors.Is(err, context.DeadlineExceeded) {
+		return ErrTimeout
+	}
+	var nerr interface{ Timeout() bool }
+	if errors.As(err, &nerr) && nerr.Timeout() {
+		return ErrTimeout
+	}
+	if strings.Contains(strings.ToLower(err.Error()), "timeout awaiting response headers") {
 		return ErrTimeout
 	}
 	return ErrNetwork
@@ -206,10 +218,14 @@ func bodySaysModelUnknown(body []byte) bool {
 }
 
 // bodyHasOverloaded reports whether an error body describes transient capacity trouble.
+// Timeout-shaped 503 bodies ("upstream timeout", "timed out", "deadline
+// exceeded") are capacity-adjacent: the provider is slow, not dead —
+// short cooldown, not exponential lockout.
 func bodyHasOverloaded(body []byte) bool {
 	return containsAny(body, []string{
 		"overloaded", "temporarily unavailable", "capacity",
 		"try again later", "rate limit reached", "rate_limit", "too many requests",
+		"upstream timeout", "timed out", "deadline exceeded", "request timeout",
 	})
 }
 

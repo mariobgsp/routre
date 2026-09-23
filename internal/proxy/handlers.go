@@ -51,7 +51,10 @@ func newHTTPClient() *http.Client {
 		Proxy:                 http.ProxyFromEnvironment,
 		DialContext:           (&net.Dialer{Timeout: 5 * time.Second, KeepAlive: 30 * time.Second}).DialContext,
 		TLSHandshakeTimeout:   5 * time.Second,
-		ResponseHeaderTimeout: 20 * time.Second,
+		// Slow-LLM tolerance: deepseek-v4.1-flash TTFB p99 exceeds 20s
+		// under load; a 20s header timeout converts a slow success into
+		// a network-class failure + exponential cooldown + 503.
+		ResponseHeaderTimeout: 45 * time.Second,
 		MaxIdleConns:          64,
 		MaxIdleConnsPerHost:   32,
 		MaxConnsPerHost:       64,

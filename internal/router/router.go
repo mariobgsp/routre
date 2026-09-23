@@ -123,10 +123,13 @@ func (r *Router) reportFailure(p *ProviderState, class ErrClass, retryAfter time
 	if class == ErrStream || class == ErrCredits {
 		return
 	}
-	if class == ErrOverloaded {
+	if class == ErrOverloaded || class == ErrTimeout {
 		// Honor the upstream's Retry-After but cap at 30s. Reset
-		// the failure counter so a single overloaded blip does
-		// not stack with earlier real failures.
+		// the failure counter so a single overloaded blip — or a
+		// single slow-LLM timeout on a single-provider setup
+		// (deepseek-v4.1-flash via commandcode) — does not stack
+		// with earlier real failures into a minutes-long lockout
+		// that can only surface as 503 providers_unavailable.
 		if retryAfter > 30*time.Second {
 			retryAfter = 30 * time.Second
 		}
