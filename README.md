@@ -80,7 +80,7 @@ Point any agent at `http://127.0.0.1:20128` via `OPENAI_BASE_URL` /
 
 <details><summary>Previous — v0.3.4</summary>
 
-- **`routre models sync`** — fetches each provider's `GET {base_url}/models` and persists new IDs into `config.json` so a provider's new model works without a manual edit. Additive by default (never removes), `--prune` to drop retired models, `--dry-run`/`--json` for scripting, `routre models diff` as dry-run alias. Discovery still runs every 6h + at startup + on `SIGHUP`; sync just makes it durable across restarts.
+- **`routre models sync`** — fetches each provider's `GET {base_url}/models` and persists new IDs into `config.json` so a provider's new model works without a manual edit. Additive by default (never removes), `--prune` to drop retired models, `--dry-run`/`--json` for scripting, `routre models diff` as dry-run alias. Discovery runs every 6h + at startup + on `SIGHUP`, and `routre serve` persists newly discovered IDs to `config.json` itself; `models sync` is for one-shot runs and `--prune`.
 - **Zero-config still works without sync** — `forward_unknown: true` (default) forwards any unknown model to all providers with automatic failover, so even before you run `sync` you won't be left behind.
 
 <details><summary>Previous — v0.3.2</summary>
@@ -354,7 +354,7 @@ opencode run --model <provider>/<model> "hello"
 
 **Middle — Cache:** canonical JSON (sorted keys, stable numbers, `<` `>` `&` left literal so a JS client's body never grows) → SHA-256 hex key, versioned `v2:` so the first upgrade invalidates old entries explicitly → `prefix_order` moves system prompt first for stable upstream prompt-cache → `GetWithReason` classifies misses (`disabled`/`absent`/`expired`/`shape_mismatch` → `/v1/status` + Prometheus) → streaming replay is byte-identical & shape-aware (SSE entry never served to JSON request) → billing-accurate hit (credits stored `promptTokens`, not length estimate) → LRU `16k entries / 7d / 128 MiB`, sliding TTL refreshes hot hits, 8 MiB/entry cap, abort never stored.
 
-**Right — Router & failover:** tiers in config order (`subscription → cheap → free`) → `forward_unknown` switch → per-provider exponential cooldown `2s → 30m` (isolated — one 503 never cools others) → `Retry-After` as floor → `candidateRunner` (one immediate connection-level retry + auth-refresh + Emitted guard, hard failover budget) → background `GET {base}/models` every 6h + startup + `SIGHUP` (`routre models sync` persists to `config.json`). Cooldowns **survive** a reload.
+**Right — Router & failover:** tiers in config order (`subscription → cheap → free`) → `forward_unknown` switch → per-provider exponential cooldown `2s → 30m` (isolated — one 503 never cools others) → `Retry-After` as floor → `candidateRunner` (one immediate connection-level retry + auth-refresh + Emitted guard, hard failover budget) → background `GET {base}/models` every 6h + startup + `SIGHUP` (`routre serve` persists newly discovered IDs to `config.json`; `routre models sync --prune` prunes)`. Cooldowns **survive** a reload.
 
 ---
 
@@ -416,13 +416,13 @@ opencode run --model <provider>/<model> "hello"
 
 ### Keeping models current
 
-> Three layers, cheapest first: `forward_unknown` forwards unknown models verbatim; in-memory discovery refreshes every 6h; `routre models sync` persists to `config.json`. Details in [`docs/SPEC.md`](docs/SPEC.md).
+> Three layers, cheapest first: `forward_unknown` forwards unknown models verbatim; in-memory discovery refreshes every 6h and `routre serve` persists new IDs to `config.json`; `routre models sync` does the same on demand. Details in [`docs/SPEC.md`](docs/SPEC.md).
 
 Three layers, cheapest first:
 
 1. **`forward_unknown: true` (default)** — any model not in `config.json` is forwarded verbatim to every available provider in tier order. If one provider carries it, the request succeeds with no config edit; rejections (400/404) fail over automatically.
 2. **In-memory discovery** — at startup, every 6h (±5m jitter so a fleet never hammers providers in lockstep), and on `SIGHUP`, each provider's `GET {base_url}/models` is fetched and merged additively into the live router. No restart needed, but not yet durable. Every run logs `model discovery: refreshed N providers, +M models`; freshness is observable via `routre_discovery_last_success_timestamp_seconds` in `/metrics` and `discovery_last_success` in `/v1/status`.
-3. **`routre models sync`** — makes discovery durable by writing new IDs back into `config.json`:
+3. **`routre models sync`** — makes discovery durable on demand by writing new IDs back into `config.json` (`routre serve` already does this automatically for new IDs; sync is for one-shot runs and `--prune`):
 
    ```bash
    routre models diff -config config.json          # preview
@@ -430,7 +430,7 @@ Three layers, cheapest first:
    routre models sync --prune --dry-run --json     # scripting
    ```
 
-   Additive by default (never deletes). `--prune` drops models the provider no longer advertises. Unreachable providers are skipped with a warning and kept as-is. After a successful write the gateway is `SIGHUP`'d best-effort so the new list is live immediately. For set-and-forget durability, run sync on a schedule (additive = safe to automate):
+   Additive by default (never deletes). `--prune` drops models the provider no longer advertises. Unreachable providers are skipped with a warning and kept as-is. After a successful write the gateway is `SIGHUP`'d best-effort so the new list is live immediately. `routre serve` persists newly discovered IDs itself, so a cron sync is only needed to prune:
 
    ```cron
    17 */6 * * * ~/.local/bin/routre models sync -config ~/routre/config.json >> ~/.routre/models-sync.log 2>&1
