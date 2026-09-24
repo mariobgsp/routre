@@ -12,6 +12,36 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 > (2026-08-25). Sections marked `legacy` use the pre-rebrand
 > routre-cli numbering and are kept for history only.
 
+## [0.7.0] — 2026-09-24
+
+### Added
+
+- **`routre serve` now maintains its own model catalog.** Model discovery
+  (startup, every ~6h ±5m jitter, and SIGHUP) persists newly discovered
+  provider model IDs into `config.json` through the same atomic
+  `config.Store.Save` path `routre models sync` uses. The merge is additive
+  and idempotent — existing IDs keep their place, nothing is ever pruned —
+  so `routre models sync` is now a one-shot tool (`--prune` to retire
+  models) instead of a maintenance chore.
+- `GET /v1/models` reports the router's live candidate set (config-declared
+  plus discovered), so a client sees models the daemon has already learned
+  without a restart.
+- `config.MergeModelIDs` — the single, tested implementation of the
+  additive merge rule, shared by `serve` and `models sync`.
+
+### Changed
+
+- **The `-port`/`-listen` override no longer touches the config store**
+  (`Store.OverrideListen` removed). It used to mutate the in-process config,
+  which — now that `serve` writes `config.json` itself — would have baked the
+  CLI address into the file. The effective address is kept in locals and the
+  dashboard renders it through `proxy.Handlers.Listen`.
+
+### Fixed
+
+- A failed auto-persist is retried on the next discovery pass instead of
+  waiting for some future model to appear.
+
 ## [0.6.0] — 2026-09-21
 
 ### Changed

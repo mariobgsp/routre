@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"sort"
 	"sync"
 )
 
@@ -355,10 +356,24 @@ func (s *Store) Save(cfg Config) error {
 	return s.Load()
 }
 
-// OverrideListen applies a CLI -port/-listen override on top of the loaded
-// config without touching the file.
-func (s *Store) OverrideListen(listen string) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	s.cfg.Listen = listen
+// MergeModelIDs returns existing followed by every ID in discovered that is not
+// already present: existing order is kept, new IDs are appended sorted. It never
+// removes or reorders an existing ID — discovery is purely additive, so a
+// provider that stops advertising a model never loses it from config.
+// added reports the appended IDs, sorted.
+func MergeModelIDs(existing, discovered []string) (merged, added []string) {
+	seen := make(map[string]bool, len(existing)+len(discovered))
+	merged = append([]string(nil), existing...)
+	for _, m := range merged {
+		seen[m] = true
+	}
+	for _, m := range discovered {
+		if seen[m] {
+			continue
+		}
+		seen[m] = true
+		added = append(added, m)
+	}
+	sort.Strings(added)
+	return append(merged, added...), added
 }

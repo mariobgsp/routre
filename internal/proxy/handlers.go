@@ -33,7 +33,12 @@ type Handlers struct {
 	// Keys holds provider API keys in memory (and, when auth is enabled, the
 	// gateway's shared secret). Refresh swaps rotated keys atomically without
 	// mutating the process environment.
-	Keys     *keystore.Store
+	Keys *keystore.Store
+	// Listen is the address `routre serve` actually bound. It differs from
+	// the config value when the CLI -port override is used, and the store
+	// deliberately never carries that override (an in-process Save would
+	// write it to config.json). Empty falls back to the config value.
+	Listen   string
 	pipeline *Pipeline
 }
 
@@ -48,9 +53,9 @@ type Handlers struct {
 // survives accidental transport resets).
 func newHTTPClient() *http.Client {
 	transport := &http.Transport{
-		Proxy:                 http.ProxyFromEnvironment,
-		DialContext:           (&net.Dialer{Timeout: 5 * time.Second, KeepAlive: 30 * time.Second}).DialContext,
-		TLSHandshakeTimeout:   5 * time.Second,
+		Proxy:               http.ProxyFromEnvironment,
+		DialContext:         (&net.Dialer{Timeout: 5 * time.Second, KeepAlive: 30 * time.Second}).DialContext,
+		TLSHandshakeTimeout: 5 * time.Second,
 		// Slow-LLM tolerance: deepseek-v4.1-flash TTFB p99 exceeds 20s
 		// under load; a 20s header timeout converts a slow success into
 		// a network-class failure + exponential cooldown + 503.

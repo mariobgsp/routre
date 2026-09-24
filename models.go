@@ -9,6 +9,7 @@ import (
 	"runtime"
 	"sort"
 	"strings"
+	"sync"
 	"syscall"
 
 	"github.com/mariobgsp/routre/internal/config"
@@ -123,19 +124,7 @@ func cmdModelsSync(args []string, logger *log.Logger, dryRunForced bool) error {
 				sort.Strings(after)
 			} else {
 				// Additive: original order preserved, new IDs appended sorted.
-				after = append([]string(nil), p.Models...)
-				seen := map[string]bool{}
-				for _, m := range after {
-					seen[m] = true
-				}
-				var added []string
-				for _, m := range st.models {
-					if !seen[m] {
-						added = append(added, m)
-					}
-				}
-				sort.Strings(added)
-				after = append(after, added...)
+				after, _ = config.MergeModelIDs(p.Models, st.models)
 			}
 			// Compute added/removed for reporting.
 			afterSet := map[string]bool{}
@@ -226,6 +215,65 @@ func cmdModelsSync(args []string, logger *log.Logger, dryRunForced bool) error {
 		fmt.Println("gateway reloaded (SIGHUP)")
 	}
 	return nil
+}
+
+// persistMu serializes the config read-modify-write below: the discovery ticker
+// and a SIGHUP reload can run discovery concurrently, and two interleaved merges
+// would each write the pre-merge config, silently dropping the other's IDs —
+// a prune, which discovery must never do.
+var persistMu sync.Mutex
+
+// persistDiscoveredModels folds the router's live model lists (config-declared
+// plus everything discovery added) into config.json so a restart keeps them
+// without a manual `routre models sync`. Purely additive — never prunes — and
+// written through the same atomic config.Store.Save path the CLI sync uses.
+// Returns the number of IDs written.
+//
+// Save re-reads the file, which fires the store's OnLoad hook; inside `routre
+// serve` that is the router Reset, so running state stays consistent with disk.
+func persistDiscoveredModels(st *config.Store, live map[string][]string, logger *log.Logger) int {
+	persistMu.Lock()
+	defer persistMu.Unlock()
+
+	// The store's Config is shared with concurrent readers (handlers call
+	// st.Get()), so merge on a copy of the tier/provider containers rather than
+	// mutating the live one.
+	cfg := st.Get()
+	tiers := make([]config.Tier, len(cfg.Tiers))
+	for i, t := range cfg.Tiers {
+		tiers[i] = t
+		tiers[i].Providers = append([]config.Provider(nil), t.Providers...)
+	}
+	cfg.Tiers = tiers
+
+	added := 0
+	for ti := range cfg.Tiers {
+		for pi := range cfg.Tiers[ti].Providers {
+			p := &cfg.Tiers[ti].Providers[pi]
+			models, ok := live[p.Name]
+			if !ok {
+				continue
+			}
+			merged, newIDs := config.MergeModelIDs(p.Models, models)
+			if len(newIDs) == 0 {
+				continue
+			}
+			p.Models = merged
+			added += len(newIDs)
+		}
+	}
+	if added == 0 {
+		// Write-suppression gate: do not remove. This is what makes the
+		// ungated call site in cmdServe's discover() a no-op instead of a
+		// config rewrite on every discovery pass.
+		return 0
+	}
+	if err := st.Save(cfg); err != nil {
+		logger.Printf("model discovery: persist to %s failed: %v", st.Path(), err)
+		return 0
+	}
+	logger.Printf("model discovery: persisted %d new model(s) to %s", added, st.Path())
+	return added
 }
 
 // notifyGateway sends SIGHUP to a running routre daemon (if any) so the

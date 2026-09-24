@@ -876,6 +876,27 @@ func TestModelsEndpoint(t *testing.T) {
 	}
 }
 
+// TestModelsEndpointIncludesDiscovered locks in that GET /v1/models reports the
+// router's live candidate set (config-declared plus discovered IDs), not just the
+// config-declared list.
+func TestModelsEndpointIncludesDiscovered(t *testing.T) {
+	t.Setenv("TEST_KEY_A", "test-key-a")
+	a, _ := mock.New("a")
+	defer a.Close()
+	a.SetModels([]string{"m", "m2"})
+	base, h, _ := serveGateway(t, loadTestStore(t, buildMockConfig(t, "openai", map[string]*mock.Server{"a": a})))
+	if n := h.Router.DiscoverModels(nil, nil); n != 1 {
+		t.Fatalf("discovery refreshed %d providers, want 1", n)
+	}
+	resp, data := get(t, base, "/v1/models")
+	if resp.StatusCode != 200 || !strings.Contains(string(data), `"a/m"`) {
+		t.Fatalf("config-declared model missing: %d %s", resp.StatusCode, data)
+	}
+	if !strings.Contains(string(data), `"a/m2"`) {
+		t.Fatalf("discovered model missing from /v1/models: %s", data)
+	}
+}
+
 func TestBuildUpstreamRequestHeaderParity(t *testing.T) {
 	t.Setenv("KEY_ENV", "secret")
 	h := &Handlers{}
