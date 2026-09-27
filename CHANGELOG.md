@@ -12,6 +12,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 > (2026-08-25). Sections marked `legacy` use the pre-rebrand
 > routre-cli numbering and are kept for history only.
 
+## [0.7.1] — 2026-09-27
+
+### Fixed
+
+- **Per-candidate failover budget 15s → 30s** (`candidateFailoverBudget` in
+  `internal/proxy/runner.go`). PR #88 raised the transport-level
+  `ResponseHeaderTimeout` to 45s, but the runner-level 15s budget fired
+  first, killing slow-but-healthy upstreams (e.g. `deepseek-v4.1-flash`,
+  whose TTFB p99 exceeds 15s under load) with `no upstream response headers
+  within 15s` 503s. The 30s budget matches the whole-request budget scale
+  while staying below the 45s transport timeout, so the runner — not the
+  transport — stays the decision point.
+
 ## [0.7.0] — 2026-09-24
 
 ### Added

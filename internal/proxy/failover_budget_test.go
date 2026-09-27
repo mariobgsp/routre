@@ -27,8 +27,8 @@ func setBudgets(t *testing.T, candidate, request time.Duration) {
 // TestFailoverBudgetsAreHardcoded pins the shipped numbers (decision: no
 // config keys).
 func TestFailoverBudgetsAreHardcoded(t *testing.T) {
-	if candidateFailoverBudget != 15*time.Second {
-		t.Errorf("candidateFailoverBudget = %v, want 15s", candidateFailoverBudget)
+	if candidateFailoverBudget != 30*time.Second {
+		t.Errorf("candidateFailoverBudget = %v, want 30s", candidateFailoverBudget)
 	}
 	if requestFailoverBudget != 30*time.Second {
 		t.Errorf("requestFailoverBudget = %v, want 30s", requestFailoverBudget)
