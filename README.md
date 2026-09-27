@@ -20,7 +20,7 @@ automatic provider failover, RTK token compression (≥90% on tool-heavy traffic
 response caching, and a per-agent token/cost ledger. A localhost dashboard at
 `http://127.0.0.1:20128/ui` lets non-programmers configure it without editing JSON.
 
-Current release: **v0.7.1** — see [CHANGELOG.md](CHANGELOG.md).
+Current release: **v0.7.2** — see [CHANGELOG.md](CHANGELOG.md).
 
 ## Install
 
