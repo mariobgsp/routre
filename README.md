@@ -1,608 +1,104 @@
 # routre
 
-> **In plain English:** routre is a tiny helper on your computer that sits between your AI apps and AI providers.
+> **In plain English:** routre is a tiny helper on your computer that sits between
+> your AI apps and AI providers.
 >
-> - **Saves money** — shrinks repetitive tool output before it is billed (≥90% on tool-heavy traffic).
-> - **Stays online** — if one provider is busy or down, it automatically tries the next one.
-> - **Easy to use** — set it up once with `routre setup`, or open the settings page below with no terminal needed.
->
-> ```text
-> Your app → routre (one address) → cheapest healthy provider → answer back
-> ```
+> - **Saves money** — shrinks repetitive tool output before it is billed (≥90% on
+>   tool-heavy traffic).
+> - **Stays online** — if one provider is busy or down, it automatically tries the
+>   next one.
+> - **Easy to use** — set it up once with `routre setup`, or open the settings page
+>   with no terminal needed.
 
-The 10-MB gateway you forget is running. One static binary (~10 MiB, ~10 MiB RAM idle, bench-gated ≥90% tool-token savings) that gives every OpenAI/Anthropic-compatible CLI — opencode, Claude Code, Codex, Cursor, … — automatic provider failover, RTK token compression (≥90% on tool-heavy traffic), response caching, and a per-agent token/cost ledger. A localhost dashboard at `http://127.0.0.1:20128/ui` lets non-programmers configure it without editing JSON.
-
-```bash
-curl -fsSL https://raw.githubusercontent.com/mariobgsp/routre/main/install.sh | sh
-routre setup              # wizard: provider URLs + API keys
-routre serve              # gateway on 127.0.0.1:20128
-routre start              # start the daemon (systemd/launchd or detached)
-routre list               # connected providers + token/cost ledger
-routre models sync        # pull new provider models into config.json
+```text
+Your app → routre (one address) → cheapest healthy provider → answer back
 ```
 
-Point any agent at `http://127.0.0.1:20128` via `OPENAI_BASE_URL` /
-`ANTHROPIC_BASE_URL` — failover, compression, and caching come for free.
+A single static binary (~10 MiB, ~10 MiB RAM idle) that gives every
+OpenAI/Anthropic-compatible CLI — opencode, Claude Code, Codex, Cursor, … —
+automatic provider failover, RTK token compression (≥90% on tool-heavy traffic),
+response caching, and a per-agent token/cost ledger. A localhost dashboard at
+`http://127.0.0.1:20128/ui` lets non-programmers configure it without editing JSON.
 
-### Latest (v0.6.0 — 2026-09-21)
-
-- **~57x faster on tool-heavy traffic** — gateway-added latency for a 1 MiB body fell from ~1474 ms p50 / ~1623 ms p99 to ~26 ms / ~28 ms. The dominant cost was an exact BPE token count running over the whole body on the request path (up to three times per request, and per candidate in the `max_tokens` clamp); counting now sits off that path, so a 1 MiB request no longer allocates hundreds of MB. `routre bench` and the ≥90% RTK gate stay exact. See [CHANGELOG.md](CHANGELOG.md).
-- **Failover is bounded** — up to 15 s per candidate, or an equal share of the 30 s request budget when several providers remain (the budget bounds candidate selection and the wait for the upstream's first byte; a generation that has begun running is allowed to finish, up to a 5-minute backstop). Every untried provider is reserved a slice so a same-candidate retry can never starve it, retries are narrowed to connection-level errors, and no sleep remains on the failure path. A provider that was never actually called is never reported as a network failure.
-- **Honest attribution** — a missing provider key is a config error instead of a fleet-wide sweep plus a 5-minute cooldown per provider, phase timings are per-request instead of racy, cooldowns survive a `SIGHUP` reload (while a repaired `base_url` starts fresh), and model-label maps are bounded.
-
-<details><summary>Previous — v0.5.1</summary>
-
-- **A cooling provider is no longer replaced by a misleading one** — with `forward_unknown: true`, a model that *is* configured used to be forwarded to providers that never advertised it while its real provider cooled, so the client saw that stranger's error (a 402 credit wall) instead of the cooldown. Such a model now answers `503 providers_unavailable` with `cooldown_seconds` + `Retry-After`, naming the model and the wait. See [CHANGELOG.md](CHANGELOG.md).
-
-</details>
-
-<details><summary>Previous — v0.5.0</summary>
-
-- **Codebase simplification, no behavior change** — god files split (`router`/`chat`/`pipeline` → focused files, nothing over ~450 lines in `internal/proxy`), duplicate translate/response paths deleted, test + dialect helpers unified, endpoint routing de-nested. Go source 22222 → 20757 lines (−6.6%), CI green including `-race`. See [CHANGELOG.md](CHANGELOG.md).
-
-</details>
-
-<details><summary>Previous — v0.4.14 / v0.4.13</summary>
-
-- **Overload tuning + Responses hardening** — 529 classifies as overloaded with honest `Retry-After`; caller-bound Responses state sanitized with safe-prefix caching; no second status over committed streams. See [CHANGELOG.md](CHANGELOG.md).
-
-</details>
-
-<details><summary>Previous — v0.4.12</summary>
-
-- **Honest streaming errors** — a deterministic upstream 4xx (context-length overflow, out-of-range `max_tokens`) now reaches the client as that 4xx with the provider's own message, instead of `503 all_providers_failed` with no per-provider detail; an `all_providers_failed` body can no longer arrive with an empty `attempts[]`, and streaming failures are logged with their real status so `routre logs -errors` finally shows them. See [CHANGELOG.md](CHANGELOG.md).
-
-<details><summary>Previous — v0.4.11</summary>
-
-- **README rendering fix** — an unclosed `<details>` had collapsed the whole README and all three diagrams into one raw-HTML block. Fixed, and the How-it-works content is visible again (summaries kept as lead-ins). See [CHANGELOG.md](CHANGELOG.md).
-
-</details>
-
-</details>
-
-<details><summary>Previous — v0.4.10</summary>
-
-- **Plain-English readability pass, no behavior change** — "In plain English" intro, rewritten `/ui` dashboard copy, architecture diagram guide. See [CHANGELOG.md](CHANGELOG.md).
-
-</details>
-
-<details><summary>Previous — v0.4.8</summary>
-
-- **Opencode session header** — every request to `opencode.ai` now carries `x-opencode-session` (forwarded when the client sends it, else a stable gateway-generated ID). Prevents the `09/06` `missing x-opencode-session` error for `Go HTTP client` / `curl` user-agents. Applied to relay + `doctor`/`probe`.
-- Native Responses passthrough and agent guide (v0.4.3) still included — see below.
-
-<details><summary>Previous — v0.4.3</summary>
-
-- **Native Responses passthrough** — `muse-spark-1.2-contributor-free` (opencode `responses`-only) no longer 500s via `routre`; native `/v1/responses` proxy for `opencode.ai` upstreams, chat translation kept for others. Pi now routes `opencode`/`openrouter`/`anthropic`/`openai` via `127.0.0.1:20128`.
-- **Agent guide** — `docs/AGENT_ROUTRE_GUIDE.md` (also `~/.pi/agent/skills/routre-guide`) » mandatory `127.0.0.1:20128` rule, templates, and verification checklist so the 500 never recurs.
-
-</details>
-
-<details><summary>Previous — v0.3.4</summary>
-
-- **`routre models sync`** — fetches each provider's `GET {base_url}/models` and persists new IDs into `config.json` so a provider's new model works without a manual edit. Additive by default (never removes), `--prune` to drop retired models, `--dry-run`/`--json` for scripting, `routre models diff` as dry-run alias. Discovery runs every 6h + at startup + on `SIGHUP`, and `routre serve` persists newly discovered IDs to `config.json` itself; `models sync` is for one-shot runs and `--prune`.
-- **Zero-config still works without sync** — `forward_unknown: true` (default) forwards any unknown model to all providers with automatic failover, so even before you run `sync` you won't be left behind.
-
-<details><summary>Previous — v0.3.2</summary>
-
-- Enriched 503 surface with per-provider `attempts[]` (shared with `routre doctor`).
-- `routre doctor` per-provider probe + per-phase observability + latency hardening.
-- `candidateRunner` deep module, streaming `overloaded` double retry, `--debug` trace.
-
-</details>
-</details>
-</details>
-</details>
-
-See [CHANGELOG.md](CHANGELOG.md) for the full version history.
-
----
-
-## Table of contents
-
-- [Why this exists](#why-this-exists)
-- [Install](#install)
-- [Quick start](#quick-start)
-  - [Local dashboard for non-programmers](#local-dashboard-for-non-programmers)
-- [How it works](#how-it-works)
-  - [System overview — the 7-step pipeline](#system-overview--the-7-step-pipeline-main-diagram)
-  - [Request lifecycle](#request-lifecycle--what-happens-per-request-supporting-diagram-1)
-  - [Cache, RTK & routing internals](#cache-rtk--routing-internals-supporting-diagram-2)
-  - [Automatic failover](#automatic-failover)
-  - [Keeping models current](#keeping-models-current)
-  - [RTK token compression](#rtk-token-compression--90-on-tool-heavy-traffic)
-  - [Response cache](#response-cache)
-  - [Cross-kind streaming translation (OpenAI ↔ Anthropic)](#cross-kind-streaming-translation-openai--anthropic)
-  - [Token & cost ledger](#token--cost-ledger)
-  - [Always-on daemon](#always-on-daemon)
-- [Configuration](#configuration)
-- [Commands](#commands)
-- [Benchmarks](#benchmarks)
-- [Changelog](#changelog) *(separate file: [`CHANGELOG.md`](CHANGELOG.md))*
-- [Project layout](#project-layout)
-- [Known gaps](#known-gaps)
-- [License](#license)
-
----
-
-## Why this exists
-
-Built as a decision-driven spike (see [`docs/SPEC.md`](docs/SPEC.md) for the full
-decision record and roadmap):
-
-- **Not 9router** — right feature set, but Node/Next.js with ~80 MB idle RAM
-  and a documented unbounded leak (~4.8 GB in 3 days), plus unbenchmarked
-  20–65% savings claims.
-- **Not LiteLLM/Portkey self-host** — Python/Postgres/Redis stacks sized in
-  gigabytes.
-- **Single static Go binary, stdlib only** — proven low-RAM pattern (Go ~5K
-  QPS at ~11 ms proxy overhead), cross-compiled for 6 platforms and shipped
-  as GitHub Release assets (curl installer, no Node needed).
-- **Honest metrics** — the 90% claim is defined, gated, and reproducible:
-  `routre bench` fails the build if it regresses.
-
----
+Current release: **v0.7.1** — see [CHANGELOG.md](CHANGELOG.md).
 
 ## Install
-
-### curl (macOS / Linux) — recommended
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/mariobgsp/routre/main/install.sh | sh
 routre version
 ```
 
-Downloads the latest GitHub release, verifies its sha256 checksum, and
-installs a single static binary to `~/.local/bin` (no sudo; the installer
-prints a PATH line if that dir is not already on your PATH). Env overrides:
+Downloads the latest GitHub release, verifies its sha256 checksum, and installs a
+static binary to `~/.local/bin` (no sudo). Env overrides: `ROUTRE_INSTALL_DIR`,
+`ROUTRE_VERSION`. Upgrade with `routre update`. Windows: download the
+`routre_windows_*.zip` asset from [Releases](https://github.com/mariobgsp/routre/releases/latest).
 
-- `ROUTRE_INSTALL_DIR=/usr/local/bin` — install somewhere else
-- `ROUTRE_VERSION=v0.4.0` — pin a specific release
-
-Upgrades are built in: `routre update`. Windows: download the
-`routre_windows_*.zip` asset from
-[Releases](https://github.com/mariobgsp/routre/releases/latest) and unzip.
-
-### npm (deprecated)
-
-```bash
-npm install -g routre   # deprecated — prints the curl command and exits
-```
-
-npm packages remain published for pinned dependents but are **deprecated**:
-the launcher no longer runs the binary. Uninstall with
-`npm uninstall -g routre` and switch to the curl installer.
-
-### From source (developers)
-
-```bash
-make build          # needs Go ≥ 1.22
-./routre version
-```
-
-### Releasing
-
-```bash
-tag v0.4.0 && git push origin v0.4.0   # release.yml builds 6 platforms and
-                                       # attaches them to the GitHub Release
-```
-
-That's the whole pipeline: `release.yml` compiles every platform, stamps the
-version, generates `checksums.txt`, and publishes the release — which is
-exactly what `install.sh` and `routre update` consume. Test locally with
-`make dist-release` first.
-
-### Legacy npm distribution (deprecated)
-
-```bash
-make dist-npm       # cross-compiles all 6 platforms → npm/dist/*.tgz (7 packages)
-NPM_TOKEN=<token> bash ./npm/publish.sh   # optional: manual publish to the registry
-```
-
-Kept only so pinned dependents keep resolving; no release automation remains
-for npm. See [Releasing](#releasing) for the current tag-driven pipeline.
-
----
+From source (developers, needs Go ≥ 1.22): `make build`. Full release instructions
+are in the [Releasing](https://github.com/mariobgsp/routre/blob/main/Makefile)
+target comments and `.github/workflows/release.yml`.
 
 ## Quick start
 
 ```bash
-routre setup              # interactive: listen addr, providers, URLs, keys, prices
-routre check              # validate config + which API keys are set
+routre setup              # interactive wizard: providers, URLs, API keys, prices
 routre serve              # gateway on 127.0.0.1:20128
-routre start --autostart  # start daemon + enable boot/login auto-start
-routre stop               # stop the daemon
-routre list               # providers + token/cost ledger
-routre models sync        # pull new provider models into config.json
-routre models diff        # preview what sync would change (no write)
-routre update             # self-update to the latest release (-check to peek)
 ```
 
 `setup` writes two files next to `config.json`:
 
 - `config.json` — providers, tiers, base URLs, models (no secrets)
-- `routre.env` — API keys, **0600 permissions**, auto-loaded by
-  `serve` / `check` / `list` (no shell exports needed)
+- `routre.env` — API keys, **0600**, auto-loaded by `serve` / `check` / `list`
 
-### Point a coding agent at it
+Then point a coding agent at it:
 
 ```bash
 export ANTHROPIC_BASE_URL=http://127.0.0.1:20128   # Claude Code
 export OPENAI_BASE_URL=http://127.0.0.1:20128      # Codex / opencode / etc.
 ```
 
-Endpoints: `POST /v1/chat/completions`, `POST /v1/responses`, `POST /v1/messages`,
+Failover, compression, and caching come for free from here. A ready-made config
+exposing **506 models** through one endpoint ships in [`config.all.json`](config.all.json).
+
+### Local dashboard (no terminal needed)
+
+Open `http://127.0.0.1:20128/ui` — live status, provider tiers, key presence, a
+form to set API keys, and a validated JSON editor for the full config. Loopback
+only; adds ~0 MiB at idle.
+
+## Commands
+
+| Command | Purpose |
+| --- | --- |
+| `routre setup` | interactive wizard (providers, URLs, API keys) |
+| `routre serve [--debug]` | run the gateway in the foreground |
+| `routre start [--autostart]` | start the daemon (systemd/launchd, or detached) |
+| `routre stop [--autostart]` | stop the daemon (+ disable auto-start) |
+| `routre restart` | restart the daemon (keeps auto-start state) |
+| `routre check` | validate config + API keys |
+| `routre doctor` | probe every provider (per-provider `ok`/`overloaded`/`auth`) |
+| `routre list` | connected providers + token/cost ledger |
+| `routre models sync \| diff` | fetch `GET /v1/models` per provider, persist new IDs |
+| `routre logs [-n] [-f] [-errors]` | tail the per-request log |
+| `routre bench [-target 90]` | RTK token-reduction benchmark (gated) |
+| `routre update [-check]` | self-update: download + verify + replace this binary |
+| `routre version` | print version |
+
+## HTTP endpoints
+
+`POST /v1/chat/completions`, `POST /v1/responses`, `POST /v1/messages`,
 `GET /v1/models`, `GET /v1/status`, `GET /v1/usage`, `GET /healthz`,
-`GET /metrics` (Prometheus). Local dashboard: `GET /ui` (loopback-only, no extra RAM at idle).
-
-`/v1/responses` speaks the OpenAI Responses API (what opencode's built-in
-`openai` provider uses) and is translated to `/v1/chat/completions` for the
-upstream providers, then wrapped back into the Responses envelope for the
-client. It works with `OPENAI_BASE_URL` out of the box.
-
-### Local dashboard for non-programmers
-
-Open `http://127.0.0.1:20128/ui` in a browser — no CLI needed. The page shows live status (RTK/cache/uptime, provider tiers, key presence), a form to set API keys (written to `routre.env`, `0600`), and a validated JSON editor for the full config (`config.json`, atomic write + instant reload). Every change is validated before it is saved; bad JSON is rejected and the previous config is kept. The server binds `127.0.0.1` only, rejects non-loopback `Host`/`Origin` headers (DNS-rebinding/CSRF mitigation), and the dashboard adds ~0 MiB at idle and <2 MiB after use — binary grows from ~7 MiB to ~11 MiB.
-
-```text
-routre serve          # then open http://127.0.0.1:20128/ui
-```
-
-### Connect everything (opencode-go, opencode zen, OpenRouter)
-
-The repo ships `config.all.json` — a ready config exposing **506 models**
-through one endpoint, verified live:
-
-| Provider | Base URL | Models | Key env |
-| --- | --- | --- | --- |
-| `opencode-go` | `https://opencode.ai/zen/go/v1` | 26 (minimax, kimi, glm, deepseek, qwen, hy3, …) | `OPENCODE_GO_API_KEY` |
-| `opencode-zen` | `https://opencode.ai/zen/v1` | 62 (claude-fable-5, gemini, gpt-5.x, grok, free tier, …) | `OPENCODE_GO_API_KEY` |
-| `gemini` | `https://generativelanguage.googleapis.com` | 4 (gemini-2.0-flash, …) | `GEMINI_API_KEY` |
-| `openrouter` | `https://openrouter.ai/api/v1` | 413 (all OpenRouter models) | `OPENROUTER_API_KEY` |
-
-```bash
-cp config.all.json config.json
-# routre.env:
-#   OPENCODE_GO_API_KEY=<from ~/.local/share/opencode/auth.json>
-#   OPENROUTER_API_KEY=<your key>
-routre serve
-curl http://127.0.0.1:20128/v1/models          # 506 models
-# use any model as <provider>/<model>, e.g.:
-#   opencode-zen/claude-fable-5  opencode-go/hy3  openrouter/deepseek/deepseek-chat
-```
-
-> **Provider-qualified model names.** The `<provider>/` prefix is a
-> client-side routing label only — it tells the gateway which configured
-> provider to route to — and is **stripped before the request is sent
-> upstream**. The upstream always receives the bare listed model name:
-> `opencode-go/gpt-5.6-luna` → `gpt-5.6-luna` upstream,
-> `openrouter/openai/gpt-5.6-luna` → `openai/gpt-5.6-luna` (multi-slash IDs
-> are kept intact — only the first segment is removed). This matches how
-> opencode itself resolves `provider/model` (it splits the reference at the
-> first `/`).
-
-Tier order: `opencode-go` → `opencode-zen` (subscription), `openrouter`
-(fallback). If a model is missing or a provider 5xx/401s, the gateway
-fails over automatically.
-
-### Validate without a paid key
-
-```bash
-./cmd/mock-upstream/mock-upstream -addr 127.0.0.1:19999   # mock provider
-# config with base_url "http://127.0.0.1:19999/v1"
-MOCK_KEY=x ./routre serve -config config-mock.json
-opencode run --model <provider>/<model> "hello"
-```
-
----
-
-## How it works
-
-> One binary, 7 steps, zero config: every CLI hits `127.0.0.1:20128` → detect → compress → cache → route → retry → translate → relay. Failover, compression, and caching come for free.
-
-### System overview — the 7-step pipeline (main diagram)
-
-![routre system overview — clients, 7-step pipeline, observability, tiered providers](docs/architecture.png)
-
-*Sources: [`docs/architecture.puml`](docs/architecture.puml) · rendered with PlantUML `smetana` (no Graphviz). All three diagrams are versioned as `.puml` + `.png` in [`docs/`](docs/).*
-
-> Pipeline in one breath: detect format → compress tool output (RTK) → cache lookup → tiered route → retry/refresh → translate dialect → relay. Details live in [`docs/SPEC.md`](docs/SPEC.md); start with Quick start above and come back when you need internals.
-
-<!-- markdownlint-disable MD060 -->
-| Step | What happens | Where in code |
-|------|--------------|---------------|
-| **1 — Format detect** | `OpenAI / Anthropic / Responses API` detected from path + body; `/v1/responses` → OpenAI translation | `internal/proxy/dialect/` |
-| **2 — RTK** | 12 heuristic filters on `tool_result` bodies — ≥90% fewer tokens, fail-open, no LM, 500 B–10 MiB window | `internal/rtk/` |
-| **3 — Cache** | SHA-256 of canonical JSON (post-RTK) → LRU hit/miss; streaming & JSON never cross; `shape_mismatch` tracked | `internal/cache/` |
-| **4 — Router** | Tiered `subscription → cheap → free`, per-provider cooldown `2s→30m`, `Retry-After` honored, `forward_unknown` | `internal/router/` |
-| **5 — candidateRunner** | 1× immediate connection-level retry + 1 free auth-refresh on 401/403 + `Emitted` guard; failover budget up to 15 s per candidate, or an equal share of the 30 s request budget while providers remain | `internal/proxy/runner.go` |
-| **6 — Dialect** | OpenAI ↔ Anthropic ↔ Gemini SSE state machine, flushed frame-by-frame, no buffering | `internal/proxy/dialect/` |
-| **7 — Relay** | `http.Transport` tuned (MaxConns 64, H2); first-byte watchdog bounded by the candidate's slice, then a 5-minute generation backstop | `internal/proxy/` |
-<!-- markdownlint-enable MD060 -->
-
-> **Observability** (left out of the hot path): per-phase `dial_ms / headers_ms / ttfb_ms / total_ms` → JSONL, `GET /metrics` (Prometheus), `routre doctor` + `probe`. **Footprint**: 10.6 MiB binary, ~10 MiB idle RSS, ~26 ms p50 added on a 1 MiB tool-heavy body (see *Benchmarks*).
-
----
-
-### Request lifecycle — what happens per request (supporting diagram 1)
-
-![routre request lifecycle — cache hit vs miss, streaming, failover with retry and auth-refresh](docs/request-lifecycle.png)
-
-*Source: [`docs/request-lifecycle.puml`](docs/request-lifecycle.puml)*
-
-> Per request: ingest → RTK compress → cache lookup (hit replays immediately) → tiered candidates → failover loop (one immediate connection-level retry, one auth refresh, `Retry-After` honored; up to 15 s per candidate or an equal share of the 30 s request budget while providers remain) → honest error if all fail. Full policy in [`docs/SPEC.md`](docs/SPEC.md).
-
-**Read it left → right, top → bottom:**
-
-1. **Ingest & compress** — body → format detect → RTK (strictly never grows).
-2. **Cache lookup** — `keyFor(CanonicalJSON(post-RTK))` → `GetWithReason` → hit = immediate replay (`X-Llrouter-Cache: hit`, no upstream), miss reason emitted as `routre_cache_misses_by_reason_total{reason}`.
-3. **Candidate selection** — `Router.CandidatesWithFallbacks(model)` respects tiers, cooldowns, and `forward_unknown` (unknown model tries every tier).
-4. **Failover loop** — each candidate is bounded by the failover budget: up to 15 s, or an equal share of the 30 s request budget while several providers remain (3 candidates ⇒ ~10 s each, 6 ⇒ ~5 s). That window covers the wait for the upstream's response headers AND for its first body byte, while the gateway is still choosing a candidate; once a first byte lands the generation may finish under a 5-minute backstop. Then: try → on `401/403` refresh `routre.env` key and retry once → on a connection-level error retry once immediately (no sleep) → on `5xx`/`429` fail over without a same-candidate retry → on `400/404/422` surface immediately → on `200` capture SSE frames with in-flight dialect translation and flush. Once first byte is emitted, failover is *disabled* (no duplicated output); mid-stream aborts are never cached.
-5. **All-failed → honest error** — `model_not_found` (no provider can serve) vs `providers_unavailable` (every capable provider cooling, `Retry-After` tells you to wait) vs `all_providers_failed` with full `attempts[]` the same shape `doctor` shows.
-
----
-
-### Cache, RTK & routing internals (supporting diagram 2)
-
-![routre cache, RTK and tiered routing internals — filters, canonical keys, LRU, cooldowns](docs/cache-rtk-routing.png)
-
-*Source: [`docs/cache-rtk-routing.puml`](docs/cache-rtk-routing.puml)*
-
-> Internals in one breath: RTK's 12 filters shrink `tool_result` bodies (fail-open, never grows); the cache keys SHA-256 of canonical post-RTK JSON (streaming/JSON never cross); the router walks tiers with per-provider `2s→30m` cooldowns. Deep dive in [`docs/SPEC.md`](docs/SPEC.md).
-
-**Left — RTK (12 filters):** autodetect `tool_result` kind → matched filter (git-diff 10 lines/hunk + 80/30 head/tail, git-log 50/15, grep 80/40, dedup for tree/ls/find, build-output 50/25, smart-truncate head 120/tail 60) → fail-open guard. Bench-gated: `routre bench` fails the build if aggregate <90% or worst payload <90% (measured 91.5% / 90.3%).
-
-**Middle — Cache:** canonical JSON (sorted keys, stable numbers, `<` `>` `&` left literal so a JS client's body never grows) → SHA-256 hex key, versioned `v2:` so the first upgrade invalidates old entries explicitly → `prefix_order` moves system prompt first for stable upstream prompt-cache → `GetWithReason` classifies misses (`disabled`/`absent`/`expired`/`shape_mismatch` → `/v1/status` + Prometheus) → streaming replay is byte-identical & shape-aware (SSE entry never served to JSON request) → billing-accurate hit (credits stored `promptTokens`, not length estimate) → LRU `16k entries / 7d / 128 MiB`, sliding TTL refreshes hot hits, 8 MiB/entry cap, abort never stored.
-
-**Right — Router & failover:** tiers in config order (`subscription → cheap → free`) → `forward_unknown` switch → per-provider exponential cooldown `2s → 30m` (isolated — one 503 never cools others) → `Retry-After` as floor → `candidateRunner` (one immediate connection-level retry + auth-refresh + Emitted guard, hard failover budget) → background `GET {base}/models` every 6h + startup + `SIGHUP` (`routre serve` persists newly discovered IDs to `config.json`; `routre models sync --prune` prunes)`. Cooldowns **survive** a reload.
-
----
-
-### Automatic failover
-
-> Tiers tried in order, per-provider `2s→30m` cooldowns (surviving reload), one immediate connection-level retry + one auth-refresh before failover, hard budget up to 15 s per candidate (an equal share of the 30 s request budget while providers remain) covering the header wait and the first body byte, then a 5-minute generation backstop, `Retry-After` honored, streams fail over only before the first byte. Failover policy table in [`docs/SPEC.md`](docs/SPEC.md).
-
-- Providers are configured in **tiers** (`subscription` → `cheap` → `free`)
-  and tried in order; within a tier, providers are tried in order.
-- Failures (5xx, 429, 401/403, network errors) fail over to the next
-  provider; the failed one enters an **exponential cooldown** (2 s base →
-  30 min cap). Success resets. Cooldowns are per provider — one failing
-  provider never cools down the others.
-- **Only connection-level errors are retried**: a dial refused/reset or an
-  unroutable host is retried once on the same provider, immediately (no
-  sleep) and only while it fits that candidate's share of the budget. A
-  5xx/429/overloaded response fails over instead — an identical immediate
-  retry cannot change the answer, and the client can retry after
-  `Retry-After`. Each candidate gets a fair slice of the request budget, so
-  one provider's retry can never starve an untried healthy one.
-- **The failover budget bounds candidate selection, not the generation**: each
-  candidate gets up to 15 s, or an equal share of the 30 s request budget while
-  several providers remain — whichever is smaller (3 candidates ⇒ ~10 s each,
-  6 ⇒ ~5 s). That window covers the wait for the upstream's response headers
-  and for its first body byte, and it is spent once: the header wait and the
-  first byte draw on the same slice. Once a first byte has arrived the timer
-  stops and only the 5-minute generation backstop applies, so a legitimate long
-  generation is never killed — a client can therefore see a request run past
-  30 s. If the budget runs out before a candidate is tried, the 503 says so with
-  a `failover_budget` attempt instead of blaming a provider that was never
-  asked.
-- **Auth rotation is recovered**: on a 401/403 the gateway re-reads the
-  `routre.env` key file and, if the API key changed, retries the same
-  provider once with the fresh key before failing over.
-- **Upstream `Retry-After` is honored**: a 429/5xx carrying a `Retry-After`
-  header sets that provider's cooldown to at least the mandated delay
-  (it acts as a floor, never shortening the default backoff).
-- **Streaming requests fail over too**: an upstream 5xx/429 answered before
-  the first stream byte is treated like a non-streaming failure; after the
-  first byte, a stream abort stops the request (no duplicated output).
-- **Client-caused errors** (400/404/422, e.g. context-length) are surfaced,
-  not retried.
-- **Honest error identity**: `model_not_found` (503) only when no configured
-  provider (and no fallback) can serve the model; when every provider that
-  could serve it is cooling down, the gateway returns `providers_unavailable`
-  (503) with a `Retry-After` header instead — the remedy is waiting, not
-  editing the config.
-- **Zero-config model handling** (`forward_unknown: true`, default): a model
-  absent from every provider's `models` whitelist is forwarded verbatim to
-  available providers in tier order. A provider that does not carry the model
-  rejects it (400/404); that rejection is treated as "try the next provider"
-  (with no pointless same-provider retry), so a model carried by **any**
-  configured provider works with no config edit. If every provider rejects
-  it, the last rejection is surfaced. Set `forward_unknown: false` to restore
-  strict whitelist behavior (unknown models return `model_not_found`).
-- The gateway **holds the provider API keys** (from `api_key_env` /
-  `routre.env`) and injects them upstream — a client's `Authorization`
-  header is a placeholder and is never forwarded.
-
-### Keeping models current
-
-> Three layers, cheapest first: `forward_unknown` forwards unknown models verbatim; in-memory discovery refreshes every 6h and `routre serve` persists new IDs to `config.json`; `routre models sync` does the same on demand. Details in [`docs/SPEC.md`](docs/SPEC.md).
-
-Three layers, cheapest first:
-
-1. **`forward_unknown: true` (default)** — any model not in `config.json` is forwarded verbatim to every available provider in tier order. If one provider carries it, the request succeeds with no config edit; rejections (400/404) fail over automatically.
-2. **In-memory discovery** — at startup, every 6h (±5m jitter so a fleet never hammers providers in lockstep), and on `SIGHUP`, each provider's `GET {base_url}/models` is fetched and merged additively into the live router. No restart needed, but not yet durable. Every run logs `model discovery: refreshed N providers, +M models`; freshness is observable via `routre_discovery_last_success_timestamp_seconds` in `/metrics` and `discovery_last_success` in `/v1/status`.
-3. **`routre models sync`** — makes discovery durable on demand by writing new IDs back into `config.json` (`routre serve` already does this automatically for new IDs; sync is for one-shot runs and `--prune`):
-
-   ```bash
-   routre models diff -config config.json          # preview
-   routre models sync -config config.json          # +12 models → writes + SIGHUPs gateway
-   routre models sync --prune --dry-run --json     # scripting
-   ```
-
-   Additive by default (never deletes). `--prune` drops models the provider no longer advertises. Unreachable providers are skipped with a warning and kept as-is. After a successful write the gateway is `SIGHUP`'d best-effort so the new list is live immediately. `routre serve` persists newly discovered IDs itself, so a cron sync is only needed to prune:
-
-   ```cron
-   17 */6 * * * ~/.local/bin/routre models sync -config ~/routre/config.json >> ~/.routre/models-sync.log 2>&1
-   ```
-
-### RTK token compression (≥90% on tool-heavy traffic)
-
-> 12 heuristic filters shrink `tool_result` bodies ≥90% (bench-gated aggregate + worst-payload); fail-open, never grows, 500 B–10 MiB window. Filter table in [`docs/SPEC.md`](docs/SPEC.md).
-
-Heuristic compression of `tool_result` content — no local LM, no network
-calls:
-
-| Filter | Rule |
-| --- | --- |
-| git-diff | 10 changed lines/hunk cap + 80/30 head/tail trim |
-| git-log | dedup + 50/15 trim |
-| grep | dedup + 80/40 trim |
-| tree / ls / find / git-status | dedup |
-| build-output | dedup + 50/25 trim |
-| read-numbered / search-list | dedup |
-| smart-truncate (fallback) | head 120 / tail 60 |
-
-Safety contract: **fail-open** (malformed JSON passes through), **never
-grows** a payload, 500 B–10 MiB window, per-request safe. The `bench`
-command measures reduction on 5 realistic tool-heavy payloads and gates
-**both the aggregate (91.5%) and the worst per-payload (90.3%)** at ≥90%.
-
-### Response cache
-
-> Exact-match LRU on SHA-256 of post-RTK JSON; streaming replays byte-identical SSE; hits credited at upstream-reported tokens. Tuning knobs in [`docs/SPEC.md`](docs/SPEC.md).
-
-- Exact-match LRU keyed by SHA-256 of the **processed** body (post-RTK).
-  Defaults: 512 entries / 1 h TTL / 8 MiB max entry; the shipped
-  `config.all.json` uses 4096 entries / 24 h TTL / 64 MiB budget.
-- **Streaming replay cache.** Successful streaming responses are captured as
-  client-dialect SSE bytes (same 8 MiB per-entry cap) and an identical later
-  streaming request is replayed byte-for-byte from memory — no upstream call,
-  `X-Llrouter-Cache: hit`, saved tokens credited to the ledger exactly like
-  non-streaming hits. Replay is byte-identical, so tool-call ids,
-  `finish_reason` and `[DONE]` stay self-consistent by construction.
-  Mid-stream aborts (upstream died after first byte) are never cached —
-  they surface as stream aborts and the next request goes upstream again.
-  Streaming and non-streaming entries share one key space but never cross:
-  a JSON entry is only served to non-streaming requests and an SSE entry
-  only to streaming requests.
-- Optional `prefix_order` moves system messages first for stable keys and
-  stable upstream prompt-cache prefixes.
-- Optional `prompt_cache` (Anthropic outbound only) injects
-  `cache_control {type:"ephemeral"}` breakpoints on the system prefix and
-  last message, so repeat agentic prefixes are billed at the cache-read
-  rate. Off by default; strictly additive (an existing `cache_control` is
-  never overwritten).
-- Cache hits record their token savings in the ledger — credited with the
-  **upstream-reported** prompt token count stored on the cached response,
-  so the ledger matches the provider's billing numbers instead of
-  length-based estimates.
-
-### Cross-kind streaming translation (OpenAI ↔ Anthropic)
-
-An agent pinned to the **OpenAI dialect** can stream from an Anthropic
-provider and vice versa: when the client and upstream speak different
-API dialects, the gateway rewrites the event stream in flight.
-
-- **In-flight SSE state machine** — never buffers the whole response.
-  Frames are translated as they arrive and flushed immediately (no
-  tail-latency cost), keeping memory flat for long streams.
-- **Tool-call fidelity**: `tool_use_id` ↔ `tool_call_id` round-trips
-  **unchanged** (no gateway-generated ids), so agent tool loops work
-  across dialects. Partial JSON tool arguments
-  (`input_json_delta` / `tool_calls[].arguments`) pass through verbatim;
-  the client accumulates them.
-- **Honest termination**: Anthropic `message_delta`/`error` → OpenAI
-  `finish_reason` (`max_tokens→length`, `end_turn→stop`, `error→content_filter`)
-  and the reverse; every stream ends with `[DONE]`.
-- **Failover contract preserved**: strictly retryable before the first
-  byte reaches the client; after the first byte the stream can't fail over
-  (no duplicated output) — same rule as same-kind streaming.
-- Usage tokens are captured from the stream for both dialects, so the
-  ledger records real completion counts instead of zeros.
-
-Non-streaming cross-kind requests fall back to lossy translation
-(flat tool output, no `tool_call_id` link) for cheap-tier fallback —
-fine for one-shot prompts, but streaming is the preferred path for
-cross-kind tool loops.
-
-### Token & cost ledger
-
-Per coding agent (by User-Agent): requests, tokens in/out, RTK savings,
-cache savings, and estimated cost.
-
-- Persisted to `~/.routre/usage.json` — survives restarts, **autosaved
-  every 60 s and on SIGHUP**, so a crash loses at most one minute of
-  ledger. Works offline from the persisted file when the gateway is down.
-- Costs come from provider-reported usage (OpenRouter reports real
-  `usage.cost`) or from `price_in` / `price_out` in the config (USD per 1M
-  tokens).
-- Tail per-request detail with `routre logs`, see the ledger with
-  `routre list`.
-
-### Observability
-
-`GET /metrics` serves Prometheus exposition text — useful for dashboards and
-uptime checks. It reports: uptime seconds, request totals by
-client/provider/model/outcome class, upstream failover totals by
-provider/class, cache hits/misses and the hit ratio, RTK compression applied
-count and saved tokens, and provider-reported prompt-cache read tokens.
-Distinct model labels are capped at 512 (overflow folds into `_other`, and
-configured model names are never folded); the ledger caps distinct
-`(provider, model)` rows the same way. The
-per-request JSONL log (`request_log` in config, tailed with
-`routre logs`) and the `/v1/status` + `/v1/usage` JSON endpoints cover
-the structured detail.
-
-**Per-phase latency (v0.3.2+).** Every JSONL log line carries:
-
-| Field | Meaning |
-| --- | --- |
-| `dial_ms` | time spent establishing the upstream connection |
-| `headers_ms` | time to receive upstream response headers |
-| `ttfb_ms` | time to first body byte (streaming only) |
-| `total_ms` | the whole attempt (end-to-end) |
-| `latency_ms` | end-to-end from request to log (kept for back-compat) |
-
-Currently `total_ms` is populated (single measurement around the relay
-call); the three phase fields are plumbed and ready for `httptrace.ClientTrace`
-wiring. Filter the live log with `routre logs -errors` (failures only) or
-`routre logs -provider <name>` (per-provider).
-
-### Always-on daemon
-
-- `deploy/routre.service` + `deploy/routre.socket` (systemd;
-  socket activation → ~0 MB idle) and `deploy/dev.routrecli.daemon.plist`
-  (launchd for macOS). `MemoryMax` guard included.
-- **SIGHUP reloads config + env** without dropping connections (SIGINT /
-  SIGTERM = graceful shutdown, ledger saved first).
-- `routre start [--autostart]`, `stop [--autostart]`, and `restart`
-  manage the daemon through systemd (system or `--user` scope) or launchd;
-  without an installed service they fall back to a detached background
-  process logging to `~/.routre/daemon.log`.
-
-### Security (optional gateway auth)
-
-The gateway binds `127.0.0.1` by default, so it is only reachable from the
-local machine — but any local process could still send requests through it
-and burn your provider keys. For shared machines or extra hardening you can
-enable a **shared secret**:
-
-```jsonc
-"auth": { "secret_env": "ROUTRE_SECRET", "header": "X-Routre-Key" }
-```
-
-With `auth.secret_env` set, every `/v1/*` request must carry the matching
-secret in the configured header (or `Authorization: Bearer <secret>`);
-mismatches get a `401 invalid_api_key` with no upstream call. `/healthz`
-and `/metrics` stay open for probes/scrapers. The secret lives in
-`routre.env` (0600), never in the config.
-
-`routre setup` offers to enable this and generates a random secret.
-When enabled, `routre serve` also mints a one-time **process token**
-(`~/.routre/auth.tok`, 0600, regenerated each start) so the local
-`list`/`check`/`logs` commands keep working without you pasting the secret
-into flags.
-
----
+`GET /metrics` (Prometheus), `GET /ui` (dashboard). `/v1/responses` speaks the
+OpenAI Responses API and works with `OPENAI_BASE_URL` out of the box.
 
 ## Configuration
 
 ```jsonc
 {
   "listen": "127.0.0.1:20128",
+  "forward_unknown": true,
   "rtk":   { "enabled": true, "min_bytes": 500, "max_bytes": 10485760 },
-  "cache": { "enabled": true, "max_entries": 512, "ttl_seconds": 3600, "prefix_order": false },
+  "cache": { "enabled": true, "max_entries": 512, "ttl_seconds": 3600 },
   "tiers": [
     { "name": "subscription", "providers": [
       { "name": "openrouter", "kind": "openai",
@@ -617,166 +113,64 @@ into flags.
 
 | Field | Meaning |
 | --- | --- |
-| `kind` | `openai` or `anthropic` (dialect translation for cross-kind fallback) |
+| `kind` | `openai`, `anthropic`, or `gemini` (dialect translation for cross-kind fallback) |
 | `api_key_env` | env var holding the key — loaded from `routre.env` or shell |
 | `price_in` / `price_out` | USD per 1M tokens for cost reporting (optional) |
+| `forward_unknown` | forward a model no provider lists (default true) |
 | `tiers` order | fallback order; keep subscription/cheap/free |
 
-A full reference config with 506 models lives in `config.all.json`; a
-minimal template is `config.example.json` (also in `examples/`).
+A full reference config is [`config.example.json`](config.example.json); the
+506-model one is [`config.all.json`](config.all.json).
 
----
+## How it works
 
-## Commands
+Every request runs a 7-step pipeline: **detect** the API dialect → **compress**
+tool output (RTK) → **cache** lookup → **route** across tiers → **retry/failover**
+→ **translate** dialect → **relay**. The gateway holds your provider keys and
+injects them upstream; failover, compression, and caching are automatic.
 
-| Command | Purpose |
-| --- | --- |
-| `routre setup [-config f]` | interactive wizard (providers, URLs, API keys) |
-| `routre serve [-config f] [-port :p] [--debug]` | run the gateway in the foreground (`--debug` / `ROUTRE_DEBUG=1`) |
-| `routre start [-config f] [--autostart]` | start the daemon (systemd/launchd, or detached process) |
-| `routre stop [-config f] [--autostart]` | stop the daemon (+ disable auto-start) |
-| `routre restart [-config f]` | restart the daemon (keeps auto-start state) |
-| `routre check [-config f]` | validate config + API keys |
-| `routre doctor [-config f]` | probe every provider (per-provider `ok`/`overloaded`/`auth` with cooldown) |
-| `routre list [-config f] [-url u]` | connected providers + token/cost ledger |
-| `routre models sync [-config f] [--dry-run] [--prune] [--json]` | fetch `GET /v1/models` per provider and persist new IDs to `config.json` |
-| `routre models diff [-config f]` | dry-run alias for `models sync --dry-run` |
-| `routre logs [-n 50] [-f] [-errors] [-provider <name>] [-config f]` | tail the per-request log |
-| `routre bench [-config f] [-target 90]` | RTK token-reduction benchmark (gated) |
-| `routre update [-check]` | self-update: download + verify + atomically replace this binary |
-| `http://127.0.0.1:20128/ui` | local dashboard: status, providers, keys, full config editor — loopback-only |
-| `routre version` | print version |
-
-### `list` — everything connected, per agent, with totals
-
-```text
-== configured providers ==
-  [subscription] openrouter  openai  key ok  models=tencent/hy3,... cost n/a
-
-== live gateway ==
-  openrouter     up
-
-== token & cost ledger ==
-  source: live
-
-  codex
-    requests: 2
-    consumed: 58 tokens (18 in + 40 out)
-    saved:    3351 tokens (rtk 2308 + cache 1043)
-    cost:     n/a (no prices configured)   saved: n/a
-    by provider/model:
-      codex/tencent/hy3  2 req  58 tok  saved 3351
-
-  opencode
-    requests: 4
-    consumed: 112 tokens (62 in + 50 out)
-    saved:    28 tokens (rtk 0 + cache 28)
-    cost:     $0.000021   saved: $0.000000
-
-  TOTAL
-    requests: 6
-    consumed: 170 tokens   saved: 3379 tokens (95.2%)
-    cost:     $0.000021   saved: $0.000000
-```
-
----
+📖 **[How it works →](docs/HOW-IT-WORKS.md)** — the full pipeline, request
+lifecycle, failover policy, RTK filters, cache internals, cross-dialect
+translation, observability, security, and diagrams.
 
 ## Benchmarks
 
-Measured on this machine, 2026-08-15:
-
 | Metric | Result | Target |
 | --- | --- | --- |
-| RTK tool-token reduction (bench, 5 tool-heavy payloads) | **91.5%** | ≥ 90% (aggregate **and** per-payload) |
-| Worst per-payload tool reduction | 90.3% (tree-ls) | ≥ 90% |
-| RTK payload-token reduction (whole request bodies) | **91.3%** | reported |
-| Idle RSS (`scripts/measure-ram.sh`) | **10 MiB** (was 9 MiB pre-UI) | ≤ 100 MiB |
-| Peak RSS under live opencode load (3 sessions) | 12.9 MiB | ≤ 200 MiB hard cap |
-| Binary size (`CGO_ENABLED=0`, `-s -w`) | **10.6 MiB** (was 6.7 MiB pre-UI) | small |
-| Dashboard RAM delta (idle → after serving /ui once) | **+0.2 MiB** | <2 MiB |
-| Tests | all pass (`go test ./...`) | — |
-| OpenCode 1.18.15 e2e → gateway → upstream | answer delivered, exit 0 | — |
-| RTK on a real 23.4 KB tool_result request | 5.4 KB sent upstream | fail-open |
-| Cache on identical repeat request | served from cache, upstream untouched | — |
-| Real OpenRouter paid round-trip (with your key) | 200, usage + cost recorded | — |
+| RTK tool-token reduction | **91.5%** (worst payload 90.3%) | ≥ 90% (bench-gated) |
+| Idle RSS | **~10 MiB** | ≤ 100 MiB |
+| Binary size | **~10.6 MiB** | small |
+| Gateway-added latency (1 MiB body) | ~26 ms p50 | small |
 
-Reproduce:
-
-```bash
-make build test bench        # bench gates 90% (fails on regression)
-./scripts/measure-ram.sh ./routre ./config.example.json 30
-
-# Gateway-added latency harness (prints p50/p95/p99 for a 1 MiB body;
-# asserts <10 ms p99 only on a deliberate run):
-ROUTRE_ASSERT_LATENCY=1 go test ./internal/proxy -run=^$ -bench=GatewayAddedLatency1MB -benchtime=50x
-```
-
----
+`routre bench` gates the ≥90% RTK claim — it fails the build on a regression.
+Reproduce with `make build test bench`.
 
 ## Project layout
 
 ```text
-main.go                  CLI (setup/serve/check/start/stop/restart/list/bench/update/models/version)
-bench.go                 RTK benchmark + 90% gate
-setup.go                 interactive setup wizard
-start.go                 daemon start/restart (systemd/launchd/detached spawn)
-stop.go                  daemon stop (systemd/launchd/port scan + SIGTERM)
-list.go                  providers + per-agent token/cost ledger
-models.go                `models sync/diff` — durable model discovery
-update.go                `update` subcommand (self-update driver)
-install.sh               curl installer (latest release → ~/.local/bin)
-internal/update/         release discovery, checksums, atomic replace
-internal/config/         JSON config + routre.env + SIGHUP reload
-internal/router/         tiers, failover, cooldowns (exponential backoff)
-internal/rtk/            token compression (12 filters + autodetect)
-internal/cache/          exact-match LRU + prefix ordering
-internal/proxy/          HTTP gateway, SSE relay, key injection, translation, loopback-only /ui dashboard, candidateRunner (retry/refresh/Emitted), per-phase Phases
-internal/proxy/dialect/  cross-kind SSE state machine (OpenAI ↔ Anthropic ↔ Gemini)
-internal/proxy/failures/ shared failure.Outcome shape + 3 render functions (wire 503/404, human doctor)
-internal/usage/          token/cost ledger (persisted to ~/.routre/)
-internal/tokenize/       token estimator: exact BPE ≤64 KiB, estimate above (benchmark instrument)
-internal/mock/           mock upstream (tests + keyless e2e)
-benchdata/               tool-heavy request bodies for the bench gate
-scripts/measure-ram.sh   RSS/peak/growth measurement
-deploy/                  systemd unit+socket, launchd plist
-.github/workflows/       ci.yml (tests) · release.yml (v* tag → GitHub Release assets)
-npm/                     DEPRECATED npm distribution (kept for pinned dependents)
+main.go, bench.go, setup.go, start.go, stop.go, list.go, logs.go, models.go, update.go
+internal/proxy/          HTTP gateway, SSE relay, /ui dashboard, failover runner
+internal/router/         tiers, failover, cooldowns
+internal/rtk/            token compression (12 filters)
+internal/cache/          exact-match LRU
+internal/proxy/dialect/  cross-dialect SSE translation
+tests/                   binary-level e2e suite (drives the real `routre serve`)
 ```
 
----
+See [docs/HOW-IT-WORKS.md](docs/HOW-IT-WORKS.md#project-layout) for the full map.
 
-## Known gaps (full detail in docs/SPEC.md)
+## Development
 
-- Gemini is a streaming dialect for **OpenAI↔Gemini** and
-  **Anthropic↔Gemini** (request + non-streaming response + in-flight SSE
-  translation with guaranteed termination); a gemini-kind provider can now
-  serve both OpenAI- and Anthropic-dialect clients.
-- Token estimates are an approximation (≈4 bytes/token) — a benchmark
-  instrument, not billing-grade (tiktoken integration is planned).
-- 90% is measured on tool-result tokens; output tokens are never
-  compressed, so real-session savings depend on the tool-traffic mix
-  (this is exactly what `routre list` shows you).
-- 401/403 **token refresh** is implemented (re-reads the env key file and
-  retries once on rotation); cooldown + failover still apply when the key is
-  unchanged or still rejected.
-- **Windows self-update is deferred**: `routre update` on Windows prints
-  a re-install hint instead of replacing the running .exe (rename-swap
-  support tracked for a later release); win32 binaries are still shipped on
-  every release for manual install.
+```bash
+make build test bench    # build, run all tests, gate the 90% RTK claim
+go test ./tests -v       # binary-level e2e suite only
+```
 
 ## Changelog
 
-See [`CHANGELOG.md`](CHANGELOG.md) for the release history (all versions,
-including unreleased changes).
-
----
+See [CHANGELOG.md](CHANGELOG.md) for the release history.
 
 ## License
 
 MIT — see [LICENSE](LICENSE). (The RTK filter approach is a clean-room
 reimplementation of the MIT-licensed 9router `open-sse/rtk` ideas.)
-
----
-
-See [`docs/SPEC.md`](docs/SPEC.md) for the full decision record, metric definitions,
-failover policy table, and validation roadmap.

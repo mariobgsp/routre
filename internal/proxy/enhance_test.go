@@ -96,7 +96,7 @@ func TestAuthRefreshRetry(t *testing.T) {
 		t.Fatalf("config load: %v", err)
 	}
 	cfg := st.Get()
-	rtr := router.New(tiersFromConfig(cfg), router.DefaultCooldownPolicy())
+	rtr := router.New(TiersFromConfig(cfg), router.DefaultCooldownPolicy())
 	cch := cache.New(cache.Config{Enabled: cfg.Cache.Enabled, MaxEntries: cfg.Cache.MaxEntries, TTLSeconds: cfg.Cache.TTLSeconds, PrefixOrder: cfg.Cache.PrefixOrder})
 	tk := rtk.New(rtk.Config{Enabled: cfg.RTK.Enabled, MinBytes: cfg.RTK.MinBytes, MaxBytes: cfg.RTK.MaxBytes})
 	logger := log.New(io.Discard, "", 0)

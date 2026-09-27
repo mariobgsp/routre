@@ -112,7 +112,7 @@ func NewHandlers(st *config.Store, rtr *router.Router, cch *cache.Cache, tk *rtk
 	// Cache / RTK / reqlog are fully covered by Register above — OnLoad
 	// does not duplicate them. See candidate #2 in PLAN.
 	st.SetOnLoad(func(c config.Config) {
-		rtr.Reset(tiersFromConfig(c), rtrPolicy(rtr))
+		rtr.Reset(TiersFromConfig(c), rtrPolicy(rtr))
 		rtr.SetForwardUnknown(c.ForwardUnknown)
 		models := configuredModels(c)
 		h.Metrics.SetReservedModels(models)
