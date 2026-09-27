@@ -1,6 +1,7 @@
 .PHONY: build vet test bench fmt check install clean dist dist-npm
 
 VERSION ?= $(shell git describe --tags --always 2>/dev/null || echo dev)
+GO ?= go
 
 build:
 	CGO_ENABLED=0 $(GO) build -trimpath -ldflags "-s -w -X main.version=$(VERSION)" -o routre .
