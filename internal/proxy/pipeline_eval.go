@@ -121,6 +121,9 @@ func (p *Pipeline) tryEval(ctx context.Context, cand router.Candidate, req Reque
 		}
 		p.metrics.Failure(cand.Provider.Provider.Name, class.String())
 		p.router.ReportFailureWithBackoff(cand.Provider, class, retryAfter)
+		if class == router.ErrTimeout || class == router.ErrNetwork {
+			p.handlers.CloseIdleUpstream()
+		}
 		return evalResult{Err: rerr, Class: class, Retryable: true}
 	}
 	if status >= 200 && status < 300 {

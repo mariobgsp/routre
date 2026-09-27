@@ -214,6 +214,9 @@ func (pr *Probe) probeOne(p config.Provider, model string) Result {
 	body, _ := json.Marshal(payload)
 	base := strings.TrimRight(p.BaseURL, "/")
 	path := "/v1/chat/completions"
+	if strings.HasSuffix(base, "/v1") {
+		path = strings.TrimPrefix(path, "/v1") // base already includes /v1
+	}
 	req, err := http.NewRequestWithContext(context.Background(), http.MethodPost, base+path, bytes.NewReader(body))
 	if err != nil {
 		res.Class = "client"

@@ -256,6 +256,9 @@ func (p *Pipeline) streamEval(ctx context.Context, cand router.Candidate, _ int,
 			}
 		}
 		p.router.ReportFailureWithBackoff(cand.Provider, class, retryAfter)
+		if class == router.ErrTimeout || class == router.ErrNetwork {
+			p.handlers.CloseIdleUpstream()
+		}
 		return evalResult{Err: rerr, Class: class, Retryable: true}
 	}
 	if status >= 200 && status < 300 {

@@ -61,13 +61,28 @@ func newHTTPClient() *http.Client {
 		// a network-class failure + exponential cooldown + 503.
 		ResponseHeaderTimeout: 45 * time.Second,
 		MaxIdleConns:          64,
-		MaxIdleConnsPerHost:   32,
-		MaxConnsPerHost:       64,
-		IdleConnTimeout:       120 * time.Second,
-		DisableCompression:    true,
-		ForceAttemptHTTP2:     true,
+		// Small warm pool with fast expiry: a poisoned idle connection
+		// (e.g. stuck on a bad edge that hangs POSTs while GETs still
+		// work) must drain in seconds, not linger for minutes across
+		// requests. Retryable failures also close idle conns outright
+		// (see CloseIdleUpstream).
+		MaxIdleConnsPerHost: 8,
+		MaxConnsPerHost:     64,
+		IdleConnTimeout:     30 * time.Second,
+		DisableCompression:  true,
+		ForceAttemptHTTP2:   true,
 	}
 	return &http.Client{Transport: transport}
+}
+
+// CloseIdleUpstream drops idle keep-alive connections to upstreams.
+// Called after retryable network/timeout failures so the next attempt
+// dials fresh instead of reusing a poisoned pooled connection (a hung
+// daemon symptom: GETs succeed while POSTs hang on a stale conn).
+func (h *Handlers) CloseIdleUpstream() {
+	if h != nil && h.HTTPClient != nil {
+		h.HTTPClient.CloseIdleConnections()
+	}
 }
 
 // NewHandlers wires the pieces. On config reload the mutable subsystems
