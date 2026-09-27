@@ -37,7 +37,7 @@ For install/quickstart see the [README](../README.md).
 | **2 — RTK** | 12 heuristic filters on `tool_result` bodies — ≥90% fewer tokens, fail-open, no LM, 500 B–10 MiB window | `internal/rtk/` |
 | **3 — Cache** | SHA-256 of canonical JSON (post-RTK) → LRU hit/miss; streaming & JSON never cross; `shape_mismatch` tracked | `internal/cache/` |
 | **4 — Router** | Tiered `subscription → cheap → free`, per-provider cooldown `2s→30m`, `Retry-After` honored, `forward_unknown` | `internal/router/` |
-| **5 — candidateRunner** | 1× immediate connection-level retry + 1 free auth-refresh on 401/403 + `Emitted` guard; failover budget up to 15 s per candidate, or an equal share of the 30 s request budget while providers remain | `internal/proxy/runner.go` |
+| **5 — candidateRunner** | 1× immediate connection-level retry + 1 free auth-refresh on 401/403 + `Emitted` guard; failover budget up to 30 s per candidate, bounded by the 30 s request budget while providers remain | `internal/proxy/runner.go` |
 | **6 — Dialect** | OpenAI ↔ Anthropic ↔ Gemini SSE state machine, flushed frame-by-frame, no buffering | `internal/proxy/dialect/` |
 | **7 — Relay** | `http.Transport` tuned (MaxConns 64, H2); first-byte watchdog bounded by the candidate's slice, then a 5-minute generation backstop | `internal/proxy/` |
 
@@ -67,8 +67,8 @@ Per request, read left → right, top → bottom:
 3. **Candidate selection** — `Router.CandidatesWithFallbacks(model)` respects
    tiers, cooldowns, and `forward_unknown` (unknown model tries every tier).
 4. **Failover loop** — each candidate is bounded by the failover budget: up to
-   15 s, or an equal share of the 30 s request budget while several providers
-   remain (3 candidates ⇒ ~10 s each, 6 ⇒ ~5 s). That window covers the wait
+   30 s, bounded by the 30 s request budget while several providers
+   remain, and shared fairly among the remaining candidates. That window covers the wait
    for the upstream's response headers AND for its first body byte, while the
    gateway is still choosing a candidate; once a first byte lands the
    generation may finish under a 5-minute backstop. Then: try → on `401/403`
@@ -100,7 +100,7 @@ Per request, read left → right, top → bottom:
   the request budget, so one provider's retry can never starve an untried
   healthy one.
 - **The failover budget bounds candidate selection, not the generation**: each
-  candidate gets up to 15 s, or an equal share of the 30 s request budget while
+  candidate gets up to 30 s, bounded by the 30 s request budget while
   several providers remain — whichever is smaller. That window covers the wait
   for the upstream's response headers and for its first body byte, and it is
   spent once: the header wait and the first byte draw on the same slice. Once a
@@ -148,12 +148,14 @@ Three layers, cheapest first:
 2. **In-memory discovery** — at startup, every 6h (±5m jitter so a fleet never
    hammers providers in lockstep), and on `SIGHUP`, each provider's
    `GET {base_url}/models` is fetched and merged additively into the live router.
-   No restart needed, but not yet durable. Every run logs `model discovery:
-   refreshed N providers, +M models`; freshness is observable via
+   `routre serve` then folds the live model set into `config.json` through the
+   same atomic save path `models sync` uses, so the catalog stays current across
+   restarts without a cron job. Every run logs `model discovery: refreshed N
+   providers, +M models`; freshness is observable via
    `routre_discovery_last_success_timestamp_seconds` in `/metrics` and
    `discovery_last_success` in `/v1/status`.
-3. **`routre models sync`** — makes discovery durable by writing new IDs back
-   into `config.json`:
+3. **`routre models sync`** — the same persistence on demand, plus the only way
+   to *retire* models (`--prune`):
 
    ```bash
    routre models diff -config config.json          # preview
@@ -162,13 +164,13 @@ Three layers, cheapest first:
    ```
 
    Additive by default (never deletes). `--prune` drops models the provider no
-   longer advertises. Unreachable providers are skipped with a warning and kept
-   as-is. After a successful write the gateway is `SIGHUP`'d best-effort so the
-   new list is live immediately. For set-and-forget durability, run sync on a
-   schedule (additive = safe to automate):
+   longer advertises — the only way to retire a model. Unreachable providers are
+   skipped with a warning and kept as-is. After a successful write the gateway is
+   `SIGHUP`'d best-effort so the new list is live immediately. Because `serve`
+   already persists new IDs itself, a scheduled sync is only needed to prune:
 
    ```cron
-   17 */6 * * * ~/.local/bin/routre models sync -config ~/routre/config.json >> ~/.routre/models-sync.log 2>&1
+   17 */6 * * * ~/.local/bin/routre models sync --prune -config ~/routre/config.json >> ~/.routre/models-sync.log 2>&1
    ```
 
 ---
@@ -353,7 +355,7 @@ setup.go                 interactive setup wizard
 start.go / stop.go       daemon lifecycle (systemd/launchd/detached)
 list.go                  providers + per-agent token/cost ledger
 logs.go                  per-request log tail
-models.go                `models sync/diff` — durable model discovery
+models.go                `models sync/diff` — on-demand discovery + `--prune`
 update.go                `update` subcommand (self-update driver)
 install.sh               curl installer (latest release → ~/.local/bin)
 internal/update/         release discovery, checksums, atomic replace

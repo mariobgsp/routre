@@ -3,6 +3,7 @@ package config
 import (
 	"os"
 	"path/filepath"
+	"slices"
 	"testing"
 )
 
@@ -133,5 +134,32 @@ func TestLoadReloadShareBehavior(t *testing.T) {
 	}
 	if got := s.Get().Listen; got != "127.0.0.1:2" {
 		t.Fatalf("Reload listen = %q", got)
+	}
+}
+
+func TestMergeModelIDs(t *testing.T) {
+	cases := []struct {
+		name       string
+		existing   []string
+		discovered []string
+		wantMerged []string
+		wantAdded  []string
+	}{
+		{"appends new ids sorted", []string{"m"}, []string{"m2", "m1"}, []string{"m", "m1", "m2"}, []string{"m1", "m2"}},
+		{"never prunes", []string{"m1", "m2"}, []string{"m1"}, []string{"m1", "m2"}, nil},
+		{"keeps existing order", []string{"z", "a"}, []string{"a", "b"}, []string{"z", "a", "b"}, []string{"b"}},
+		{"empty discovered is a no-op", []string{"m"}, nil, []string{"m"}, nil},
+		{"duplicate discovered counted once", []string{"m"}, []string{"x", "x"}, []string{"m", "x"}, []string{"x"}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			merged, added := MergeModelIDs(tc.existing, tc.discovered)
+			if !slices.Equal(merged, tc.wantMerged) {
+				t.Fatalf("merged = %v, want %v", merged, tc.wantMerged)
+			}
+			if !slices.Equal(added, tc.wantAdded) {
+				t.Fatalf("added = %v, want %v", added, tc.wantAdded)
+			}
+		})
 	}
 }

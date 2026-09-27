@@ -81,7 +81,8 @@ package "Router — tiered failover + cooldown" as ROUTE_PKG {
   rectangle "Cooldown\nper-provider, exponential\n2s base → 30m cap\nsuccess resets" as COOL #FFEBEE
   rectangle "Retry-After honored\nupstream Retry-After = floor\nnever shortens backoff" as RA #FFFFFF
   rectangle "candidateRunner\n+ transient retry 500 ms\n+ 1 free auth-refresh on 401\n+ Emitted guard" as RUNNER2 #FFF3E0
-  rectangle "Probe + Router sync\nGET {base}/models every 6h\n+ startup + SIGHUP\n`models sync` persists to config" as PROBE2 #E3F2FD
+  rectangle "Probe + Router sync\nGET {base}/models every 6h\n+ startup + SIGHUP\n`serve` persists new IDs
+`models sync` one-shot + --prune" as PROBE2 #E3F2FD
 
   TIERS --> FWD
   FWD --> COOL

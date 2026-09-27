@@ -165,6 +165,10 @@ func (h *Handlers) UIDashboard(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	cfg := h.Cfg.Get()
+	listen := h.Listen
+	if listen == "" {
+		listen = cfg.Listen
+	}
 	// Pretty JSON for the editor.
 	j, _ := json.MarshalIndent(cfg, "", "  ")
 	// Count providers.
@@ -184,7 +188,7 @@ func (h *Handlers) UIDashboard(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	data := uiData{
-		Listen:        cfg.Listen,
+		Listen:        listen,
 		ConfigPath:    h.Cfg.Path(),
 		EnvPath:       config.EnvFilePath(h.Cfg.Path()),
 		RTKEnabled:    cfg.RTK.Enabled,

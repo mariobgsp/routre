@@ -2835,7 +2835,7 @@ routre serve              <span class="c"># gateway on 127.0.0.1:20128</span>
 routre start --autostart  <span class="c"># daemon + boot auto-start</span>
 routre list               <span class="c"># providers + token/cost ledger</span>
 routre doctor             <span class="c"># probe every provider</span>
-routre models sync        <span class="c"># persist new provider models to config.json</span>
+routre models sync        <span class="c"># one-shot sync (serve persists new models itself)</span>
 routre logs -f            <span class="c"># tail request log</span>
 routre bench -target 90   <span class="c"># gated metric, fails build on regress</span></pre>
           </div>
@@ -2902,8 +2902,9 @@ routre bench -target 90   <span class="c"># gated metric, fails build on regress
               ><span class="cert-name"
                 >Models sync
                 <span class="cert-issuer"
-                  >— routre models sync persists new provider models to
-                  config.json. Additive, --prune to drop retired ones.</span
+                  >— routre serve persists newly discovered provider
+                  models to config.json on its own; routre models sync does the
+                  same one-shot, and --prune drops retired ones.</span
                 ></span
               >
             </div>

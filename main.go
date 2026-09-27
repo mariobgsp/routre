@@ -141,9 +141,11 @@ func cmdServe(cfgPath, port string, logger *log.Logger, debug ...bool) error {
 		return err
 	}
 	cfg := st.Get()
+	// The CLI -port override stays out of the store: the discovery auto-sync
+	// below persists st.Get(), so a runtime-only value must never reach disk.
+	listen := cfg.Listen
 	if port != "" {
-		st.OverrideListen(port)
-		cfg = st.Get()
+		listen = port
 	}
 	logger.Printf("config %s loaded (%d tiers)", cfgPath, len(cfg.Tiers))
 
@@ -191,6 +193,17 @@ func cmdServe(cfgPath, port string, logger *log.Logger, debug ...bool) error {
 		if refreshed > 0 && h != nil {
 			h.Metrics.SetDiscoveryTimestamp(time.Now())
 		}
+		// Persist new IDs so a restart (or a reload) keeps them without a
+		// manual `routre models sync`. Runs on every pass, not only when this
+		// pass added IDs: persistDiscoveredModels no-ops when config already
+		// holds the live set, so a failed write self-heals on the next tick.
+		// Best-effort: failures are logged.
+		status := rtr.Status()
+		live := make(map[string][]string, len(status))
+		for _, s := range status {
+			live[s.Provider] = s.Models
+		}
+		persistDiscoveredModels(st, live, logger)
 	}
 	discover()
 	discoverStop := make(chan struct{})
@@ -210,6 +223,7 @@ func cmdServe(cfgPath, port string, logger *log.Logger, debug ...bool) error {
 	}()
 
 	h = proxy.NewHandlers(st, rtr, cch, tk, logger, use)
+	h.Listen = listen // effective bind address, for the dashboard
 	if ts := rtr.LastDiscoveryUnix(); ts > 0 {
 		h.Metrics.SetDiscoveryTimestamp(time.Unix(ts, 0))
 	}
@@ -248,7 +262,7 @@ func cmdServe(cfgPath, port string, logger *log.Logger, debug ...bool) error {
 		logger.Printf("gateway auth enabled; CLI token written to %s", authTokenPath())
 	}
 
-	ln, err := srv.Listen(cfg.Listen)
+	ln, err := srv.Listen(listen)
 	if err != nil {
 		return err
 	}

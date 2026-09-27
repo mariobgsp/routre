@@ -88,7 +88,7 @@ type candidateRunner struct {
 // TestFailoverBudgetsAreHardcoded pins the shipped values. Deliberately not
 // config keys.
 var (
-	candidateFailoverBudget = 15 * time.Second // per candidate, pre-first-byte
+	candidateFailoverBudget = 30 * time.Second // per candidate, pre-first-byte
 	requestFailoverBudget   = 30 * time.Second // whole request, across candidates
 )
 

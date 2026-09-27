@@ -210,7 +210,7 @@ func (p *Pipeline) processInternal(ctx context.Context, req Request) (Response, 
 		prov := tryLog[0].Provider
 		finalOverloaded := true
 		for _, e := range tryLog {
-			if e.Class != router.ErrOverloaded.String() {
+			if e.Class != router.ErrOverloaded.String() && e.Class != router.ErrTimeout.String() {
 				finalOverloaded = false
 				break
 			}
