@@ -34,9 +34,9 @@ For install/quickstart see the [README](../README.md).
 | Step | What happens | Where in code |
 |------|--------------|---------------|
 | **1 — Format detect** | `OpenAI / Anthropic / Responses API` detected from path + body; `/v1/responses` → OpenAI translation | `internal/proxy/dialect/` |
-| **2 — RTK** | 12 heuristic filters on `tool_result` bodies — ≥90% fewer tokens, fail-open, no LM, 500 B–10 MiB window | `internal/rtk/` |
+| **2 — RTK** | 11 heuristic filters on `tool_result` bodies — ≥90% fewer tokens, fail-open, no LM, 500 B–10 MiB window | `internal/rtk/` |
 | **3 — Cache** | SHA-256 of canonical JSON (post-RTK) → LRU hit/miss; streaming & JSON never cross; `shape_mismatch` tracked | `internal/cache/` |
-| **4 — Router** | Tiered `subscription → cheap → free`, per-provider cooldown `2s→30m`, `Retry-After` honored, `forward_unknown` | `internal/router/` |
+| **4 — Router** | Tiered `subscription → cheap → free`, per-provider cooldown `2s→5m`, `Retry-After` honored, `forward_unknown` | `internal/router/` |
 | **5 — candidateRunner** | 1× immediate connection-level retry + 1 free auth-refresh on 401/403 + `Emitted` guard; failover budget up to 30 s per candidate, bounded by the 30 s request budget while providers remain | `internal/proxy/runner.go` |
 | **6 — Dialect** | OpenAI ↔ Anthropic ↔ Gemini SSE state machine, flushed frame-by-frame, no buffering | `internal/proxy/dialect/` |
 | **7 — Relay** | `http.Transport` tuned (MaxConns 64, H2); first-byte watchdog bounded by the candidate's slice, then a 5-minute generation backstop | `internal/proxy/` |
@@ -90,7 +90,7 @@ Per request, read left → right, top → bottom:
 - Providers are configured in **tiers** (`subscription` → `cheap` → `free`) and
   tried in order; within a tier, providers are tried in order.
 - Failures (5xx, 429, 401/403, network errors) fail over to the next provider;
-  the failed one enters an **exponential cooldown** (2 s base → 30 min cap).
+  the failed one enters an **exponential cooldown** (2 s base → 5 min cap).
   Success resets. Cooldowns are per provider — one failing provider never cools
   down the others.
 - **Only connection-level errors are retried**: a dial refused/reset or an
@@ -361,7 +361,7 @@ install.sh               curl installer (latest release → ~/.local/bin)
 internal/update/         release discovery, checksums, atomic replace
 internal/config/         JSON config + routre.env + SIGHUP reload
 internal/router/         tiers, failover, cooldowns (exponential backoff)
-internal/rtk/            token compression (12 filters + autodetect)
+internal/rtk/            token compression (11 filters + autodetect)
 internal/cache/          exact-match LRU + prefix ordering
 internal/proxy/          HTTP gateway, SSE relay, key injection, /ui dashboard,
                          candidateRunner (retry/refresh/Emitted), per-phase Phases

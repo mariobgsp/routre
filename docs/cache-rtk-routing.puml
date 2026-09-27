@@ -1,164 +1,147 @@
 @startuml routre-internals
 !pragma layout smetana
-!theme plain
 skinparam backgroundColor #FFFFFF
 skinparam defaultFontColor #1A1A1A
 skinparam shadowing false
 skinparam roundCorner 8
-skinparam rectangle {
-  BackgroundColor #FAFAFA
-  BorderColor #4A6FA5
-  FontColor #111111
-  FontSize 11
-}
+skinparam rectangleBackgroundColor #FAFAFA
+skinparam rectangleBorderColor #4A6FA5
+skinparam rectangleFontColor #000000
+skinparam rectangleFontSize 11
 skinparam arrowColor #555555
 skinparam arrowThickness 1.2
 skinparam noteBackgroundColor #FFF8E1
 skinparam noteBorderColor #D4A017
+skinparam noteFontColor #333333
 skinparam noteFontSize 10
-skinparam titleFontColor #111111
-skinparam titleFontSize 17
 skinparam packageBackgroundColor #FFFFFF
 skinparam packageBorderColor #999999
-skinparam packageTitleFontSize 13
+skinparam packageFontColor #333333
+skinparam PackageTitleFontSize 13
 skinparam nodesep 50
 skinparam ranksep 65
 
-title routre — Cache, RTK & Tiered Routing — Internals
+title routre - RTK, cache and tiered routing, inside the pipeline
 
 left to right direction
 
 ' =================== RTK ===================
-package "RTK — 12 heuristic filters (no LM, no network)" as RTK_PKG {
-  rectangle "Autodetect\ntool_result kind\n→ pick filter" as DETECT #FFF3E0
-  rectangle "git-diff\n10 lines/hunk\n80/30 trim" as F1 #FFFFFF
-  rectangle "git-log\n50/15 trim" as F2 #FFFFFF
-  rectangle "grep\n80/40 trim" as F3 #FFFFFF
-  rectangle "tree / ls / find\ngit-status\ndedup" as F4 #FFFFFF
-  rectangle "build-output\n50/25 trim" as F5 #FFFFFF
-  rectangle "read-numbered\nsearch-list\ndedup" as F6 #FFFFFF
-  rectangle "smart-truncate\nhead 120 / tail 60\n(fallback)" as F7 #FFFFFF
-  rectangle "Fail-open guard\nmalformed JSON → passthrough\nnever grows payload\n500 B – 10 MiB window" as GUARD #FFEBEE
+package "RTK - 11 heuristic filters, no LM and no network" as RTK_PKG {
+  rectangle "Autodetect\nscore the first 1 KiB,\napply the best filter" as DETECT #FFF3E0
+  rectangle "git-diff\ngit-log\ngit-status" as F1 #FFFFFF
+  rectangle "grep\nfind\nls\ntree" as F2 #FFFFFF
+  rectangle "read-numbered\nsearch-list\ndedup-log" as F3 #FFFFFF
+  rectangle "build-output" as F4 #FFFFFF
+  rectangle "smart-truncate\nfallback when no filter\nmatches" as F5 #FFFFFF
+  rectangle "routre level\nblank lines out, repeated\nruns collapsed, head+tail" as F6 #FFFFFF
+  rectangle "Envelope guard\nnever-grow: a bigger result\nis thrown away, and the\nsaved-token metric with it" as GUARD #FFEBEE
   DETECT --> F1
   DETECT --> F2
   DETECT --> F3
   DETECT --> F4
   DETECT --> F5
-  DETECT --> F6
-  DETECT --> F7
-  F1 --> GUARD
-  F2 --> GUARD
-  F3 --> GUARD
-  F4 --> GUARD
-  F5 --> GUARD
+  F1 --> F6
+  F2 --> F6
+  F3 --> F6
+  F4 --> F6
+  F5 --> F6
   F6 --> GUARD
-  F7 --> GUARD
 }
 
 ' =================== CACHE ===================
-package "Cache — exact-match LRU, post-RTK" as CACHE_PKG {
-  rectangle "Key derivation\nCanonicalJSON(body)\n(sort keys, stable numbers)\n→ SHA-256 hex" as KEY #E8F5E9
-  rectangle "Prefix ordering\n(cache.prefix_order)\nsystem msgs first →\nstable prompt-cache prefix" as PREFIX #E8F5E9
-  rectangle "Lookup\nGetWithReason(key)\n→ hit / MissReason" as LOOKUP #FFFFFF
-  rectangle "Miss reasons\n(matrix)" as MISS #FFFFFF
-  rectangle "Store (Put)\ncap 8 MiB/entry\n128 MiB total\nLRU evict oldest" as STORE #FFFFFF
-  rectangle "Streaming replay\ncaptured SSE frames\nbyte-identical replay\nshape-aware (SSE≠JSON)" as STREAM #E3F2FD
-  rectangle "Billing-accurate hit\ncredited = stored\npromptTokens (upstream)\nnot length estimate" as BILL #FFFDE7
-
-  KEY --> PREFIX
-  PREFIX --> LOOKUP
-  LOOKUP --> MISS
-  LOOKUP --> STREAM
+package "Cache - exact match on the processed body" as CACHE_PKG {
+  rectangle "Prefix order\nsystem messages first,\nso the shared prefix is\nstable upstream" as PREFIX #E8F5E9
+  rectangle "Key\nv2: + sha256(canonical JSON)\nthe stream flag is\ndropped before hashing" as KEY #E8F5E9
+  rectangle "Lookup\nGetWithReason ->\nhit or a miss reason" as LOOKUP #FFFFFF
+  rectangle "Store\nLRU 16384 entries,\n7d TTL sliding on,\n128 MiB, 8 MiB per entry" as STORE #FFFFFF
+  rectangle "Streaming capture\nframes kept and replayed\nbyte-identical" as STREAM #E3F2FD
+  rectangle "Billing\na hit credits the stored\nupstream prompt tokens" as BILL #FFFDE7
+  PREFIX --> KEY
+  KEY --> LOOKUP
   LOOKUP --> BILL
+  LOOKUP --> STREAM
   STREAM --> STORE
-  MISS --> STORE : "miss → upstream\n→ then Put"
 }
 
 ' =================== ROUTING ===================
-package "Router — tiered failover + cooldown" as ROUTE_PKG {
-  rectangle "Tiers (config order)\nsubscription → cheap → free\nproviders tried in order" as TIERS #F3E5F5
-  rectangle "forward_unknown\n true → unknown model tries all tiers\n false → strict whitelist" as FWD #FFFFFF
-  rectangle "Cooldown\nper-provider, exponential\n2s base → 30m cap\nsuccess resets" as COOL #FFEBEE
-  rectangle "Retry-After honored\nupstream Retry-After = floor\nnever shortens backoff" as RA #FFFFFF
-  rectangle "candidateRunner\n+ transient retry 500 ms\n+ 1 free auth-refresh on 401\n+ Emitted guard" as RUNNER2 #FFF3E0
-  rectangle "Probe + Router sync\nGET {base}/models every 6h\n+ startup + SIGHUP\n`serve` persists new IDs
-`models sync` one-shot + --prune" as PROBE2 #E3F2FD
-
+package "Router - ordered tiers, cooldown, bounded failover" as ROUTE_PKG {
+  rectangle "Tiers\nconfig order, then the\nconfigured fallbacks list" as TIERS #F3E5F5
+  rectangle "forward_unknown\ntrue by default: an unknown\nmodel tries every tier" as FWD #FFFFFF
+  rectangle "Cooldown\n2s base, exponential,\n5 min cap, success resets" as COOL #FFEBEE
+  rectangle "Retry-After\nhonoured as the floor,\ncapped at 30s" as RA #FFFFFF
+  rectangle "Classes\nclient / auth / credits /\noverloaded / timeout /\nnetwork" as CLASS #FFFFFF
+  rectangle "candidateRunner\n30s per request and per\ncandidate, 1 network retry,\n1 auth refresh, Emitted guard" as RUNNER2 #FFF3E0
+  rectangle "Discovery\nGET {base}/models every 6h\n(+/- 5m jitter), persisted\nadditively" as PROBE2 #E3F2FD
   TIERS --> FWD
   FWD --> COOL
   COOL --> RA
-  RA --> RUNNER2
+  RA --> CLASS
+  CLASS --> RUNNER2
   PROBE2 ..> TIERS
 }
 
 ' ============ CROSS LINKS ============
-GUARD ..> KEY : "processed body\n(post-RTK)"
-STORE ..> TIERS : "miss → candidates"
+GUARD ..> KEY : "processed body\nfeeds the key"
+STORE ..> TIERS : "miss -> candidates"
 BILL ..> STORE
 
 note right of DETECT
-  **Bench-gated ≥90%**
-  aggregate 91.5%
-  worst 90.3% (tree-ls)
-  `routre bench` fails build
-  if either < 90%
+  Bench-gated at 90%
+  `make bench` / CI run
+  `go run . bench -target 90`
+  over every tool-output shape;
+  below the gate the build fails.
 end note
 
 note right of KEY
-  **Why canonical?**
-  Whitespace / key order
-  variance no longer
-  misses — same logical
-  request → same key.
-  Benchmark: N variants
-  collapse to 1 upstream.
+  Why canonical JSON?
+  Whitespace and key order stop
+  causing misses, and the
+  `stream` field is excluded, so
+  the same logical request always
+  lands on the same entry.
 end note
 
-note right of MISS
-  **MissReason (metrics + /v1/status)**
-  · disabled — cache off
-  · absent — never cached
-  · expired — TTL elapsed
-  · shape_mismatch — SSE entry
-    asked as JSON (or reverse)
-  Legacy `routre_cache_misses_total`
-  kept; new
-  `routre_cache_misses_by_reason_total{reason}`
-  for dominant-cause view.
+note right of LOOKUP
+  Miss reasons, counted in
+  routre_cache_misses_by_reason_total:
+  disabled, absent, expired,
+  shape_mismatch.
+  The legacy
+  routre_cache_misses_total
+  is still exported.
 end note
 
 note bottom of STREAM
-  **Streaming vs JSON isolation**
-  Same key can hold either shape, depending how first request arrived.
-  Lookup serves only matching kind — prevents broken replays
-  (e.g. JSON told to client expecting SSE frames).
-  Mid-stream abort → never stored.
-end note
-
-note right of STORE
-  **Defaults (v0.3.4+)**
-  16384 entries · 7d TTL
-  sliding TTL ON → hot
-  entries never expire
-  Prefix order ON
-  128 MiB total cap
-  Sliding refresh on hit.
+  Streaming and JSON never cross.
+  One key can hold either shape,
+  depending on how the first request
+  arrived; a lookup serves only the
+  matching kind, so a client asking
+  for JSON is never handed SSE
+  frames. A mid-stream abort is
+  never stored.
 end note
 
 note right of COOL
-  **Per-provider isolation**
-  One 503 provider never
-  cools others. `doctor`
-  + `/v1/status` surface
-  per-provider remaining
-  cooldown + class.
+  Per-provider isolation: one
+  failing provider never cools
+  another. Cooldown 5 min, not 30:
+  a 60 s provider blip must not
+  become a half-hour outage.
+  doctor and /v1/status show the
+  remaining time and class.
 end note
 
 note bottom of RUNNER2
-  **Honest errors**
-  model_not_found only when no provider can serve the model
-  providers_unavailable when every capable provider is cooling (Retry-After tells you to wait)
-  all_providers_failed carries full attempts[] log
+  Honest errors.
+  model_not_found only when no
+  provider can serve the model.
+  providers_unavailable when every
+  capable provider is cooling, with a
+  Retry-After worth believing.
+  all_providers_failed carries the
+  full attempts[] log.
 end note
 
 @enduml

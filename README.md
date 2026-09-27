@@ -151,7 +151,7 @@ Reproduce with `make build test bench`.
 main.go, bench.go, setup.go, start.go, stop.go, list.go, logs.go, models.go, update.go
 internal/proxy/          HTTP gateway, SSE relay, /ui dashboard, failover runner
 internal/router/         tiers, failover, cooldowns
-internal/rtk/            token compression (12 filters)
+internal/rtk/            token compression (11 filters)
 internal/cache/          exact-match LRU
 internal/proxy/dialect/  cross-dialect SSE translation
 tests/                   binary-level e2e suite (drives the real `routre serve`)
