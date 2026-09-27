@@ -1,23 +1,42 @@
-# tests
+# tests — binary-level e2e suite
 
-This folder holds integration / e2e tests for `routre`.
+This folder holds `routre`'s **end-to-end** tests. Unlike the unit tests under
+`internal/`, these drive the real `routre` binary as a child process: they build
+it, write a config, boot `routre serve` against mock upstreams, and talk to it
+over HTTP exactly like a coding agent would. Flag parsing, config loading, the
+bind address, the HTTP surface, and process shutdown are all real here — not
+simulated.
 
 ## Layout
 
-- **Unit tests** stay colocated with their packages (`*_test.go` next to `*.go`) — this is idiomatic Go and lets tests access unexported helpers without exporting them.
-  - `list_test.go`, `setup_test.go`, `start_test.go`, `stop_test.go` at the repo root test the `main` package's CLI helpers.
-  - `internal/*/*_test.go` test each internal package.
+- `harness_test.go` — builds the binary once, boots `routre serve` on a random
+  port against `internal/mock` upstreams, isolates `ROUTRE_CLI_DATA_DIR` into a
+  temp dir, and provides HTTP/CLI helpers.
+- `e2e_test.go` — the scenarios: health, models, chat, streaming, `/v1/messages`,
+  `/v1/responses`, failover, cache, auth, `/ui`, `/metrics`, `notfound`, the
+  usage ledger, and the `list`/`check`/`version` CLI subcommands.
 
-- **Integration tests** (binary-level, cross-package) live here in `tests/`:
-  - `tests/integration_test.go` — builds the `routre` binary and exercises `routre check`, `routre list`, `routre bench`, and the `/healthz` + `/ui` endpoints.
-
-Run everything:
+Run:
 
 ```bash
-go test ./...
-go test ./tests -v   # integration only
+go test ./tests -v   # e2e only
+go test ./...        # everything (unit + e2e)
 ```
 
-## Why not move all `_test.go` into `tests/`?
+## What is intentionally NOT here
 
-Moving `package main` tests (e.g. `start_test.go`) into `tests/` would put them in a different package directory, so they could no longer access unexported functions like `startManaged` or `runCommand` without exporting them. Keeping unit tests next to their source is the standard Go layout and keeps the diff small.
+Unit tests stay colocated with their packages (`*_test.go` next to `*.go`).
+These test things with no meaningful e2e equivalent — an e2e test of a BPE token
+count or a keystore crypto round-trip is slower *and* less precise:
+
+- `internal/tokenize/` — exact BPE token counts
+- `internal/rtk/` — compression ratio (also a CI gate via `routre bench`)
+- `internal/keystore/` — AES-GCM round-trip / tamper handling
+- `internal/proxy/dialect/` — JSON translation shapes
+- the **fuzz** targets (`FuzzSSEFrame`, `FuzzRTKApply`) and **benchmarks** —
+  both are CI gates and cannot be expressed as e2e cases
+
+`internal/proxy/` and `internal/router/` keep unit tests for internal
+invariants the e2e surface cannot reach (failover budget slices, first-byte
+watchdog races, envelope key derivation). Request-lifecycle cases that the e2e
+now covers (health, models, status, metrics, cache hit) live in `tests/`.

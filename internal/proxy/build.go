@@ -5,8 +5,10 @@ import (
 	"github.com/mariobgsp/routre/internal/router"
 )
 
-// tiersFromConfig converts config tiers into router inputs.
-func tiersFromConfig(c config.Config) []router.TierInput {
+// TiersFromConfig converts config tiers into router inputs. It is the
+// single home for the config -> router mapping: main's buildRouter and the
+// gateway's SIGHUP reload both go through it, so the two can never drift.
+func TiersFromConfig(c config.Config) []router.TierInput {
 	tiers := make([]router.TierInput, 0, len(c.Tiers))
 	for _, t := range c.Tiers {
 		provs := make([]router.ProviderInput, 0, len(t.Providers))
