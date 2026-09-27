@@ -401,18 +401,9 @@ func cmdCheck(cfgPath string, logger *log.Logger) error {
 }
 
 func buildRouter(cfg config.Config) *router.Router {
-	tiers := make([]router.TierInput, 0, len(cfg.Tiers))
-	for _, t := range cfg.Tiers {
-		provs := make([]router.ProviderInput, 0, len(t.Providers))
-		for _, p := range t.Providers {
-			provs = append(provs, router.ProviderInput{
-				Name: p.Name, Kind: string(p.Kind), BaseURL: p.BaseURL,
-				APIKeyEnv: p.APIKeyEnv, Models: p.Models, MaxTokens: p.MaxTokens,
-			})
-		}
-		tiers = append(tiers, router.TierInput{Name: t.Name, Providers: provs})
-	}
-	r := router.New(tiers, router.DefaultCooldownPolicy())
+	// TiersFromConfig is the single config->router mapping (see proxy/build.go);
+	// reusing it here keeps startup and the SIGHUP reload in sync.
+	r := router.New(proxy.TiersFromConfig(cfg), router.DefaultCooldownPolicy())
 	// Zero-config model handling: forward unknown/future models to all
 	// providers (default true). Reset preserves this across reloads.
 	r.SetForwardUnknown(cfg.ForwardUnknown)

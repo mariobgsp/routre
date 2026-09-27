@@ -25,7 +25,7 @@ import (
 //   - Streaming      : chat SSE -> responses SSE      (respToOpenAI stream
 //     translator in stream_translate.go)
 //
-// Known losses (documented in SPEC.md): the many Responses-only controls
+// Known losses (documented in docs/HOW-IT-WORKS.md): the many Responses-only controls
 // (store, metadata, previous_response_id, parallel_tool_calls, text/format,
 // reasoning effort knobs beyond max_output_tokens, ...) are dropped; tool
 // calls are carried as the OpenAI function-call dialect which opencode's

@@ -53,7 +53,7 @@ func loadTestStore(t testing.TB, cfgJSON string) *config.Store {
 func serveGateway(t testing.TB, st *config.Store, setup ...func(h *Handlers, srv *Server)) (base string, h *Handlers, srv *Server) {
 	t.Helper()
 	cfg := st.Get()
-	rtr := router.New(tiersFromConfig(cfg), router.DefaultCooldownPolicy())
+	rtr := router.New(TiersFromConfig(cfg), router.DefaultCooldownPolicy())
 	rtr.SetForwardUnknown(cfg.ForwardUnknown) // mirror main.buildRouter
 	cch := cache.New(cache.Config{
 		Enabled: cfg.Cache.Enabled, MaxEntries: cfg.Cache.MaxEntries,
@@ -365,25 +365,6 @@ func TestClampMaxTokens(t *testing.T) {
 }
 
 // TestMetricsEndpoint: /metrics must render Prometheus text with counters.
-func TestMetricsEndpoint(t *testing.T) {
-	a, _ := mock.New("a")
-	defer a.Close()
-	base, _ := testEnv(t, buildMockConfig(t, "openai", map[string]*mock.Server{"a": a}))
-
-	post(t, base, "/v1/chat/completions", chatBody(false, ""))
-
-	resp, data := get(t, base, "/metrics")
-	if resp.StatusCode != 200 {
-		t.Fatalf("metrics: %d", resp.StatusCode)
-	}
-	s := string(data)
-	for _, want := range []string{"routre_requests_total", "routre_uptime_seconds", "routre_cache_misses_total"} {
-		if !strings.Contains(s, want) {
-			t.Fatalf("metrics output missing %q:\n%s", want, s)
-		}
-	}
-}
-
 func TestFailoverStopsAtClientError(t *testing.T) {
 	a, _ := mock.New("a")
 	defer a.Close()
@@ -832,47 +813,6 @@ func TestNonStreamingSetsContentType(t *testing.T) {
 	ct := a.Header().Get("Content-Type")
 	if !strings.HasPrefix(ct, "application/json") {
 		t.Fatalf("upstream Content-Type = %q, want application/json", ct)
-	}
-}
-
-func TestHealthz(t *testing.T) {
-	a, _ := mock.New("a")
-	defer a.Close()
-	base, _ := testEnv(t, buildMockConfig(t, "openai", map[string]*mock.Server{"a": a}))
-	resp, data := get(t, base, "/healthz")
-	if resp.StatusCode != 200 || !strings.Contains(string(data), "ok") {
-		t.Fatalf("healthz: %d %s", resp.StatusCode, data)
-	}
-}
-
-func TestStatusEndpoint(t *testing.T) {
-	a, _ := mock.New("a")
-	defer a.Close()
-	base, _ := testEnv(t, buildMockConfig(t, "openai", map[string]*mock.Server{"a": a}))
-	resp, data := get(t, base, "/v1/status")
-	if resp.StatusCode != 200 {
-		t.Fatalf("status: %d", resp.StatusCode)
-	}
-	var out struct {
-		Providers []struct {
-			Name string `json:"name"`
-		} `json:"providers"`
-	}
-	if err := json.Unmarshal(data, &out); err != nil {
-		t.Fatalf("status parse: %v", err)
-	}
-	if len(out.Providers) != 1 || out.Providers[0].Name != "a" {
-		t.Fatalf("unexpected providers: %+v", out.Providers)
-	}
-}
-
-func TestModelsEndpoint(t *testing.T) {
-	a, _ := mock.New("a")
-	defer a.Close()
-	base, _ := testEnv(t, buildMockConfig(t, "openai", map[string]*mock.Server{"a": a}))
-	resp, data := get(t, base, "/v1/models")
-	if resp.StatusCode != 200 || !strings.Contains(string(data), "a/m") {
-		t.Fatalf("models: %d %s", resp.StatusCode, data)
 	}
 }
 

@@ -25,7 +25,7 @@ func translateBody(from, to Format, body []byte) ([]byte, error) {
 }
 
 // openAItoAnthropic maps an OpenAI chat request to Anthropic /v1/messages.
-// Known losses (documented in SPEC.md):
+// Known losses (documented in docs/HOW-IT-WORKS.md):
 //   - tools: not mapped (tool definitions are dropped);
 //   - image_url blocks: replaced with an omission placeholder;
 //   - function calls / tool_calls: flattened into text.
@@ -141,7 +141,7 @@ func openAItoAnthropic(body []byte) ([]byte, error) {
 }
 
 // anthropicToOpenAI maps an Anthropic /v1/messages request to OpenAI chat.
-// Known losses (documented in SPEC.md):
+// Known losses (documented in docs/HOW-IT-WORKS.md):
 //   - tool_use blocks are flattened into text (OpenAI chat has no tool_use
 //     block type);
 //   - tool_result blocks lose the tool_use_id linkage;
