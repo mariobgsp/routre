@@ -12,6 +12,46 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 > (2026-08-25). Sections marked `legacy` use the pre-rebrand
 > routre-cli numbering and are kept for history only.
 
+## [0.7.2] — 2026-09-27
+
+### Added
+
+- **Binary-level e2e suite** (`tests/`). Replaces the placeholder
+  `tests/integration_test.go` (two empty test funcs) with 23 scenarios that
+  build the real `routre` binary, boot `routre serve` against mock upstreams,
+  and drive it over HTTP — covering health, models, chat, streaming,
+  `/v1/messages`, `/v1/responses`, failover, cache, auth, `/ui`, `/metrics`,
+  the usage ledger, and the `list`/`check`/`version` CLI subcommands.
+
+### Fixed
+
+- **Non-streaming openai→anthropic client translation was missing** (found by
+  the new e2e suite). An Anthropic client (`/v1/messages`) routed to an
+  **OpenAI** provider received the raw OpenAI body. `dialect` has
+  `AnthropicToOpenAIResponse` but no `OpenAIToAnthropicResponse`, and the
+  non-streaming matrix in `internal/proxy/pipeline_eval.go` translated
+  `gemini→*` and `anthropic→openai` only. The streaming path already
+  translated this direction, which is why the previous streaming-only test
+  never caught it. The gap is pinned by
+  `TestMessagesCrossKindNonStreamingGap` (passes while present, fails once
+  fixed); the fix itself is tracked separately.
+
+### Changed
+
+- **Removed 4 request-lifecycle unit tests** (`TestHealthz`,
+  `TestModelsEndpoint`, `TestStatusEndpoint`, `TestMetricsEndpoint`) now
+  fully covered by the e2e suite. Tests with no e2e equivalent are kept:
+  BPE tokenize, RTK ratio (bench gate), keystore crypto, dialect JSON, both
+  CI **fuzz** targets, and the benchmarks.
+- **Deduplicated the config→router mapping.** `buildRouter` (main) and
+  `tiersFromConfig` (proxy) were the same conversion in two places that had
+  to stay in sync; both now go through `proxy.TiersFromConfig`. No behavior
+  change.
+- **Docs restructured** into two tiers: `README.md` is now a short briefing
+  (782 → 176 lines) and the deep internals moved to
+  [`docs/HOW-IT-WORKS.md`](docs/HOW-IT-WORKS.md). Dropped the nested
+  changelog `<details>` stacks and fixed the broken `docs/SPEC.md` link.
+
 ## [0.7.1] — 2026-09-27
 
 ### Fixed
