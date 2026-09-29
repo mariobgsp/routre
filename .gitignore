@@ -9,7 +9,17 @@ npm/@*/*/binary/
 /routre
 /routre-cli
 /routre.exe
+/routre.prev
 /cmd/mock-upstream/mock-upstream
+
+# local runtime config and secrets (never committed)
+# routre.env is the systemd unit's EnvironmentFile — it holds live provider
+# API keys. config.json is the per-machine config; config.example.json is
+# the tracked template.
+routre.env
+routre.env.*
+config.json
+config.json.bak.*
 
 # local-only design/plan documents (never committed)
 docs/superpowers/
