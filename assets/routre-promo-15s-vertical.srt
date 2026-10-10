@@ -1,0 +1,15 @@
+1
+00:00:00,000 --> 00:00:03,000
+the same session, sent twice
+
+2
+00:00:03,000 --> 00:00:07,000
+busy provider, next provider
+
+3
+00:00:07,000 --> 00:00:11,000
+measured, not promised
+
+4
+00:00:11,000 --> 00:00:15,000
+one static binary · 10.9 MiB · 12.6 MiB idle RAM

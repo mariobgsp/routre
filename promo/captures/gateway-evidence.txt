@@ -1,0 +1,192 @@
+# routre gateway evidence — captured artifact
+# command : promo/capture.sh
+# date    : 2026-09-30T22:25:32+07:00
+# branch  : develop @ 87a775e
+# go      : go version go1.27.1 linux/amd64
+#
+# Fully offline. Two instances of the repo's own cmd/mock-upstream on
+# 21097 (always 429) and 21096 (healthy); gateway on 21128.
+# No real provider, no API key, no network egress. The 429 is a real HTTP
+# 429 from the mock and the cooldown is the router's own exponential
+# backoff — but the providers are mocks, so the dollar figures below are
+# computed from the config's price_in/price_out, not billed by anyone.
+
+## FAILOVER — provider A answers 429, the client still gets 200 from B
+
+$ curl -sD - -o /dev/null -X POST /v1/chat/completions -d @body
+X-Llrouter-Cache: miss
+X-Llrouter-Provider: mock-b
+HTTP=200  total=0.028157s
+
+Note: the 429 never reaches the client. The gateway tried A, saw the
+rate limit, cooled A down and relayed B's answer. This is the point.
+
+## COOLDOWN — the same window, read from /v1/status
+
+$ curl /v1/status | jq .providers
+"providers":[{"name":"mock-a"
+"tier":"primary"
+"failures":1
+"cooldown_remaining":"2s"}
+{"name":"mock-b"
+"tier":"backup"
+"failures":0
+"cooldown_remaining":"0s"}]
+
+Cooldown policy is 2s base, doubling, capped at 5m
+(internal/router/classify.go DefaultCooldownPolicy).
+
+## CACHE — identical request twice
+
+$ ... first request
+X-Llrouter-Cache: miss
+X-Llrouter-Provider: mock-b
+HTTP=200  total=0.000701s
+$ ... identical request again
+X-Llrouter-Cache: hit
+HTTP=200  total=0.000276s
+
+Bodies byte-identical (cmp: no differences). The hit replayed from memory.
+
+## LEDGER — routre list, live gateway
+
+== configured providers ==
+  [primary] mock-a         openai    key ok   models=mock-model $3.0000/M in, $15.0000/M out
+  [backup] mock-b         openai    key ok   models=mock-model $3.0000/M in, $15.0000/M out
+
+== live gateway ==
+  mock-a         cooldown 2s (fails=1)
+  mock-b         up
+
+== token & cost ledger ==
+  source: live
+
+  curl/8.22.0
+    requests: 1
+    consumed: 0 tokens (0 in + 0 out)
+    saved:    10 tokens (rtk 0 + cache 10)
+    cost:     n/a (no prices configured)   saved: n/a
+    by provider/model:
+      curl/8.22.0/mock-model  1 req  0 tok  saved 10
+
+  promo-demo/1.0
+    requests: 3
+    consumed: 30 tokens (20 in + 10 out)
+    saved:    10 tokens (rtk 0 + cache 10)
+    prompt cache: 8 read tokens, 0 creation tokens
+    cost:     $0.000210   saved: $0.000000
+    by provider/model:
+      promo-demo/1.0/mock-model  3 req  30 tok  saved 10  cache-read 8
+
+  TOTAL
+    requests: 4
+    consumed: 30 tokens (20 in + 10 out)
+    saved:    20 tokens (40.0% of consumed)
+    cost:     $0.000210   saved: $0.000000
+
+  9-MB gateway • bench-gated 90% RTK • saved 20 tokens ($0.000000) you would have paid
+
+## LEDGER — routre list with the gateway DOWN (reads the persisted file)
+
+== configured providers ==
+  [primary] mock-a         openai    key ok   models=mock-model $3.0000/M in, $15.0000/M out
+  [backup] mock-b         openai    key ok   models=mock-model $3.0000/M in, $15.0000/M out
+
+== live gateway ==
+  not reachable at http://127.0.0.1:1 (start it with `routre serve`)
+
+== token & cost ledger ==
+  source: persisted
+
+  curl/8.22.0
+    requests: 1
+    consumed: 0 tokens (0 in + 0 out)
+    saved:    10 tokens (rtk 0 + cache 10)
+    cost:     n/a (no prices configured)   saved: n/a
+    by provider/model:
+      curl/8.22.0/mock-model  1 req  0 tok  saved 10
+
+  promo-demo/1.0
+    requests: 3
+    consumed: 30 tokens (20 in + 10 out)
+    saved:    10 tokens (rtk 0 + cache 10)
+    prompt cache: 8 read tokens, 0 creation tokens — net savings $0.000022
+    cost:     $0.000210   saved: $0.000000
+    by provider/model:
+      promo-demo/1.0/mock-model  3 req  30 tok  saved 10  cache-read 8
+
+  TOTAL
+    requests: 4
+    consumed: 30 tokens (20 in + 10 out)
+    saved:    20 tokens (40.0% of consumed)
+    cost:     $0.000210   saved: $0.000000
+
+  9-MB gateway • bench-gated 90% RTK • saved 20 tokens ($0.000000) you would have paid
+
+## /metrics — the real series names
+
+$ curl /metrics
+# HELP routre_uptime_seconds seconds since gateway start
+# TYPE routre_uptime_seconds gauge
+routre_uptime_seconds 1
+# HELP routre_requests_total chat requests by client/provider/model/class
+# TYPE routre_requests_total counter
+routre_requests_total{client="promo-demo/1.0",provider="mock-b",model="mock-model",class="ok"} 2
+# HELP routre_upstream_failures_total failovers by provider/class
+# TYPE routre_upstream_failures_total counter
+routre_upstream_failures_total{provider="mock-a",class="rate-limit"} 1
+# HELP routre_cache_hits_total exact-match cache hits
+# TYPE routre_cache_hits_total counter
+routre_cache_hits_total 2
+# HELP routre_cache_misses_total exact-match cache misses
+# TYPE routre_cache_misses_total counter
+routre_cache_misses_total 4
+# HELP routre_cache_misses_by_reason_total exact-match cache misses by reason
+# TYPE routre_cache_misses_by_reason_total counter
+routre_cache_misses_by_reason_total{reason="absent"} 2
+# HELP routre_cache_hit_ratio hits / (hits+misses), 0 when idle
+# TYPE routre_cache_hit_ratio gauge
+routre_cache_hit_ratio 0.3333
+# HELP routre_rtk_applied_total requests where RTK changed the payload
+# TYPE routre_rtk_applied_total counter
+routre_rtk_applied_total 0
+# HELP routre_rtk_saved_tokens_total tokens removed by RTK compression
+# TYPE routre_rtk_saved_tokens_total counter
+routre_rtk_saved_tokens_total 0
+# HELP routre_cache_read_tokens_total provider-reported prompt-cache hit tokens
+# TYPE routre_cache_read_tokens_total counter
+routre_cache_read_tokens_total 8
+# HELP routre_cache_creation_tokens_total provider-reported prompt-cache creation (write) tokens
+# TYPE routre_cache_creation_tokens_total counter
+routre_cache_creation_tokens_total 0
+routre_cache_creation_tokens_total{provider="mock-b"} 0
+# HELP routre_cache_savings_tokens_total estimated prompt-cache savings (read*0.9 minus write*0.25)
+# TYPE routre_cache_savings_tokens_total gauge
+routre_cache_savings_tokens_total 7
+routre_cache_savings_tokens_total{provider="mock-b"} 6
+# HELP routre_discovery_last_success_timestamp_seconds unix time of last successful model discovery (0 = never)
+# TYPE routre_discovery_last_success_timestamp_seconds gauge
+routre_discovery_last_success_timestamp_seconds 1790781932
+
+## REQUEST LOG — one real JSONL line
+
+Note: dial_ms / headers_ms / ttfb_ms are documented in
+docs/HOW-IT-WORKS.md but are never assigned anywhere in the codebase
+(Phases is built in two places and both set TotalMS only), and the
+fields are omitempty so they are silently absent. Only latency_ms and
+total_ms are real.
+
+$ tail -1 requests.jsonl
+{"ts":"2026-09-30T22:25:34+07:00","client":"curl/8.22.0","model":"mock-model","status":200,"class":"cache","prompt_tokens":20}
+
+## /v1/status — cache + rtk counters
+
+{"cache_bytes":612
+"cache_entries":2
+"cache_hit_ratio":0.42857142857142855
+"cache_miss_reasons":{"absent":2}
+"discovery_last_success":1790781932
+"rtk_applied":0
+"rtk_enabled":true
+"rtk_saved_total":0
+"uptime_seconds":2}

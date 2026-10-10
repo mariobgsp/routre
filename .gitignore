@@ -31,3 +31,7 @@ docs/SPEC.md
 specs/PLAN-*.md
 specs/SPEC-*.md
 specs/tech-architecture/
+
+# promo video (Remotion) — deps and renders are reproducible, never committed
+promo/remotion/node_modules/
+promo/remotion/out/

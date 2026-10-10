@@ -1,0 +1,40 @@
+# routre footprint — captured artifact
+# command : ./scripts/measure-ram.sh ./routre ./config.example.json 30
+#           (with a PATH shim providing `bc`, which the script uses but does not
+#            list as a dependency — see note at the bottom)
+# date    : 2026-09-30
+# branch  : develop @ 87a775e
+# go      : go1.27.1 linux/amd64
+# build   : CGO_ENABLED=0 go build -trimpath -ldflags "-s -w" -o routre .
+# note    : the listener is localhost-only with zero tiers, so the daemon is
+#           guaranteed idle. VmRSS sampled every 1s for 30s; VmHWM at the end.
+
+binary size      : 11128 KiB (10.9 MiB)
+sampling VmRSS every 1s for 30s ...
+  t= 1s  rss= 12852 KiB  peak= 12852 KiB
+  ...                                    (flat for the whole window)
+  t=30s  rss= 12852 KiB  peak= 12852 KiB
+
+== results ==
+idle avg RSS     : 12 MiB (12852 KiB)
+peak RSS (HWM)   : 12 MiB (12852 KiB)
+growth over run  : 0 MiB (sampled-window estimate)
+TARGET: PASS (idle <= 100 MiB, hard cap <= 200 MiB)
+
+# ---------------------------------------------------------------------------
+# Exact figures used by the promo (beat 06), from the values above:
+#   idle RSS     : 12852 KiB = 12.55 MiB
+#   peak RSS     : 12852 KiB = 12.55 MiB   (zero growth over the 30s window)
+#   binary size  : 11395232 B = 10.87 MiB
+#
+# These are HIGHER than the ~10 MiB / 10.6 MiB figures in README.md and
+# docs/HOW-IT-WORKS.md. Those were measured on a different machine with a
+# different Go toolchain; footprint tracks the toolchain. The promo quotes the
+# numbers in this file, because these are the ones anyone can reproduce from the
+# command above.
+#
+# Portability bug worth fixing: scripts/measure-ram.sh line 53 shells out to
+# `bc`, which is not in the documented dependencies and is absent by default on
+# several distros. `awk` would do. The capture above was taken with a minimal
+# `bc` shim on PATH rather than by editing the project's script.
+# ---------------------------------------------------------------------------
