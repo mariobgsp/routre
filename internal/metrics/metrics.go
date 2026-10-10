@@ -24,12 +24,16 @@ type Metrics struct {
 	cacheMBy   map[string]int64 // miss reason -> count
 	rtkSave    int64
 	rtkApplied int64
-	cacheRd    int64
-	cacheCr    int64            // prompt-cache creation tokens (1.25x writes), global sum
-	cacheCrBy  map[string]int64 // per-provider creation tokens (provider -> tokens)
-	cacheSv    int64            // estimated prompt-cache savings tokens, global sum
-	cacheSvBy  map[string]int64 // per-provider net savings (provider -> net tokens)
-	discTS     int64            // last successful model-discovery unix seconds (0 = never)
+	rtkPartial int64
+	// cacheCapSkip counts streaming captures dropped because the stream
+	// exceeded the per-entry cap (a prefix is not a replayable answer).
+	cacheCapSkip map[string]int64
+	cacheRd      int64
+	cacheCr      int64            // prompt-cache creation tokens (1.25x writes), global sum
+	cacheCrBy    map[string]int64 // per-provider creation tokens (provider -> tokens)
+	cacheSv      int64            // estimated prompt-cache savings tokens, global sum
+	cacheSvBy    map[string]int64 // per-provider net savings (provider -> net tokens)
+	discTS       int64            // last successful model-discovery unix seconds (0 = never)
 	// models is the set of model labels already minted; reservedModels holds
 	// the configured model names, which are never folded into "_other".
 	// client/provider/class are naturally bounded; only the model dimension is
@@ -50,6 +54,7 @@ func New() *Metrics {
 		req:            map[string]int64{},
 		fail:           map[string]int64{},
 		cacheMBy:       map[string]int64{},
+		cacheCapSkip:   map[string]int64{},
 		cacheCrBy:      map[string]int64{},
 		cacheSvBy:      map[string]int64{},
 		models:         map[string]struct{}{},
@@ -129,6 +134,44 @@ func (m *Metrics) CacheMissReason(reason string) {
 		m.cacheMBy[reason]++
 	}
 	m.mu.Unlock()
+}
+
+// RTKPartial counts requests where the RTK budget elapsed before every segment
+// was visited. The payload is still valid (never-grow); compression just
+// stopped early to keep the request path fast.
+func (m *Metrics) RTKPartial() {
+	m.mu.Lock()
+	m.rtkPartial++
+	m.mu.Unlock()
+}
+
+// RTKPartialCount reports the over-budget compression count.
+func (m *Metrics) RTKPartialCount() int64 {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.rtkPartial
+}
+
+// CacheCaptureSkipped counts streaming captures dropped for a reason
+// (currently "truncated": the stream exceeded the per-entry byte cap).
+func (m *Metrics) CacheCaptureSkipped(reason string) {
+	if reason == "" {
+		reason = "unknown"
+	}
+	m.mu.Lock()
+	m.cacheCapSkip[reason]++
+	m.mu.Unlock()
+}
+
+// CacheCaptureSkippedByReason snapshots the dropped-capture counters.
+func (m *Metrics) CacheCaptureSkippedByReason() map[string]int64 {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	out := make(map[string]int64, len(m.cacheCapSkip))
+	for k, v := range m.cacheCapSkip {
+		out[k] = v
+	}
+	return out
 }
 
 // RTKSaved adds saved-token counts from RTK compression.
@@ -234,6 +277,14 @@ func (m *Metrics) WriteProm(w io.Writer) {
 	fmt.Fprintf(w, "# HELP routre_rtk_saved_tokens_total tokens removed by RTK compression\n")
 	fmt.Fprintf(w, "# TYPE routre_rtk_saved_tokens_total counter\n")
 	fmt.Fprintf(w, "routre_rtk_saved_tokens_total %d\n", m.rtkSave)
+	fmt.Fprintf(w, "# HELP routre_rtk_partial_total compressions stopped early by the RTK time budget\n")
+	fmt.Fprintf(w, "# TYPE routre_rtk_partial_total counter\n")
+	fmt.Fprintf(w, "routre_rtk_partial_total %d\n", m.rtkPartial)
+	fmt.Fprintf(w, "# HELP routre_cache_capture_skipped_total streaming captures dropped, by reason\n")
+	fmt.Fprintf(w, "# TYPE routre_cache_capture_skipped_total counter\n")
+	for _, k := range sortedKeys(m.cacheCapSkip) {
+		fmt.Fprintf(w, "routre_cache_capture_skipped_total{reason=%q} %d\n", k, m.cacheCapSkip[k])
+	}
 	fmt.Fprintf(w, "# HELP routre_cache_read_tokens_total provider-reported prompt-cache hit tokens\n")
 	fmt.Fprintf(w, "# TYPE routre_cache_read_tokens_total counter\n")
 	fmt.Fprintf(w, "routre_cache_read_tokens_total %d\n", m.cacheRd)

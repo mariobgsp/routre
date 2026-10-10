@@ -20,6 +20,9 @@ fmt:
 
 check: vet test bench
 
+diagrams:
+	./scripts/render-diagrams.sh
+
 install: build
 	install -Dm755 routre $(PREFIX)/bin/routre
 	install -Dm644 config.example.json $(PREFIX)/etc/routre/config.json

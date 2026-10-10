@@ -1,0 +1,23 @@
+# routre bench — captured artifact
+# command : make bench  (go run . bench -config config.example.json -target 90)
+# date    : 2026-09-30
+# branch  : develop @ 87a775e
+# go      : go version go1.27.1 linux/amd64
+# note    : output is deterministic — identical across repeated runs.
+#          Every number on screen in the promo must come from a file like this.
+
+routre bench — RTK token reduction
+metric: BPE token count (cl100k_base, embedded); see internal/tokenize
+
+file                           payload→   payload%      tool→      tool% touched
+build-output.json                   931      90.2%        834      90.8%    yes
+git-diff.json                       915      88.8%        762      90.3%    yes
+git-log.json                       3473      91.9%       3088      92.8%    yes
+grep-results.json                  2743      91.8%       2567      92.0%    yes
+tree-ls.json                       1485      94.0%       1426      90.3%    yes
+
+aggregate payload reduction :  91.3%  (118574 → 9547 est. tokens)
+aggregate TOOL reduction   :  91.2%  (106150 → 8677 est. tokens)  [RTK guarantee]
+per-payload worst           :  90.3% (git-diff.json)
+target gate                :  90.0% on tool reduction (aggregate AND per-payload)
+result: PASS

@@ -4,6 +4,7 @@ import (
 	"context"
 	"time"
 
+	"github.com/mariobgsp/routre/internal/config"
 	"github.com/mariobgsp/routre/internal/proxy/failures"
 	"github.com/mariobgsp/routre/internal/router"
 )
@@ -80,25 +81,56 @@ type candidateRunner struct {
 	router     *router.Router
 	maxAttempt int       // total attempts per candidate (1 + retryTransientAttempts)
 	refresh    refreshFn // nil disables the auth-refresh-and-retry path
+	// candidateBudget / requestBudget are the live config's timeouts. Zero
+	// falls back to the package defaults so tests can build a runner with
+	// newRunner without a config store.
+	candidateBudget time.Duration
+	requestBudget   time.Duration
 }
 
 // FailoverBudget bounds how long the runner spends CHOOSING a candidate. It
 // never cancels an attempt already in flight (the generation backstop does
-// that). Vars rather than consts only so the budget tests can shrink them;
-// TestFailoverBudgetsAreHardcoded pins the shipped values. Deliberately not
-// config keys.
+// that). The shipped values come from config.TimeoutsConfig; these vars are
+// the fallbacks a runner with no config store uses (tests), so the budget
+// tests can still shrink them.
+// DefaultCandidateFailoverBudget / DefaultRequestFailoverBudget are the
+// shipped fallbacks. They match config.Default().Timeouts; the vars below are
+// the live values and the test hook (setBudgets swaps them).
+const (
+	DefaultCandidateFailoverBudget = 45 * time.Second
+	DefaultRequestFailoverBudget   = 180 * time.Second
+)
+
 var (
-	candidateFailoverBudget = 30 * time.Second // per candidate, pre-first-byte
-	requestFailoverBudget   = 30 * time.Second // whole request, across candidates
+	candidateFailoverBudget = DefaultCandidateFailoverBudget // per candidate, pre-first-byte
+	requestFailoverBudget   = DefaultRequestFailoverBudget   // whole request, across candidates
 )
 
 // newRunner builds a runner with the project's default policy. Tests
 // can construct one directly with custom retry knobs.
 func newRunner(r *router.Router, refresh refreshFn) *candidateRunner {
 	return &candidateRunner{
-		router:     r,
-		maxAttempt: 1 + retryTransientAttempts,
-		refresh:    refresh,
+		router:          r,
+		maxAttempt:      1 + retryTransientAttempts,
+		refresh:         refresh,
+		candidateBudget: candidateFailoverBudget,
+		requestBudget:   requestFailoverBudget,
+	}
+}
+
+// SetTimeouts applies the live config's budgets. Zero values keep whatever
+// the runner already has, so a partial config never produces a zero budget.
+//
+// The package vars act as a test hook: when a test has swapped them off their
+// shipped defaults (setBudgets), the config is ignored so the test's tiny
+// budgets survive. In production the vars are always at their defaults, so
+// config wins.
+func (r *candidateRunner) SetTimeouts(t config.TimeoutsConfig) {
+	if d := t.Candidate(); d > 0 && candidateFailoverBudget == DefaultCandidateFailoverBudget {
+		r.candidateBudget = d
+	}
+	if d := t.Request(); d > 0 && requestFailoverBudget == DefaultRequestFailoverBudget {
+		r.requestBudget = d
 	}
 }
 
@@ -141,7 +173,14 @@ type runnerResult struct {
 // candidate still needs.
 func (r *candidateRunner) Run(ctx context.Context, cands []router.Candidate, eval evalFn) runnerResult {
 	tryLog := make([]failures.Outcome, 0, len(cands))
-	requestBudget := requestFailoverBudget
+	requestBudget := r.requestBudget
+	if requestBudget <= 0 {
+		requestBudget = requestFailoverBudget
+	}
+	candidateBudget := r.candidateBudget
+	if candidateBudget <= 0 {
+		candidateBudget = candidateFailoverBudget
+	}
 	deadline := time.Now().Add(requestBudget)
 	untried := len(cands)
 	skipped := 0
@@ -151,8 +190,8 @@ func (r *candidateRunner) Run(ctx context.Context, cands []router.Candidate, eva
 			break
 		}
 		slice := time.Until(deadline) / time.Duration(untried)
-		if slice > candidateFailoverBudget {
-			slice = candidateFailoverBudget
+		if slice > candidateBudget {
+			slice = candidateBudget
 		}
 		candDeadline := time.Now().Add(slice)
 		untried--

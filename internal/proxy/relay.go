@@ -7,8 +7,12 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math"
 	"net/http"
+	"net/http/httptrace"
+	"strconv"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -21,7 +25,7 @@ import (
 // headers have arrived. The failover budget governs only how long the gateway
 // spends CHOOSING a candidate; a legitimate long generation must be allowed to
 // finish, so after the first byte the relay is unbounded except by this.
-const generationBackstop = 5 * time.Minute
+var generationBackstop = 5 * time.Minute
 
 // firstByteBody closes firstByte on its first successful Read. The watchdog
 // and the reader race for the body through a single CAS, so exactly one of
@@ -92,65 +96,201 @@ func watchFirstByte(body io.ReadCloser, budget time.Duration) *firstByteBody {
 	return b
 }
 
-// headerWait gives exactly one of {response returned by Do, header timer} the
-// right to decide the outcome, the same way firstByteBody does for the first
-// body byte. Without it a timer that fires just as Do returns a LIVE response
-// would cancel the request context out from under the body read: a spurious
-// failover, or on a stream a committed 200 followed by StreamAborted.
+// retryInfo carries the upstream Retry-After both parsed (cooldown policy) and
+// verbatim (client passthrough). Keeping the raw value means a deterministic
+// upstream error can be surfaced with the exact header it sent, in either the
+// seconds or the HTTP-date form.
+type retryInfo struct {
+	After time.Duration
+	Raw   string
+}
+
+func retryInfoFrom(h http.Header) retryInfo {
+	raw := h.Get("Retry-After")
+	return retryInfo{After: parseRetryAfter(raw), Raw: raw}
+}
+
+// passthroughHeaders names the model routre actually answered for and forwards
+// the upstream's Retry-After untouched, plus a whole-second cooldown_seconds
+// convenience field. Used on the verbatim-passthrough paths only.
+func passthroughHeaders(model string, retry retryInfo) http.Header {
+	h := http.Header{}
+	if model != "" {
+		h.Set("X-Routre-Model", model)
+	}
+	if retry.Raw != "" {
+		h.Set("Retry-After", retry.Raw)
+	}
+	if retry.After > 0 {
+		h.Set("cooldown_seconds", strconv.FormatInt(int64(math.Ceil(retry.After.Seconds())), 10))
+	}
+	return h
+}
+
+// attemptBudget is the adaptive wait policy for one upstream attempt.
+type attemptBudget struct {
+	// Soft is the candidate's slice: the wait for response headers, and then
+	// for the first body byte, before failover moves on.
+	Soft time.Duration
+	// Ceiling is the hard limit for the header wait when the connection is
+	// alive and the request body was accepted. 0 (or < Soft) means Soft.
+	Ceiling time.Duration
+	// Extension is the extra window granted after Soft while the socket is
+	// alive. 0 disables the extension, making Soft the ceiling.
+	Extension time.Duration
+}
+
+// upstreamTrace records how far an attempt got, so the header wait can tell a
+// slow-but-alive upstream (queued, still working) from a stuck socket.
+type upstreamTrace struct {
+	wroteRequest atomic.Bool
+	gotFirstByte atomic.Bool
+	extended     atomic.Bool
+}
+
+func (t *upstreamTrace) clientTrace() *httptrace.ClientTrace {
+	return &httptrace.ClientTrace{
+		WroteRequest:         func(httptrace.WroteRequestInfo) { t.wroteRequest.Store(true) },
+		GotFirstResponseByte: func() { t.gotFirstByte.Store(true) },
+	}
+}
+
+// alive reports whether the upstream accepted the request body, which is what
+// distinguishes "still thinking" from "connection never completed".
+func (t *upstreamTrace) alive() bool { return t.wroteRequest.Load() }
+
+// headerWait gives exactly one of {response returned by Do, soft timer, ceiling
+// timer} the right to decide the outcome, the same way firstByteBody does for
+// the first body byte. Without it a timer that fires just as Do returns a LIVE
+// response would cancel the request context out from under the body read: a
+// spurious failover, or on a stream a committed 200 followed by StreamAborted.
+//
+// The mutex (rather than a bare CAS) is what makes the one-time extension safe:
+// the soft timer can arm the ceiling timer while Do is still in flight, and the
+// claim/onTimeout paths must observe that timer atomically.
 type headerWait struct {
-	claimed atomic.Bool
+	mu      sync.Mutex
+	claimed bool
 	timer   *time.Timer
+	timer2  *time.Timer
 	cancel  context.CancelFunc
 }
 
 // claim marks the response as arrived. It reports whether this call won the
-// race against the timer; only the winner may use the response.
+// race against the timers; only the winner may use the response.
 func (w *headerWait) claim() bool {
-	if !w.claimed.CompareAndSwap(false, true) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	if w.claimed {
 		return false
 	}
-	if w.timer != nil {
-		w.timer.Stop()
-	}
+	w.claimed = true
+	w.stopTimersLocked()
 	return true
 }
 
-// onTimeout claims the wait for the timer. It cancels the request context only
+// extend arms the one-time ceiling timer. It is a no-op once the race is
+// decided, so an extension can never resurrect a settled attempt.
+func (w *headerWait) extend(d time.Duration) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	if w.claimed {
+		return
+	}
+	w.timer2 = time.AfterFunc(d, w.onTimeout)
+}
+
+// onTimeout claims the wait for the timers. It cancels the request context only
 // if the response had not already arrived, so a live body is never killed.
 func (w *headerWait) onTimeout() {
-	if w.claimed.CompareAndSwap(false, true) {
-		w.cancel()
+	w.mu.Lock()
+	if w.claimed {
+		w.mu.Unlock()
+		return
+	}
+	w.claimed = true
+	w.stopTimersLocked()
+	w.mu.Unlock()
+	w.cancel()
+}
+
+func (w *headerWait) stopTimersLocked() {
+	if w.timer != nil {
+		w.timer.Stop()
+	}
+	if w.timer2 != nil {
+		w.timer2.Stop()
 	}
 }
 
-// doWithBudget bounds the wait for response HEADERS by budget. A provider that
-// accepts the connection and then sends nothing must fail over instead of
-// holding the request until the transport's own header timeout. Exactly one of
-// {headers, timeout} wins; the returned release closes the request context once
-// the caller is done with the body. The caller bounds the body separately.
+// doWithBudget is the non-adaptive form used by tests and any caller that has
+// only one deadline: the soft budget is also the ceiling.
 func (h *Handlers) doWithBudget(req *http.Request, budget time.Duration) (*http.Response, context.CancelFunc, error) {
+	return h.doWithBudgetAdaptive(req, attemptBudget{Soft: budget, Ceiling: budget}, nil)
+}
+
+// doWithBudgetAdaptive bounds the wait for response HEADERS by the attempt's
+// adaptive budget. A provider that accepts the connection and then sends
+// nothing must fail over instead of holding the request until the transport's
+// own header timeout. Exactly one of {headers, soft timeout, ceiling timeout}
+// wins:
+//
+//   - headers arrive before Soft: the attempt proceeds and this context has no
+//     deadline left, so a long generation is unaffected;
+//   - Soft elapses while the request body was accepted and an extension is
+//     configured: one bounded ceiling window is granted instead of cancelling;
+//   - otherwise the context is cancelled and the caller fails over.
+//
+// The returned release closes the request context once the caller is done with
+// the body. The caller bounds the body separately.
+func (h *Handlers) doWithBudgetAdaptive(req *http.Request, b attemptBudget, tr *upstreamTrace) (*http.Response, context.CancelFunc, error) {
+	soft := b.Soft
+	if soft <= 0 {
+		soft = b.Ceiling
+	}
+	ceiling := b.Ceiling
+	if ceiling < soft {
+		ceiling = soft
+	}
 	reqCtx, cancel := context.WithCancel(req.Context())
 	w := &headerWait{cancel: cancel}
-	w.timer = time.AfterFunc(budget, w.onTimeout)
+	// Assign the timer under the mutex: a zero-ish soft budget can fire the
+	// callback before a bare assignment completes, which the race detector
+	// rightly flags against stopTimersLocked's read.
+	w.mu.Lock()
+	w.timer = time.AfterFunc(soft, func() {
+		if b.Extension > 0 && tr != nil && tr.alive() && ceiling > soft {
+			extra := b.Extension
+			if remaining := ceiling - soft; extra > remaining {
+				extra = remaining
+			}
+			debugf("slow upstream: headers after %s, extending %s (ceiling %s)", soft, extra, ceiling)
+			tr.extended.Store(true)
+			w.extend(extra)
+			return
+		}
+		w.onTimeout()
+	})
+	w.mu.Unlock()
 	resp, err := h.HTTPClient.Do(req.WithContext(reqCtx))
 	if err != nil {
 		if !w.claim() {
-			// The timer won and already cancelled the context: this error is
-			// the budget expiring, not an upstream failure.
+			// A timer won and already cancelled the context: this error is the
+			// budget expiring, not an upstream failure.
 			cancel()
-			return nil, nil, fmt.Errorf("no upstream response headers within %s: %w", budget, context.DeadlineExceeded)
+			return nil, nil, fmt.Errorf("no upstream response headers within %s: %w", ceiling, context.DeadlineExceeded)
 		}
 		cancel()
 		return nil, nil, err
 	}
 	if !w.claim() {
-		// The timer fired while the response was in flight, so the context is
+		// A timer fired while the response was in flight, so the context is
 		// already cancelled and this body is dead. Closing it and reporting the
 		// timeout keeps a live-looking 200 from failing on first read — or, on
 		// a stream, from reaching the client before it aborts.
 		_ = resp.Body.Close()
 		cancel()
-		return nil, nil, fmt.Errorf("no upstream response headers within %s: %w", budget, context.DeadlineExceeded)
+		return nil, nil, fmt.Errorf("no upstream response headers within %s: %w", soft, context.DeadlineExceeded)
 	}
 	// Headers arrived before the deadline: keep the context alive for the body.
 	return resp, cancel, nil
@@ -232,32 +372,40 @@ func upstreamPath(fmt apiFormat, kind, baseURL string, payload []byte, stream bo
 	}
 }
 
-func (h *Handlers) relay(ctx context.Context, w http.ResponseWriter, baseURL string, r *http.Request, payload []byte, streaming bool, kind, apiKeyEnv string, _ apiFormat, clientFmt apiFormat, firstByteBudget time.Duration, capture bool) (int, []byte, string, time.Duration, streamUsage, error) {
+func (h *Handlers) relay(ctx context.Context, w http.ResponseWriter, baseURL string, r *http.Request, payload []byte, streaming bool, kind, apiKeyEnv string, _ apiFormat, clientFmt apiFormat, budgets attemptBudget, capture bool) (int, []byte, string, retryInfo, streamUsage, error) {
 	if streaming {
-		return h.relayStream(ctx, w, baseURL, r, payload, kind, apiKeyEnv, clientFmt, firstByteBudget, capture)
+		return h.relayStream(ctx, w, baseURL, r, payload, kind, apiKeyEnv, clientFmt, budgets, capture)
 	}
 	path := upstreamPath(clientFmt, kind, baseURL, payload, false)
 	req, err := h.buildUpstreamRequest(ctx, baseURL, kind, path, payload, r, apiKeyEnv, false)
 	if err != nil {
-		return 0, nil, "", 0, streamUsage{}, err
+		return 0, nil, "", retryInfo{}, streamUsage{}, err
 	}
+	tr := &upstreamTrace{}
+	req = req.WithContext(httptrace.WithClientTrace(req.Context(), tr.clientTrace()))
 
 	headerStart := time.Now()
-	resp, release, err := h.doWithBudget(req, firstByteBudget)
+	resp, release, err := h.doWithBudgetAdaptive(req, budgets, tr)
 	if err != nil {
-		return 0, nil, "", 0, streamUsage{}, err
+		return 0, nil, "", retryInfo{}, streamUsage{}, err
 	}
 	defer release()
 
 	// The candidate's slice bounds BOTH the header wait and the first body
 	// byte: the header wait has already consumed part of it, so the watchdog
-	// gets the remainder (one candidate never occupies twice its slice). Once
-	// the first byte arrives claim() stops the timer and only the attempt
-	// context (generationBackstop) bounds the rest of the generation.
-	bodyBudget := firstByteBudget - time.Since(headerStart)
+	// gets the remainder (one candidate never occupies twice its slice). When
+	// the adaptive extension was granted the ceiling replaces the slice, so a
+	// slow-to-first-byte provider benefits too. Once the first byte arrives
+	// claim() stops the timer and only the configured generation backstop
+	// bounds the rest of the generation.
+	bodyWindow := budgets.Soft
+	if tr.extended.Load() {
+		bodyWindow = budgets.Ceiling
+	}
+	bodyBudget := bodyWindow - time.Since(headerStart)
 	if bodyBudget <= 0 {
 		_ = resp.Body.Close()
-		return 0, nil, "", 0, streamUsage{}, fmt.Errorf("no upstream body byte within %s: %w", firstByteBudget, context.DeadlineExceeded)
+		return 0, nil, "", retryInfo{}, streamUsage{}, fmt.Errorf("no upstream body byte within %s: %w", bodyWindow, context.DeadlineExceeded)
 	}
 	fb := watchFirstByte(resp.Body, bodyBudget)
 	defer fb.timer.Stop()
@@ -274,38 +422,44 @@ func (h *Handlers) relay(ctx context.Context, w http.ResponseWriter, baseURL str
 	body, err := readBody(resp.Body, limit)
 	if err != nil {
 		if fb.timedOut.Load() || errors.Is(err, errFirstByteTimeout) {
-			return 0, nil, "", 0, streamUsage{}, fmt.Errorf("no upstream body byte within %s: %w", bodyBudget, context.DeadlineExceeded)
+			return 0, nil, "", retryInfo{}, streamUsage{}, fmt.Errorf("no upstream body byte within %s: %w", bodyBudget, context.DeadlineExceeded)
 		}
-		return 0, nil, "", 0, streamUsage{}, fmt.Errorf("read upstream response: %w", err)
+		return 0, nil, "", retryInfo{}, streamUsage{}, fmt.Errorf("read upstream response: %w", err)
 	}
-	return resp.StatusCode, body, resp.Header.Get("Content-Type"), parseRetryAfter(resp.Header.Get("Retry-After")), streamUsage{}, nil
+	return resp.StatusCode, body, resp.Header.Get("Content-Type"), retryInfoFrom(resp.Header), streamUsage{}, nil
 }
 
 // relayStream streams an SSE response to the client. Non-2xx upstreams are
 // returned (not streamed) so the caller can classify and fail over.
 // Pre-first-byte errors are retryable; post-first-byte is StreamAborted.
-func (h *Handlers) relayStream(ctx context.Context, w http.ResponseWriter, baseURL string, r *http.Request, payload []byte, kind, apiKeyEnv string, from apiFormat, firstByteBudget time.Duration, capture bool) (int, []byte, string, time.Duration, streamUsage, error) {
+func (h *Handlers) relayStream(ctx context.Context, w http.ResponseWriter, baseURL string, r *http.Request, payload []byte, kind, apiKeyEnv string, from apiFormat, budgets attemptBudget, capture bool) (int, []byte, string, retryInfo, streamUsage, error) {
 	path := upstreamPath(from, kind, baseURL, payload, true)
 	req, err := h.buildUpstreamRequest(ctx, baseURL, kind, path, payload, r, apiKeyEnv, true)
 	if err != nil {
-		return 0, nil, "", 0, streamUsage{}, err
+		return 0, nil, "", retryInfo{}, streamUsage{}, err
 	}
+	tr := &upstreamTrace{}
+	req = req.WithContext(httptrace.WithClientTrace(req.Context(), tr.clientTrace()))
 
 	headerStart := time.Now()
-	resp, release, err := h.doWithBudget(req, firstByteBudget)
+	resp, release, err := h.doWithBudgetAdaptive(req, budgets, tr)
 	if err != nil {
-		return 0, nil, "", 0, streamUsage{}, err
+		return 0, nil, "", retryInfo{}, streamUsage{}, err
 	}
 	defer release()
 
 	// Fail pre-first-byte (retryable → failover) if the upstream stalls. For a
 	// stream the first byte is a body byte, so the watchdog gets whatever the
-	// header wait left of this candidate's slice; after it fires the relay runs
-	// unbounded.
-	bodyBudget := firstByteBudget - time.Since(headerStart)
+	// header wait left of this candidate's slice (or the adaptive ceiling when
+	// an extension was granted); after it fires the relay runs unbounded.
+	bodyWindow := budgets.Soft
+	if tr.extended.Load() {
+		bodyWindow = budgets.Ceiling
+	}
+	bodyBudget := bodyWindow - time.Since(headerStart)
 	if bodyBudget <= 0 {
 		_ = resp.Body.Close()
-		return 0, nil, "", 0, streamUsage{}, fmt.Errorf("no upstream body byte within %s: %w", firstByteBudget, context.DeadlineExceeded)
+		return 0, nil, "", retryInfo{}, streamUsage{}, fmt.Errorf("no upstream body byte within %s: %w", bodyWindow, context.DeadlineExceeded)
 	}
 	fb := watchFirstByte(resp.Body, bodyBudget)
 	defer fb.timer.Stop()
@@ -317,14 +471,14 @@ func (h *Handlers) relayStream(ctx context.Context, w http.ResponseWriter, baseU
 		body, rerr := readBody(resp.Body, maxUpstreamError)
 		if rerr != nil {
 			if fb.timedOut.Load() || errors.Is(rerr, errFirstByteTimeout) {
-				return 0, nil, "", 0, streamUsage{}, fmt.Errorf("no upstream body byte within %s: %w", bodyBudget, context.DeadlineExceeded)
+				return 0, nil, "", retryInfo{}, streamUsage{}, fmt.Errorf("no upstream body byte within %s: %w", bodyBudget, context.DeadlineExceeded)
 			}
-			return 0, nil, "", 0, streamUsage{}, rerr
+			return 0, nil, "", retryInfo{}, streamUsage{}, rerr
 		}
 		if h.Logger != nil {
 			h.Logger.Printf("[DEBUG upstream] %s%s status=%d body=%.500s payload=%.500s", baseURL, path, resp.StatusCode, string(body), string(payload))
 		}
-		return resp.StatusCode, body, resp.Header.Get("Content-Type"), parseRetryAfter(resp.Header.Get("Retry-After")), streamUsage{}, nil
+		return resp.StatusCode, body, resp.Header.Get("Content-Type"), retryInfoFrom(resp.Header), streamUsage{}, nil
 	}
 
 	to := apiFormat(dialect.KindToFormat(kind))
@@ -334,11 +488,11 @@ func (h *Handlers) relayStream(ctx context.Context, w http.ResponseWriter, baseU
 	susage, serr := h.streamRelay(w, resp, from, to, capture)
 	if serr != nil {
 		if fb.timedOut.Load() || errors.Is(serr, errFirstByteTimeout) {
-			return 0, nil, "", 0, streamUsage{}, fmt.Errorf("no upstream body byte within %s: %w", bodyBudget, context.DeadlineExceeded)
+			return 0, nil, "", retryInfo{}, streamUsage{}, fmt.Errorf("no upstream body byte within %s: %w", bodyBudget, context.DeadlineExceeded)
 		}
-		return 0, nil, "", 0, streamUsage{}, serr
+		return 0, nil, "", retryInfo{}, streamUsage{}, serr
 	}
-	return http.StatusOK, nil, "", 0, susage, nil
+	return http.StatusOK, nil, "", retryInfo{}, susage, nil
 }
 
 // streamRelay copies an SSE stream to the client (translating across dialects)
@@ -441,10 +595,11 @@ var syntheticFinishChunk = []byte(`data: {"object":"chat.completion.chunk","choi
 // cache. Always implements http.Flusher so the relay keeps flushing.
 type captureWriter struct {
 	http.ResponseWriter
-	buf     []byte
-	max     int
-	failed  bool
-	pending int // status to commit on first write/flush (0 = none)
+	buf       []byte
+	max       int
+	failed    bool
+	truncated bool // the stream exceeded max: the tee holds a prefix, never cache it
+	pending   int  // status to commit on first write/flush (0 = none)
 }
 
 // commit sends the deferred WriteHeader once, before the first body byte.
@@ -462,12 +617,16 @@ func (c *captureWriter) Write(p []byte) (int, error) {
 		c.failed = true // client gone: never cache a truncated stream
 		return n, err
 	}
-	if !c.failed && len(c.buf) < c.max {
-		room := c.max - len(c.buf)
-		if len(p) > room {
-			p = p[:room]
+	if !c.failed {
+		if len(c.buf) >= c.max {
+			// Already full: this byte belongs to a prefix we cannot replay.
+			c.truncated = true
+		} else if room := c.max - len(c.buf); len(p) > room {
+			c.truncated = true
+			c.buf = append(c.buf, p[:room]...)
+		} else {
+			c.buf = append(c.buf, p...)
 		}
-		c.buf = append(c.buf, p...)
 	}
 	return n, nil
 }
@@ -479,9 +638,18 @@ func (c *captureWriter) Flush() {
 	}
 }
 
-// withCaptured attaches the captured bytes to a successful stream usage.
+// withCaptured attaches the captured bytes to a successful stream usage. A
+// truncated tee is reported as captureTruncated and never yields captured
+// bytes: replaying a prefix would hand the client a broken stream.
 func (u streamUsage) withCaptured(c *captureWriter) streamUsage {
-	if c != nil && !c.failed && len(c.buf) > 0 {
+	if c == nil {
+		return u
+	}
+	if c.truncated {
+		u.captureTruncated = true
+		return u
+	}
+	if !c.failed && len(c.buf) > 0 {
 		u.captured = c.buf
 	}
 	return u

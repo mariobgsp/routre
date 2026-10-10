@@ -12,6 +12,55 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 > (2026-08-25). Sections marked `legacy` use the pre-rebrand
 > routre-cli numbering and are kept for history only.
 
+## [Unreleased]
+
+### Added
+
+- **Cache persistence + warm restarts.** `persist.enabled` (default true)
+  snapshots the response cache (`cache.gob.gz`, gzip+gob, 0600, atomic) and the
+  lifetime counters (`counters.json`) to the data directory on an interval
+  (`persist.interval_seconds`, default 60 s), on SIGHUP and on graceful
+  shutdown, and restores them at start-up in the background, so a restarted
+  gateway is warm instead of cold. `/v1/status` now reports
+  `cache_warm_entries`, `cache_restored_total`, `cache_persisted_at`,
+  `cache_capture_skipped` and `rtk_partial`.
+- **Adaptive, configurable upstream timeouts.** New `timeouts` block:
+  `candidate_seconds` (45), `request_seconds` (180), `header_seconds` (120),
+  `extension_seconds` (45), `generation_seconds` (300). When a candidate's
+  soft slice expires while the upstream has accepted the request body and the
+  socket is still alive, the attempt gets one bounded extension up to the header
+  ceiling instead of failing over immediately. Set `extension_seconds: 0` for
+  the previous hard-slice behaviour. This fixes the observed class of failures
+  where a healthy-but-slow provider (TTFB p99 over 20 s) was converted into a
+  503 at the 30 s budget — 358 requests in a 36k-request log died in the
+  29–31 s band.
+- **Bounded RTK work.** `rtk.scan_bytes` (default 512 KiB) head+tail-bounds an
+  oversized tool result before the filters run, and `rtk.budget_ms` (default
+  150 ms) stops compressing further segments once the budget is spent. A new
+  `routre_rtk_partial_total` counter reports over-budget compressions.
+- **Truncated streaming captures are dropped** instead of cached and replayed
+  as a broken stream: `routre_cache_capture_skipped_total{reason="truncated"}`.
+- Deterministic upstream rejections surfaced verbatim now carry
+  `X-Routre-Model` and forward the upstream `Retry-After` byte-for-byte plus a
+  whole-second `cooldown_seconds`.
+
+### Changed
+
+- `rtk.level` now defaults to `routre` (the ultra-aggressive level), matching
+  `rtk.DefaultConfig()`. The shipped benchmark moves from ≈91.2% to **94.8%
+  aggregate / 93.3% worst payload** tool-token reduction, still bench-gated at
+  ≥90%. Configs that set `level` explicitly are unchanged; set
+  `level: "standard"` for the previous behaviour.
+- Failover budgets are no longer hardcoded: `timeouts.candidate_seconds` (45)
+  and `timeouts.request_seconds` (180) replace the fixed 30 s/30 s. The
+  transport `ResponseHeaderTimeout` follows `timeouts.header_seconds` at
+  start-up (a restart is needed to change it).
+
+### Fixed
+
+- A streaming response larger than the cache's per-entry cap is no longer
+  stored as a truncated prefix and replayed to a later client.
+
 ## [0.7.2] — 2026-09-27
 
 ### Added

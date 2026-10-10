@@ -34,17 +34,17 @@ For install/quickstart see the [README](../README.md).
 | Step | What happens | Where in code |
 |------|--------------|---------------|
 | **1 — Format detect** | `OpenAI / Anthropic / Responses API` detected from path + body; `/v1/responses` → OpenAI translation | `internal/proxy/dialect/` |
-| **2 — RTK** | 12 heuristic filters on `tool_result` bodies — ≥90% fewer tokens, fail-open, no LM, 500 B–10 MiB window | `internal/rtk/` |
+| **2 — RTK** | 11 heuristic filters on `tool_result` bodies — ≥90% fewer tokens, fail-open, no LM, 500 B–10 MiB window | `internal/rtk/` |
 | **3 — Cache** | SHA-256 of canonical JSON (post-RTK) → LRU hit/miss; streaming & JSON never cross; `shape_mismatch` tracked | `internal/cache/` |
-| **4 — Router** | Tiered `subscription → cheap → free`, per-provider cooldown `2s→30m`, `Retry-After` honored, `forward_unknown` | `internal/router/` |
+| **4 — Router** | Tiered `subscription → cheap → free`, per-provider cooldown `2s→5m`, `Retry-After` honored, `forward_unknown` | `internal/router/` |
 | **5 — candidateRunner** | 1× immediate connection-level retry + 1 free auth-refresh on 401/403 + `Emitted` guard; failover budget up to 30 s per candidate, bounded by the 30 s request budget while providers remain | `internal/proxy/runner.go` |
 | **6 — Dialect** | OpenAI ↔ Anthropic ↔ Gemini SSE state machine, flushed frame-by-frame, no buffering | `internal/proxy/dialect/` |
 | **7 — Relay** | `http.Transport` tuned (MaxConns 64, H2); first-byte watchdog bounded by the candidate's slice, then a 5-minute generation backstop | `internal/proxy/` |
 
 > **Observability** (left out of the hot path): per-phase
 > `dial_ms / headers_ms / ttfb_ms / total_ms` → JSONL, `GET /metrics`
-> (Prometheus), `routre doctor` + `probe`. **Footprint**: ~10.6 MiB binary,
-> ~10 MiB idle RSS, ~26 ms p50 added on a 1 MiB tool-heavy body.
+> (Prometheus), `routre doctor` + `probe`. **Footprint**: 10.9 MiB binary,
+> 12.6 MiB idle RSS, ~26 ms p50 added on a 1 MiB tool-heavy body.
 
 ---
 
@@ -90,7 +90,7 @@ Per request, read left → right, top → bottom:
 - Providers are configured in **tiers** (`subscription` → `cheap` → `free`) and
   tried in order; within a tier, providers are tried in order.
 - Failures (5xx, 429, 401/403, network errors) fail over to the next provider;
-  the failed one enters an **exponential cooldown** (2 s base → 30 min cap).
+  the failed one enters an **exponential cooldown** (2 s base → 5 min cap).
   Success resets. Cooldowns are per provider — one failing provider never cools
   down the others.
 - **Only connection-level errors are retried**: a dial refused/reset or an
@@ -100,15 +100,26 @@ Per request, read left → right, top → bottom:
   the request budget, so one provider's retry can never starve an untried
   healthy one.
 - **The failover budget bounds candidate selection, not the generation**: each
-  candidate gets up to 30 s, bounded by the 30 s request budget while
-  several providers remain — whichever is smaller. That window covers the wait
-  for the upstream's response headers and for its first body byte, and it is
-  spent once: the header wait and the first byte draw on the same slice. Once a
-  first byte has arrived the timer stops and only the 5-minute generation
-  backstop applies, so a legitimate long generation is never killed — a client
-  can therefore see a request run past 30 s. If the budget runs out before a
-  candidate is tried, the 503 says so with a `failover_budget` attempt instead
-  of blaming a provider that was never asked.
+  candidate gets a soft slice (`timeouts.candidate_seconds`, default **45 s**),
+  bounded by the whole-request budget (`timeouts.request_seconds`, default
+  **180 s**) while several providers remain — whichever is smaller. That window
+  covers the wait for the upstream's response headers and for its first body
+  byte, and it is spent once: the header wait and the first byte draw on the same
+  slice. Once a first byte has arrived the timer stops and only the generation
+  backstop (`timeouts.generation_seconds`, default 5 minutes) applies, so a
+  legitimate long generation is never killed — a client can therefore see a
+  request run past the soft slice.
+- **The extension is adaptive, not blind waiting**: when the soft slice expires
+  but the upstream already accepted the request body (checked with
+  `httptrace.WroteRequest`) and the socket is still alive, the attempt gets one
+  bounded extension (`timeouts.extension_seconds`, default 45 s) up to the
+  header ceiling (`timeouts.header_seconds`, default 120 s). A stuck socket is
+  still abandoned at the ceiling and failover proceeds; a slow-but-healthy
+  provider is no longer turned into a 503 at the soft slice. This is the fix for
+  the observed "provider answered at 27 s, gateway gave up at 30 s" failures.
+  Set `extension_seconds: 0` to restore the old hard-slice behaviour. If the
+  budget runs out before a candidate is tried, the 503 says so with a
+  `failover_budget` attempt instead of blaming a provider that was never asked.
 - **Auth rotation is recovered**: on a 401/403 the gateway re-reads the
   `routre.env` key file and, if the API key changed, retries the same provider
   once with the fresh key before failing over.
@@ -190,9 +201,14 @@ Heuristic compression of `tool_result` content — no local LM, no network calls
 | smart-truncate (fallback) | head 120 / tail 60 |
 
 Safety contract: **fail-open** (malformed JSON passes through), **never grows** a
-payload, 500 B–10 MiB window, per-request safe. The `bench` command measures
-reduction on 5 realistic tool-heavy payloads and gates **both the aggregate
-(91.5%) and the worst per-payload (90.3%)** at ≥90%.
+payload, 500 B–10 MiB window, per-request safe. Work is additionally bounded:
+`rtk.scan_bytes` (default 512 KiB) reduces an oversized tool result to its
+head+tail before the filters run, and `rtk.budget_ms` (default 150 ms) stops
+compressing further segments once the budget is spent — what was compressed
+stays compressed, so the result is still valid and never larger. The `bench`
+command measures reduction on 5 realistic tool-heavy payloads and gates **both
+the aggregate (94.8%) and the worst per-payload (93.3%)** at ≥90% on the
+shipped `routre` level (`level: standard` measures ≈ 91%).
 
 Internals: autodetect `tool_result` kind → matched filter → fail-open guard.
 
@@ -221,6 +237,19 @@ Internals: autodetect `tool_result` kind → matched filter → fail-open guard.
 - Cache hits record their token savings in the ledger — credited with the
   **upstream-reported** prompt token count stored on the cached response, so the
   ledger matches the provider's billing numbers.
+- **The cache stays warm across restarts.** With `persist.enabled` (default
+  true) the cache is snapshotted to `<data dir>/cache.gob.gz` (gzip + gob, mode
+  0600, atomic temp+rename) on autosave (`persist.interval_seconds`, default
+  60 s), on SIGHUP and on graceful shutdown, and restored in the background at
+  start-up. A live entry always wins over a stale snapshot for the same key;
+  capacity limits still apply. The lifetime counters (hits, misses by reason,
+  RTK savings, prompt-cache reads) are snapshotted to `counters.json` at the
+  same time, so the dashboard and `routre list` report lifetime numbers, not
+  since-restart ones. `persist.enabled: false` disables both.
+- **A truncated capture is never cached.** A streaming response larger than the
+  8 MiB per-entry cap is a prefix, not a replayable answer, so the capture is
+  dropped (`routre_cache_capture_skipped_total{reason="truncated"}`) and the
+  next identical request goes upstream instead of replaying a broken stream.
 
 ---
 
@@ -326,15 +355,17 @@ Measured on this machine:
 
 | Metric | Result | Target |
 | --- | --- | --- |
-| RTK tool-token reduction (bench, 5 tool-heavy payloads) | **91.5%** | ≥ 90% (aggregate **and** per-payload) |
-| Worst per-payload tool reduction | 90.3% (tree-ls) | ≥ 90% |
+| RTK tool-token reduction (bench, 5 tool-heavy payloads) | **91.2%** | ≥ 90% (aggregate **and** per-payload) |
+| Worst per-payload tool reduction | 90.3% (git-diff) | ≥ 90% |
 | RTK payload-token reduction (whole request bodies) | **91.3%** | reported |
-| Idle RSS (`scripts/measure-ram.sh`) | **10 MiB** | ≤ 100 MiB |
+| Idle RSS (`scripts/measure-ram.sh`) | **12.6 MiB** | ≤ 100 MiB |
 | Peak RSS under live opencode load (3 sessions) | 12.9 MiB | ≤ 200 MiB hard cap |
-| Binary size (`CGO_ENABLED=0`, `-s -w`) | **10.6 MiB** | small |
+| Binary size (`CGO_ENABLED=0`, `-s -w`) | **10.9 MiB** | small |
 | Gateway-added latency (1 MiB body) | ~26 ms p50 / ~28 ms p99 | small |
 
-Reproduce:
+Measured on go1.27.1 linux/amd64. Bench and footprint track the toolchain, so
+an earlier one reported ~10 MiB idle / 10.6 MiB binary; the raw captures live in
+[`promo/captures/`](../promo/captures/). Reproduce:
 
 ```bash
 make build test bench        # bench gates 90% (fails on regression)
@@ -361,7 +392,7 @@ install.sh               curl installer (latest release → ~/.local/bin)
 internal/update/         release discovery, checksums, atomic replace
 internal/config/         JSON config + routre.env + SIGHUP reload
 internal/router/         tiers, failover, cooldowns (exponential backoff)
-internal/rtk/            token compression (12 filters + autodetect)
+internal/rtk/            token compression (11 filters + autodetect)
 internal/cache/          exact-match LRU + prefix ordering
 internal/proxy/          HTTP gateway, SSE relay, key injection, /ui dashboard,
                          candidateRunner (retry/refresh/Emitted), per-phase Phases

@@ -49,12 +49,17 @@ func emptyAttemptsBody(model string) []byte {
 // writeUpstreamError surfaces a deterministic upstream failure verbatim.
 // Rendering "all providers failed" instead would hide an actionable client
 // error (bad prompt, bad max_tokens) behind a 503.
-func writeUpstreamError(w http.ResponseWriter, status int, ct string, body []byte, model string) {
+func writeUpstreamError(w http.ResponseWriter, status int, ct string, body []byte, model string, retry retryInfo) {
 	if status < 400 {
 		status = http.StatusBadGateway
 	}
 	if len(body) == 0 {
 		body = []byte(fmt.Sprintf(`{"error":{"message":"upstream returned HTTP %d","type":"upstream_error","model":%q}}`, status, model))
+	}
+	for k, vv := range passthroughHeaders(model, retry) {
+		for _, v := range vv {
+			w.Header().Set(k, v)
+		}
 	}
 	writeStatus(w, status, body, ct)
 }
@@ -107,6 +112,9 @@ func (p *Pipeline) Stream(ctx context.Context, req Request, w http.ResponseWrite
 		p.metrics.RTKApplied()
 	}
 	p.metrics.RTKSaved(int64(env.rtkSaved))
+	if env.rtkPartial {
+		p.metrics.RTKPartial()
+	}
 	processed := env.body
 	// Streaming replay cache: byte-identical SSE captures stay
 	// self-consistent (tool ids, finish_reason, [DONE]) by construction.
@@ -162,6 +170,7 @@ func (p *Pipeline) Stream(ctx context.Context, req Request, w http.ResponseWrite
 	// closure below is the per-attempt work; the runner owns the
 	// iteration policy.
 	runner := newRunner(p.router, p.handlers.refreshCredentials)
+	runner.SetTimeouts(p.cfg.Get().Timeouts)
 	result := runner.Run(ctx, cands, func(ctx context.Context, cand router.Candidate, attempt int, budget time.Duration) evalResult {
 		return p.streamEval(ctx, cand, attempt, w, header, api, requested, body, env, client, clientFmt, budget)
 	})
@@ -221,13 +230,13 @@ func (p *Pipeline) streamEval(ctx context.Context, cand router.Candidate, _ int,
 	streamCtx, cancel := context.WithCancel(ctx) // streams run unbounded
 	defer cancel()
 	relayStart := time.Now()
-	status, errBody, ct, retryAfter, susage, rerr := p.handlers.relay(streamCtx, w, cand.Provider.Provider.BaseURL, dummyReq, payload, true, kind, cand.Provider.Provider.APIKeyEnv, api, clientFmt, budget, cacheableRequest(clientFmt, processed))
+	status, errBody, ct, retryAfter, susage, rerr := p.handlers.relay(streamCtx, w, cand.Provider.Provider.BaseURL, dummyReq, payload, true, kind, cand.Provider.Provider.APIKeyEnv, api, clientFmt, p.attemptBudget(budget), cacheableRequest(clientFmt, processed))
 	// One sanitized retry for providers that renamed a caller-bound field.
 	if rerr == nil && clientFmt == fmtResponses && isReasoningStateError(status, errBody) {
 		if sanitized := sanitizeResponsesPayload(processed); string(sanitized) != string(processed) {
 			if sp, serr := p.preparePayload(api, clientFmt, cand, requested, sanitized); serr == nil {
 				debugf("reasoning-state retry for %q", requested)
-				status, errBody, ct, retryAfter, susage, rerr = p.handlers.relay(streamCtx, w, cand.Provider.Provider.BaseURL, dummyReq, sp, true, kind, cand.Provider.Provider.APIKeyEnv, api, clientFmt, budget, cacheableRequest(clientFmt, processed))
+				status, errBody, ct, retryAfter, susage, rerr = p.handlers.relay(streamCtx, w, cand.Provider.Provider.BaseURL, dummyReq, sp, true, kind, cand.Provider.Provider.APIKeyEnv, api, clientFmt, p.attemptBudget(budget), cacheableRequest(clientFmt, processed))
 			}
 		}
 	}
@@ -255,7 +264,10 @@ func (p *Pipeline) streamEval(ctx context.Context, cand router.Candidate, _ int,
 				Written: &streamWritten{Status: http.StatusBadGateway, Provider: cand.Provider.Provider.Name},
 			}
 		}
-		p.router.ReportFailureWithBackoff(cand.Provider, class, retryAfter)
+		p.router.ReportFailureWithBackoff(cand.Provider, class, retryAfter.After)
+		if class == router.ErrTimeout || class == router.ErrNetwork {
+			p.handlers.CloseIdleUpstream()
+		}
 		return evalResult{Err: rerr, Class: class, Retryable: true}
 	}
 	if status >= 200 && status < 300 {
@@ -270,7 +282,10 @@ func (p *Pipeline) streamEval(ctx context.Context, cand router.Candidate, _ int,
 		p.metrics.CacheCreation(cand.Provider.Provider.Name, susage.cacheCreation)
 		p.metrics.Request(client, cand.Provider.Provider.Name, requested, "ok")
 		// Streaming replay cache: safe-prefix only, never caller-bound state.
-		if cacheableRequest(clientFmt, processed) && len(susage.captured) > 0 {
+		// A truncated capture is a prefix, not an answer: never store it.
+		if susage.captureTruncated {
+			p.metrics.CacheCaptureSkipped("truncated")
+		} else if cacheableRequest(clientFmt, processed) && len(susage.captured) > 0 {
 			p.cache.Put(env.key, cache.Entry{
 				Body: susage.captured, ContentType: "text/event-stream",
 				PromptTokens: susage.prompt, CompletionTokens: susage.completion,
@@ -290,7 +305,7 @@ func (p *Pipeline) streamEval(ctx context.Context, cand router.Candidate, _ int,
 		// ReportFailure is a cooldown no-op for ErrCredits (the
 		// provider may still serve free variants).
 		p.metrics.Failure(cand.Provider.Provider.Name, class.String())
-		p.router.ReportFailureWithBackoff(cand.Provider, class, retryAfter)
+		p.router.ReportFailureWithBackoff(cand.Provider, class, retryAfter.After)
 		return evalResult{Err: fmt.Errorf("provider %s: status %d (%v)", cand.Provider.Provider.Name, status, class), Class: class, Retryable: false}
 	}
 	if !router.IsRetryableClass(class) {
@@ -306,7 +321,7 @@ func (p *Pipeline) streamEval(ctx context.Context, cand router.Candidate, _ int,
 		// here is what turned commandcode's "maximum context length is
 		// 1048576 tokens" 400 into an unactionable
 		// "all providers failed" with an empty attempts[] array.
-		writeUpstreamError(w, status, ct, errBody, requested)
+		writeUpstreamError(w, status, ct, errBody, requested, retryAfter)
 		p.metrics.Failure(cand.Provider.Provider.Name, class.String())
 		return evalResult{
 			OK:        true,
@@ -319,7 +334,7 @@ func (p *Pipeline) streamEval(ctx context.Context, cand router.Candidate, _ int,
 		}
 	}
 	p.metrics.Failure(cand.Provider.Provider.Name, class.String())
-	p.router.ReportFailureWithBackoff(cand.Provider, class, retryAfter)
+	p.router.ReportFailureWithBackoff(cand.Provider, class, retryAfter.After)
 	return evalResult{Err: fmt.Errorf("provider %s: status %d (%v)", cand.Provider.Provider.Name, status, class), Class: class, Retryable: true}
 }
 

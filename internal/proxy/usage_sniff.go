@@ -31,6 +31,9 @@ type streamUsage struct {
 	// client on a cleanly completed stream, for the streaming replay cache.
 	// Nil when capture was skipped or the client went away.
 	captured []byte
+	// captureTruncated is true when the stream exceeded the per-entry capture
+	// cap: the tee holds only a prefix, which is never a replayable answer.
+	captureTruncated bool
 }
 
 // usageCarryMax bounds the partial-line carry buffer. An upstream that never

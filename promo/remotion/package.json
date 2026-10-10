@@ -1,0 +1,36 @@
+{
+  "name": "routre-promo",
+  "version": "0.1.0",
+  "description": "Promo video for routre — the 10-MB gateway you forget is running",
+  "repository": "https://github.com/mariobgsp/routre",
+  "license": "MIT",
+  "private": true,
+  "dependencies": {
+    "@remotion/cli": "4.0.530",
+    "@remotion/google-fonts": "4.0.530",
+    "@remotion/transitions": "4.0.530",
+    "react": "19.2.3",
+    "react-dom": "19.2.3",
+    "remotion": "4.0.530"
+  },
+  "devDependencies": {
+    "@remotion/eslint-config-flat": "4.0.530",
+    "@types/react": "19.2.7",
+    "@types/web": "0.0.166",
+    "eslint": "9.39.5",
+    "prettier": "3.8.1",
+    "typescript": "5.9.3"
+  },
+  "scripts": {
+    "dev": "remotion studio",
+    "build": "remotion bundle",
+    "upgrade": "remotion upgrade",
+    "lint": "eslint src && tsc",
+    "still": "remotion still",
+    "render:hero": "remotion render Hero30 out/hero30.mp4",
+    "render:bumper": "remotion render Bumper15 out/bumper15.mp4",
+    "render:master": "remotion render Master60 out/master60.mp4",
+    "render:story": "remotion render Story15 out/story15.mp4",
+    "render:all": "npm run render:master && npm run render:hero && npm run render:bumper && npm run render:story"
+  }
+}

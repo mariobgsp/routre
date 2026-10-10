@@ -1,0 +1,51 @@
+1
+00:00:00,000 --> 00:00:08,000
+this is the normal afternoon
+
+2
+00:00:08,000 --> 00:00:16,000
+pay again for the same context
+
+3
+00:00:16,000 --> 00:00:24,000
+and then the run stops
+
+4
+00:00:24,000 --> 00:00:28,000
+three problems. one address. that is all routre does
+
+5
+00:00:28,000 --> 00:00:31,500
+the same session, sent twice
+
+6
+00:00:31,500 --> 00:00:34,000
+point your agent at one address
+
+7
+00:00:34,000 --> 00:00:38,500
+tool output shrinks before it's billed
+
+8
+00:00:38,500 --> 00:00:44,500
+the wheel turns. most of it never gets billed
+
+9
+00:00:44,500 --> 00:00:48,500
+ask twice, pay once
+
+10
+00:00:48,500 --> 00:00:53,500
+busy provider, next provider
+
+11
+00:00:53,500 --> 00:00:58,000
+measured, not promised
+
+12
+00:00:58,000 --> 00:01:01,000
+see every token
+
+13
+00:01:01,000 --> 00:01:04,000
+one static binary · 10.9 MiB · 12.6 MiB idle RAM

@@ -29,12 +29,14 @@ import (
 	"os/signal"
 	"path/filepath"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 
 	"github.com/mariobgsp/routre/internal/cache"
 	"github.com/mariobgsp/routre/internal/config"
 	"github.com/mariobgsp/routre/internal/keystore"
+	"github.com/mariobgsp/routre/internal/metrics"
 	"github.com/mariobgsp/routre/internal/probe"
 	"github.com/mariobgsp/routre/internal/proxy"
 	"github.com/mariobgsp/routre/internal/reqlog"
@@ -171,12 +173,26 @@ func cmdServe(cfgPath, port string, logger *log.Logger, debug ...bool) error {
 	}()
 
 	rtr := buildRouter(cfg)
-	cch := cache.New(cache.Config{
-		Enabled: cfg.Cache.Enabled, MaxEntries: cfg.Cache.MaxEntries,
-		TTLSeconds: cfg.Cache.TTLSeconds, PrefixOrder: cfg.Cache.PrefixOrder,
-		MaxBytes: cfg.Cache.MaxBytes, SlidingTTL: cfg.Cache.SlidingTTL,
-	})
-	tk := rtk.New(rtk.Config{Enabled: cfg.RTK.Enabled, MinBytes: cfg.RTK.MinBytes, MaxBytes: cfg.RTK.MaxBytes, Level: cfg.RTK.Level})
+	cch := cache.New(cache.FromConfig(cfg.Cache))
+	tk := rtk.New(rtk.Config{Enabled: cfg.RTK.Enabled, MinBytes: cfg.RTK.MinBytes, MaxBytes: cfg.RTK.MaxBytes, Level: cfg.RTK.Level, ScanBytes: cfg.RTK.ScanBytes, BudgetMS: cfg.RTK.BudgetMS})
+
+	// Persistence: the response cache and the lifetime counters survive a
+	// restart, so a restarted gateway is warm instead of cold. Best-effort:
+	// every failure is logged and the gateway keeps serving.
+	persistDir := cfg.Persist.Dir
+	if persistDir == "" {
+		persistDir = dataDir()
+	}
+	cachePath := filepath.Join(persistDir, "cache.gob.gz")
+	countersPath := filepath.Join(persistDir, "counters.json")
+	persistEvery := time.Duration(cfg.Persist.IntervalSeconds) * time.Second
+	if persistEvery <= 0 {
+		persistEvery = time.Minute
+	}
+	var savePersist func(why string)
+	// The autosave ticker and the signal loop both persist; the mutex keeps
+	// two snapshots from racing on the same temp file.
+	var savePersistMu sync.Mutex
 
 	// Model auto-discovery: fetch each provider's own /v1/models list at
 	// startup, then refresh periodically and on SIGHUP reload. Additive
@@ -224,6 +240,53 @@ func cmdServe(cfgPath, port string, logger *log.Logger, debug ...bool) error {
 
 	h = proxy.NewHandlers(st, rtr, cch, tk, logger, use)
 	h.Listen = listen // effective bind address, for the dashboard
+	if cfg.Persist.Enabled {
+		// Restore in the background: serving starts immediately and a request
+		// that arrives first simply misses. A live entry always wins over the
+		// snapshot for the same key.
+		go func() {
+			n, skipped, err := cache.LoadFile(cch, cachePath)
+			switch {
+			case err == nil:
+				logger.Printf("cache warm: restored %d answers (%d skipped) from %s", n, skipped, cachePath)
+			case os.IsNotExist(err):
+				logger.Printf("cache warm: no snapshot yet at %s", cachePath)
+			default:
+				logger.Printf("cache warm: %v (starting cold)", err)
+			}
+			if cs, cerr := metrics.LoadCounters(countersPath); cerr == nil {
+				h.Metrics.RestoreCounters(cs)
+			} else if !os.IsNotExist(cerr) {
+				logger.Printf("counters restore: %v", cerr)
+			}
+			h.SetCacheWarm(n, time.Now())
+		}()
+		savePersist = func(why string) {
+			savePersistMu.Lock()
+			defer savePersistMu.Unlock()
+			if err := cache.SaveFile(cch, cachePath); err != nil {
+				logger.Printf("cache save (%s) failed: %v", why, err)
+			}
+			if err := metrics.SaveCounters(h.Metrics, countersPath); err != nil {
+				logger.Printf("counters save (%s) failed: %v", why, err)
+			}
+			h.TouchCachePersisted(time.Now())
+		}
+		ticker := time.NewTicker(persistEvery)
+		defer ticker.Stop()
+		persistStop := make(chan struct{})
+		defer close(persistStop)
+		go func() {
+			for {
+				select {
+				case <-ticker.C:
+					savePersist("autosave")
+				case <-persistStop:
+					return
+				}
+			}
+		}()
+	}
 	if ts := rtr.LastDiscoveryUnix(); ts > 0 {
 		h.Metrics.SetDiscoveryTimestamp(time.Unix(ts, 0))
 	}
@@ -294,10 +357,16 @@ func cmdServe(cfgPath, port string, logger *log.Logger, debug ...bool) error {
 				if serr := use.Save(); serr != nil {
 					logger.Printf("usage save on reload failed: %v", serr)
 				}
+				if savePersist != nil {
+					savePersist("reload")
+				}
 			case syscall.SIGINT, syscall.SIGTERM:
 				logger.Printf("shutting down")
 				if err := use.Save(); err != nil {
 					logger.Printf("usage save failed: %v", err)
+				}
+				if savePersist != nil {
+					savePersist("shutdown")
 				}
 				if probeRunner != nil {
 					probeRunner.Stop()
@@ -430,30 +499,25 @@ func totalProviders(c config.Config) int {
 
 // usageFilePath returns the persisted usage location (ROUTRE_CLI_DATA_DIR
 // override, else ~/.routre/usage.json).
-func usageFilePath() string {
+func usageFilePath() string { return filepath.Join(dataDir(), "usage.json") }
+
+// dataDir returns the shared data directory (ROUTRE_CLI_DATA_DIR override,
+// else ~/.routre) used by the ledger, the cache snapshot and the counters.
+func dataDir() string {
 	if dir := os.Getenv("ROUTRE_CLI_DATA_DIR"); dir != "" {
-		return filepath.Join(dir, "usage.json")
+		return dir
 	}
 	home, err := os.UserHomeDir()
 	if err != nil {
 		home = "."
 	}
-	return filepath.Join(home, ".routre", "usage.json")
+	return filepath.Join(home, ".routre")
 }
 
 // authTokenPath returns the per-process CLI token location (used when
 // gateway auth is enabled, so the local CLI can authenticate without the
 // user pasting the shared secret into flags).
-func authTokenPath() string {
-	if dir := os.Getenv("ROUTRE_CLI_DATA_DIR"); dir != "" {
-		return filepath.Join(dir, "auth.tok")
-	}
-	home, err := os.UserHomeDir()
-	if err != nil {
-		home = "."
-	}
-	return filepath.Join(home, ".routre", "auth.tok")
-}
+func authTokenPath() string { return filepath.Join(dataDir(), "auth.tok") }
 
 // mintProcessToken generates a random 32-byte token, writes it to auth.tok
 // (0600), and returns it. Called by serve at startup when auth is enabled.

@@ -14,9 +14,12 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"strings"
+	"sync"
+	"time"
+
 	"github.com/mariobgsp/routre/internal/config"
 	"github.com/mariobgsp/routre/internal/tokenize"
-	"sync"
 )
 
 // Config controls compression behavior. The zero value is not usable;
@@ -37,12 +40,24 @@ type Config struct {
 	// "lost in the middle" finding). Still obeys the fail-open contract:
 	// output is used only when strictly smaller.
 	Level string `json:"level,omitempty"`
+	// ScanBytes bounds the bytes any single tool result may put through the
+	// filter pipeline. A larger result is first reduced to its head+tail
+	// (line-snapped, with an omission marker) so a 10 MiB blob cannot make
+	// one request do multi-MiB line-splitting work. 0 = no bound. The
+	// default (512 KiB) is far above real tool output, so filters still see
+	// whole payloads in practice.
+	ScanBytes int `json:"scan_bytes,omitempty"`
+	// BudgetMS is the wall-clock budget for compressing one request body.
+	// Once exceeded, the remaining segments are left verbatim; what was
+	// already compressed is returned (never-grow contract preserved).
+	// 0 = no budget.
+	BudgetMS int `json:"budget_ms,omitempty"`
 }
 
 // DefaultConfig matches 9router RTK's operating window (500B..10MiB), on by
 // default.
 func DefaultConfig() Config {
-	return Config{Enabled: true, MinBytes: 500, MaxBytes: 10 << 20, Level: "routre"}
+	return Config{Enabled: true, MinBytes: 500, MaxBytes: 10 << 20, Level: "routre", ScanBytes: 512 << 10, BudgetMS: 150}
 }
 
 // RTK is a concurrency-safe compressor with a reloadable config.
@@ -57,10 +72,12 @@ func New(cfg Config) *RTK { return &RTK{cfg: cfg} }
 // Update swaps the config (called on SIGHUP reload).
 func (r *RTK) Reconfigure(cfg config.Config) {
 	r.Update(Config{
-		Enabled:  cfg.RTK.Enabled,
-		MinBytes: cfg.RTK.MinBytes,
-		MaxBytes: cfg.RTK.MaxBytes,
-		Level:    cfg.RTK.Level,
+		Enabled:   cfg.RTK.Enabled,
+		MinBytes:  cfg.RTK.MinBytes,
+		MaxBytes:  cfg.RTK.MaxBytes,
+		Level:     cfg.RTK.Level,
+		ScanBytes: cfg.RTK.ScanBytes,
+		BudgetMS:  cfg.RTK.BudgetMS,
 	})
 }
 
@@ -112,7 +129,7 @@ func (r *RTK) applyWithDelta(in []byte) (out []byte, changed bool, savedTokens i
 	if err := dec.Decode(&doc); err != nil {
 		return in, false, 0
 	}
-	mutated, saved := applyDoc(cfg, doc)
+	mutated, saved, _ := applyDocBudget(cfg, doc, r.deadline(cfg))
 	if !mutated {
 		return in, false, 0
 	}
@@ -133,21 +150,46 @@ func (r *RTK) applyWithDelta(in []byte) (out []byte, changed bool, savedTokens i
 // segments rewritten. The caller owns the document and the marshal, so the
 // whole body is decoded exactly once.
 func (r *RTK) ApplyDoc(doc map[string]any) (changed bool, savedTokens int) {
+	changed, savedTokens, _ = r.ApplyDocBudget(doc)
+	return changed, savedTokens
+}
+
+// ApplyDocBudget is ApplyDoc plus the over-budget flag: partial is true when
+// cfg.BudgetMS elapsed before every segment was visited. The document is still
+// valid — the segments that were compressed stay compressed, the rest are left
+// verbatim, and the never-grow contract is unchanged.
+func (r *RTK) ApplyDocBudget(doc map[string]any) (changed bool, savedTokens int, partial bool) {
 	r.mu.RLock()
 	cfg := r.cfg
 	r.mu.RUnlock()
 	if !cfg.Enabled {
-		return false, 0
+		return false, 0, false
 	}
-	return applyDoc(cfg, doc)
+	return applyDocBudget(cfg, doc, r.deadline(cfg))
 }
 
-// applyDoc is the mutation half shared by Apply and ApplyDoc.
-func applyDoc(cfg Config, doc map[string]any) (changed bool, savedTokens int) {
+// deadline returns the instant compression must stop by, or the zero time when
+// no budget is configured.
+func (r *RTK) deadline(cfg Config) time.Time {
+	if cfg.BudgetMS <= 0 {
+		return time.Time{}
+	}
+	return time.Now().Add(time.Duration(cfg.BudgetMS) * time.Millisecond)
+}
+
+// applyDocBudget is the mutation half shared by Apply and ApplyDocBudget. It
+// stops visiting segments once deadline passes, so a body with hundreds of
+// tool results can never hold the request path for the whole budget multiplied
+// by the segment count.
+func applyDocBudget(cfg Config, doc map[string]any, deadline time.Time) (changed bool, savedTokens int, partial bool) {
 	mutated := false
 	saved := 0
+	over := func() bool { return !deadline.IsZero() && time.Now().After(deadline) }
 	if messages, ok := doc["messages"].([]any); ok {
 		for _, m := range messages {
+			if over() {
+				return mutated, saved, true
+			}
 			msg, ok := m.(map[string]any)
 			if !ok {
 				continue
@@ -161,6 +203,9 @@ func applyDoc(cfg Config, doc map[string]any) (changed bool, savedTokens int) {
 	// Bench-gated safe: same compressText, fail-open, never-grow.
 	if input, ok := doc["input"].([]any); ok {
 		for _, it := range input {
+			if over() {
+				return mutated, saved, true
+			}
 			m, ok := it.(map[string]any)
 			if !ok {
 				continue
@@ -170,7 +215,7 @@ func applyDoc(cfg Config, doc map[string]any) (changed bool, savedTokens int) {
 			}
 		}
 	}
-	return mutated, saved
+	return mutated, saved, false
 }
 
 // recordSaved accumulates the estimated token delta of one rewritten segment.
@@ -319,11 +364,21 @@ func compressMessage(cfg Config, msg map[string]any, saved *int) bool {
 
 // compressText applies the filter pipeline to one tool_result string.
 // Returns the compressed text and whether it shrank.
+//
+// Work is bounded by cfg.ScanBytes: a result larger than the window is first
+// reduced to its head+tail with an omission marker, so every downstream filter
+// (line splitting, regex scoring, dedup) runs over a bounded string. The
+// result is compared against the ORIGINAL length, so a bounded input still
+// satisfies the never-grow contract.
 func compressText(cfg Config, text string) (string, bool) {
 	if len(text) < cfg.MinBytes || len(text) > cfg.MaxBytes {
 		return text, false
 	}
-	cand := filterByAutodetect(text)
+	work := text
+	if cfg.ScanBytes > 0 && len(work) > cfg.ScanBytes {
+		work = headTailBytes(work, cfg.ScanBytes/2, cfg.ScanBytes/2)
+	}
+	cand := filterByAutodetect(work)
 	if cand == "" || len(cand) >= len(text) {
 		return text, false
 	}
@@ -334,6 +389,28 @@ func compressText(cfg Config, text string) (string, bool) {
 		return text, false
 	}
 	return cand, true
+}
+
+// headTailBytes returns a bounded view of text: the first headBytes and the
+// last tailBytes, snapped to line boundaries, with an omission marker between
+// them. Unlike truncateAt it never splits the input into lines, so a multi-MiB
+// blob costs O(headBytes+tailBytes) instead of one string per line.
+func headTailBytes(text string, headBytes, tailBytes int) string {
+	if headBytes < 0 || tailBytes < 0 || len(text) <= headBytes+tailBytes {
+		return text
+	}
+	head := text[:headBytes]
+	if i := strings.LastIndexByte(head, '\n'); i > 0 {
+		head = head[:i]
+	}
+	tailStart := len(text) - tailBytes
+	if i := strings.IndexByte(text[tailStart:], '\n'); i >= 0 {
+		tailStart += i + 1
+	}
+	if tailStart <= len(head) {
+		return head
+	}
+	return head + fmt.Sprintf("\n… [%d bytes omitted]\n", tailStart-len(head)) + text[tailStart:]
 }
 
 // routrePass is the routre-level post-filter: drop blank lines, dedup
