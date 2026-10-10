@@ -99,14 +99,20 @@ func New(cfg Config) *Cache {
 // Update swaps config (SIGHUP reload). Entries are kept; eviction rules use
 // the new limits on next write.
 func (c *Cache) Reconfigure(cfg config.Config) {
-	c.Update(Config{
-		Enabled:     cfg.Cache.Enabled,
-		MaxEntries:  cfg.Cache.MaxEntries,
-		TTLSeconds:  cfg.Cache.TTLSeconds,
-		PrefixOrder: cfg.Cache.PrefixOrder,
-		MaxBytes:    cfg.Cache.MaxBytes,
-		SlidingTTL:  cfg.Cache.SlidingTTL,
-	})
+	c.Update(FromConfig(cfg.Cache))
+}
+
+// FromConfig maps the JSON config onto the runtime cache config. The CLI and
+// the SIGHUP reload path share it so the two mappings cannot drift.
+func FromConfig(c config.CacheConfig) Config {
+	return Config{
+		Enabled:     c.Enabled,
+		MaxEntries:  c.MaxEntries,
+		TTLSeconds:  c.TTLSeconds,
+		PrefixOrder: c.PrefixOrder,
+		MaxBytes:    c.MaxBytes,
+		SlidingTTL:  c.SlidingTTL,
+	}
 }
 
 func (c *Cache) Update(cfg Config) {

@@ -6,7 +6,7 @@
 //   - within a tier, providers are tried in order;
 //   - a provider in cooldown is skipped;
 //   - on failure, the provider's cooldown grows exponentially (2s base,
-//     capped at 30min);
+//     capped at 5min);
 //   - only hard failures escalate cooldown; mid-stream client aborts do not.
 package router
 

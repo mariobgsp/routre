@@ -6,6 +6,7 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"sync"
 	"time"
 
 	"github.com/mariobgsp/routre/internal/cache"
@@ -40,6 +41,37 @@ type Handlers struct {
 	// write it to config.json). Empty falls back to the config value.
 	Listen   string
 	pipeline *Pipeline
+	// cacheWarm tracks the last snapshot restore/save for /v1/status.
+	cacheWarmMu    sync.Mutex
+	cacheRestored  int
+	cachePersistAt time.Time
+}
+
+// SetCacheWarm records how many entries a snapshot restore brought back and
+// when persistence last ran. Safe to call from the persistence goroutines while
+// requests are being served.
+func (h *Handlers) SetCacheWarm(restored int, at time.Time) {
+	h.cacheWarmMu.Lock()
+	h.cacheRestored = restored
+	if !at.IsZero() {
+		h.cachePersistAt = at
+	}
+	h.cacheWarmMu.Unlock()
+}
+
+// TouchCachePersisted records a successful snapshot save without changing the
+// restored count.
+func (h *Handlers) TouchCachePersisted(at time.Time) {
+	h.cacheWarmMu.Lock()
+	h.cachePersistAt = at
+	h.cacheWarmMu.Unlock()
+}
+
+// CacheWarm reports the restored-entry count and the last snapshot time.
+func (h *Handlers) CacheWarm() (int, time.Time) {
+	h.cacheWarmMu.Lock()
+	defer h.cacheWarmMu.Unlock()
+	return h.cacheRestored, h.cachePersistAt
 }
 
 // newHTTPClient builds the upstream transport. Note: no overall timeout —
@@ -51,15 +83,21 @@ type Handlers struct {
 // ponytail: DisableCompression=true (providers negotiate Accept-Encoding).
 // ponytail: ForceAttemptHTTP2=true (explicit; default-on since Go 1.6, but
 // survives accidental transport resets).
-func newHTTPClient() *http.Client {
+func newHTTPClient(headerTimeout time.Duration) *http.Client {
+	if headerTimeout <= 0 {
+		headerTimeout = 45 * time.Second
+	}
 	transport := &http.Transport{
 		Proxy:               http.ProxyFromEnvironment,
 		DialContext:         (&net.Dialer{Timeout: 5 * time.Second, KeepAlive: 30 * time.Second}).DialContext,
 		TLSHandshakeTimeout: 5 * time.Second,
 		// Slow-LLM tolerance: deepseek-v4.1-flash TTFB p99 exceeds 20s
-		// under load; a 20s header timeout converts a slow success into
-		// a network-class failure + exponential cooldown + 503.
-		ResponseHeaderTimeout: 45 * time.Second,
+		// under load; a short header timeout converts a slow success into
+		// a network-class failure + exponential cooldown + 503. This is the
+		// transport backstop; doWithBudgetAdaptive is the real decision
+		// point and is reloadable. Changing timeouts.header_seconds needs a
+		// restart: Transport fields are not safe to mutate after first use.
+		ResponseHeaderTimeout: headerTimeout,
 		MaxIdleConns:          64,
 		// Small warm pool with fast expiry: a poisoned idle connection
 		// (e.g. stuck on a bad edge that hangs POSTs while GETs still
@@ -73,6 +111,15 @@ func newHTTPClient() *http.Client {
 		ForceAttemptHTTP2:   true,
 	}
 	return &http.Client{Transport: transport}
+}
+
+// headerTimeoutOf reads the configured header ceiling from a store, falling
+// back to the shipped default when the store is missing or unset.
+func headerTimeoutOf(st *config.Store) time.Duration {
+	if st == nil {
+		return 0
+	}
+	return st.Get().Timeouts.Header()
 }
 
 // CloseIdleUpstream drops idle keep-alive connections to upstreams.
@@ -95,7 +142,7 @@ func NewHandlers(st *config.Store, rtr *router.Router, cch *cache.Cache, tk *rtk
 		RTK:        tk,
 		Logger:     logger,
 		Start:      time.Now(),
-		HTTPClient: newHTTPClient(),
+		HTTPClient: newHTTPClient(headerTimeoutOf(st)),
 		Usage:      use,
 		Metrics:    metrics.New(),
 		Keys:       keystore.New(),
@@ -209,10 +256,20 @@ func (h *Handlers) Status(w http.ResponseWriter, _ *http.Request) {
 			CooldownRemaining: s.CooldownRemaining.Round(time.Second).String(),
 		})
 	}
+	cacheRestored, cachePersistAt := h.CacheWarm()
+	persistedAt := ""
+	if !cachePersistAt.IsZero() {
+		persistedAt = cachePersistAt.UTC().Format(time.RFC3339)
+	}
 	writeJSON(w, http.StatusOK, map[string]any{
 		"uptime_seconds":         int(time.Since(h.Start).Seconds()),
 		"cache_entries":          h.Cache.Len(),
 		"cache_bytes":            h.Cache.SizeBytes(),
+		"cache_warm_entries":     h.Cache.Len(),
+		"cache_restored_total":   cacheRestored,
+		"cache_persisted_at":     persistedAt,
+		"cache_capture_skipped":  h.Metrics.CacheCaptureSkippedByReason(),
+		"rtk_partial":            h.Metrics.RTKPartialCount(),
 		"cache_miss_reasons":     h.Metrics.CacheMissByReason(),
 		"rtk_enabled":            h.RTK.Enabled(),
 		"providers":              provs,

@@ -19,6 +19,43 @@ import (
 // after its response headers have arrived. The failover budget (runner.go)
 // governs only how long the gateway spends choosing a candidate.
 
+// generationTimeout is the configured backstop for one attempt after its first
+// byte, falling back to the shipped default when unset.
+func (p *Pipeline) generationTimeout() time.Duration {
+	if d := p.cfg.Get().Timeouts.Generation(); d > 0 {
+		return d
+	}
+	return generationBackstop
+}
+
+// attemptBudget converts a candidate's soft slice into the adaptive wait
+// policy: one bounded extension up to the configured header ceiling, granted
+// only while the socket is alive. It never shortens the slice.
+func (p *Pipeline) attemptBudget(slice time.Duration) attemptBudget {
+	b := attemptBudget{Soft: slice, Ceiling: slice}
+	// Tests swap the package budget vars (setBudgets). When they have, the
+	// config-derived extension is suppressed so the hard-slice contract those
+	// tests pin is preserved; in production the vars are always at their
+	// defaults, so the configured extension applies.
+	if candidateFailoverBudget != DefaultCandidateFailoverBudget || requestFailoverBudget != DefaultRequestFailoverBudget {
+		return b
+	}
+	t := p.cfg.Get().Timeouts
+	if t.ExtensionSeconds <= 0 || slice <= 0 {
+		return b
+	}
+	ceiling := t.Header()
+	if ceiling < slice {
+		ceiling = slice
+	}
+	if max := slice + t.Extension(); max < ceiling {
+		ceiling = max
+	}
+	b.Ceiling = ceiling
+	b.Extension = t.Extension()
+	return b
+}
+
 // isNativeResponses reports whether a base URL speaks /v1/responses natively
 // (opencode.ai/zen does; openrouter/others don't).
 func isNativeResponses(baseURL string) bool { return strings.Contains(baseURL, "opencode.ai") }
@@ -91,17 +128,17 @@ func (p *Pipeline) tryEval(ctx context.Context, cand router.Candidate, req Reque
 	kind := cand.Provider.Provider.Kind
 	ph := req.Header
 	dummyReq := &http.Request{Header: ph}
-	attemptCtx, cancel := context.WithTimeout(ctx, generationBackstop)
+	attemptCtx, cancel := context.WithTimeout(ctx, p.generationTimeout())
 	defer cancel()
 	rec := &responseRecorder{header: make(http.Header)}
 	relayStart := time.Now()
-	status, respBody, ct, retryAfter, _, rerr := p.handlers.relay(attemptCtx, rec, cand.Provider.Provider.BaseURL, dummyReq, payload, streaming, kind, cand.Provider.Provider.APIKeyEnv, api, clientFmt, budget, cacheableRequest(clientFmt, processed))
+	status, respBody, ct, retryAfter, _, rerr := p.handlers.relay(attemptCtx, rec, cand.Provider.Provider.BaseURL, dummyReq, payload, streaming, kind, cand.Provider.Provider.APIKeyEnv, api, clientFmt, p.attemptBudget(budget), cacheableRequest(clientFmt, processed))
 	if rerr == nil && clientFmt == fmtResponses && isReasoningStateError(status, respBody) {
 		if sanitized := sanitizeResponsesPayload(processed); string(sanitized) != string(processed) {
 			if sp, serr := p.preparePayload(api, clientFmt, cand, requested, sanitized); serr == nil {
 				debugf("reasoning-state retry for %q", requested)
 				rec = &responseRecorder{header: make(http.Header)}
-				status, respBody, ct, retryAfter, _, rerr = p.handlers.relay(attemptCtx, rec, cand.Provider.Provider.BaseURL, dummyReq, sp, streaming, kind, cand.Provider.Provider.APIKeyEnv, api, clientFmt, budget, cacheableRequest(clientFmt, processed))
+				status, respBody, ct, retryAfter, _, rerr = p.handlers.relay(attemptCtx, rec, cand.Provider.Provider.BaseURL, dummyReq, sp, streaming, kind, cand.Provider.Provider.APIKeyEnv, api, clientFmt, p.attemptBudget(budget), cacheableRequest(clientFmt, processed))
 			}
 		}
 	}
@@ -120,7 +157,7 @@ func (p *Pipeline) tryEval(ctx context.Context, cand router.Candidate, req Reque
 			return evalResult{OK: true, Response: &Response{StatusCode: 502, Body: []byte(fmt.Sprintf(`{"error":{"message":%q,"type":"upstream_error"}}`, rerr.Error()))}, Err: rerr, Class: class, Retryable: false, Phases: phases}
 		}
 		p.metrics.Failure(cand.Provider.Provider.Name, class.String())
-		p.router.ReportFailureWithBackoff(cand.Provider, class, retryAfter)
+		p.router.ReportFailureWithBackoff(cand.Provider, class, retryAfter.After)
 		if class == router.ErrTimeout || class == router.ErrNetwork {
 			p.handlers.CloseIdleUpstream()
 		}
@@ -186,17 +223,24 @@ func (p *Pipeline) tryEval(ctx context.Context, cand router.Candidate, req Reque
 	}
 	if class == router.ErrCredits {
 		p.metrics.Failure(cand.Provider.Provider.Name, class.String())
-		p.router.ReportFailureWithBackoff(cand.Provider, class, retryAfter)
+		p.router.ReportFailureWithBackoff(cand.Provider, class, retryAfter.After)
 		return evalResult{Err: errStatus(), Class: class, Retryable: false}
 	}
 	if !router.IsRetryableClass(class) {
 		if cand.ShouldFailoverOnClientError() {
 			return evalResult{Err: fmt.Errorf("provider %s rejected model %q (HTTP %d)", cand.Provider.Provider.Name, cand.Upstream, status), Class: class, Retryable: false}
 		}
-		return evalResult{OK: true, Response: &Response{StatusCode: status, Body: respBody, ContentType: ct}, Class: class, Retryable: false}
+		// The upstream's own answer, surfaced verbatim. Name the model routre
+		// answered for and forward its Retry-After (raw) so the client can act
+		// on exactly what the provider said.
+		hdr := passthroughHeaders(requested, retryAfter)
+		if ct != "" {
+			hdr.Set("Content-Type", ct)
+		}
+		return evalResult{OK: true, Response: &Response{StatusCode: status, Body: respBody, ContentType: ct, Header: hdr}, Class: class, Retryable: false}
 	}
 	p.metrics.Failure(cand.Provider.Provider.Name, class.String())
-	p.router.ReportFailureWithBackoff(cand.Provider, class, retryAfter)
+	p.router.ReportFailureWithBackoff(cand.Provider, class, retryAfter.After)
 	return evalResult{Err: errStatus(), Class: class, Retryable: true}
 }
 

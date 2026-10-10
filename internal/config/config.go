@@ -10,6 +10,7 @@ import (
 	"os"
 	"sort"
 	"sync"
+	"time"
 )
 
 // Kind identifies the upstream API dialect.
@@ -51,6 +52,14 @@ type RTKConfig struct {
 	MaxBytes int  `json:"max_bytes"`
 	// Level: "", "standard", or "routre" (routre level — ultra-aggressive).
 	Level string `json:"level,omitempty"`
+	// ScanBytes bounds the regex scoring window: filters score at most this
+	// many bytes of each tool result, so a 10 MiB blob cannot put
+	// unbounded regex work on the request path. 0 = default (512 KiB).
+	ScanBytes int `json:"scan_bytes,omitempty"`
+	// BudgetMS is the wall-clock budget for compressing one request body.
+	// 0 = default (150 ms). When exceeded, RTK keeps what it already
+	// compressed and returns (never-grow contract preserved).
+	BudgetMS int `json:"budget_ms,omitempty"`
 }
 
 // CacheConfig mirrors cache.Config for JSON.
@@ -75,6 +84,53 @@ type CacheConfig struct {
 	// cache_control is never rewritten or stripped. Off by default because
 	// injection changes the request body.
 	PromptCache bool `json:"prompt_cache,omitempty"`
+}
+
+// TimeoutsConfig bounds how long the gateway waits for an upstream before
+// failing over. Zero values on load mean "default"; the defaults are chosen so
+// a slow-but-healthy provider is given a real chance (45 s slice, 45 s
+// one-time extension, 120 s header ceiling) while a stuck socket still fails
+// over in bounded time.
+type TimeoutsConfig struct {
+	// CandidateSeconds: the soft slice one candidate gets for headers + first
+	// body byte before failover moves on.
+	CandidateSeconds int `json:"candidate_seconds,omitempty"`
+	// RequestSeconds: the whole-request budget across all candidates.
+	RequestSeconds int `json:"request_seconds,omitempty"`
+	// HeaderSeconds: the hard ceiling for the header wait when the connection
+	// is alive and the request body was accepted (the adaptive extension).
+	HeaderSeconds int `json:"header_seconds,omitempty"`
+	// ExtensionSeconds: how long one in-flight attempt is extended after its
+	// soft slice expires while the socket is alive. 0 disables the extension.
+	ExtensionSeconds int `json:"extension_seconds,omitempty"`
+	// GenerationSeconds: the backstop for a single attempt after its first
+	// byte; a legitimate long generation may run this long.
+	GenerationSeconds int `json:"generation_seconds,omitempty"`
+}
+
+// Candidate, Request, Header, Extension and Generation return the configured
+// durations.
+func (t TimeoutsConfig) Candidate() time.Duration {
+	return time.Duration(t.CandidateSeconds) * time.Second
+}
+func (t TimeoutsConfig) Request() time.Duration { return time.Duration(t.RequestSeconds) * time.Second }
+func (t TimeoutsConfig) Header() time.Duration  { return time.Duration(t.HeaderSeconds) * time.Second }
+func (t TimeoutsConfig) Extension() time.Duration {
+	return time.Duration(t.ExtensionSeconds) * time.Second
+}
+func (t TimeoutsConfig) Generation() time.Duration {
+	return time.Duration(t.GenerationSeconds) * time.Second
+}
+
+// PersistConfig controls the on-disk snapshot of the response cache and the
+// lifetime metric counters, so a restart starts warm instead of cold.
+type PersistConfig struct {
+	Enabled bool `json:"enabled"`
+	// Dir overrides the data directory. Empty = ROUTRE_CLI_DATA_DIR or
+	// ~/.routre.
+	Dir string `json:"dir,omitempty"`
+	// IntervalSeconds is the autosave period. 0 = default (60).
+	IntervalSeconds int `json:"interval_seconds,omitempty"`
 }
 
 // AuthConfig is the optional gateway shared-secret protection. When
@@ -109,6 +165,10 @@ type Config struct {
 	// one). IntervalSeconds=0 disables. ProbeModel is the model used to
 	// exercise each provider; "" = first listed model.
 	HealthCheck HealthCheckConfig `json:"health_check"`
+	// Timeouts bounds upstream waits (see TimeoutsConfig).
+	Timeouts TimeoutsConfig `json:"timeouts"`
+	// Persist keeps the cache (and metric counters) warm across restarts.
+	Persist PersistConfig `json:"persist"`
 	// PreferredModel: the user's default model (their preferred provider).
 	// Informational for routing — clients request it explicitly — but used
 	// by `setup` to seed the config and by `check` to display the default.
@@ -149,7 +209,7 @@ func Default() Config {
 		Listen:   "127.0.0.1:20128",
 		LogLevel: "info",
 		Tiers:    []Tier{},
-		RTK:      RTKConfig{Enabled: true, MinBytes: 0, MaxBytes: 10 << 20},
+		RTK:      RTKConfig{Enabled: true, MinBytes: 0, MaxBytes: 10 << 20, Level: "routre", ScanBytes: 512 << 10, BudgetMS: 150},
 		// Longer exact-match retention for pi agentic prefix reuse;
 		// RAM still capped by MaxBytes LRU + SlidingTTL.
 		Cache: CacheConfig{Enabled: true, MaxEntries: 16384, TTLSeconds: 604800, PrefixOrder: true, MaxBytes: 128 << 20, CanonicalKeys: true, SlidingTTL: true},
@@ -159,6 +219,12 @@ func Default() Config {
 		// Periodic health probes: off by default. Turn on to surface
 		// provider outages between real requests.
 		HealthCheck: HealthCheckConfig{Enabled: false, IntervalSeconds: 30},
+		// Adaptive budgets: a slow-but-alive provider gets 45 s, one 45 s
+		// extension while the socket is alive, and a 120 s header ceiling;
+		// a genuine generation may run 5 minutes after its first byte.
+		Timeouts: TimeoutsConfig{CandidateSeconds: 45, RequestSeconds: 180, HeaderSeconds: 120, ExtensionSeconds: 45, GenerationSeconds: 300},
+		// Cache + counters survive a restart by default.
+		Persist: PersistConfig{Enabled: true, IntervalSeconds: 60},
 	}
 }
 
@@ -203,6 +269,19 @@ func (c *Config) Validate() error {
 	if c.RTK.MinBytes < 0 || c.RTK.MaxBytes < 0 {
 		return errors.New("config: rtk byte bounds must be >= 0")
 	}
+	// 0 means "use the default bounded-work budget", not "unbounded".
+	if c.RTK.ScanBytes == 0 {
+		c.RTK.ScanBytes = 512 << 10
+	}
+	if c.RTK.BudgetMS == 0 {
+		c.RTK.BudgetMS = 150
+	}
+	if c.RTK.ScanBytes < 0 {
+		return errors.New("config: rtk.scan_bytes must be >= 0")
+	}
+	if c.RTK.BudgetMS < 0 {
+		return errors.New("config: rtk.budget_ms must be >= 0")
+	}
 	switch c.RTK.Level {
 	case "", "standard", "routre", "caveman": // caveman kept as deprecated alias for routre
 	default:
@@ -219,6 +298,39 @@ func (c *Config) Validate() error {
 	}
 	if c.Cache.MaxBytes < 0 {
 		return errors.New("config: cache.max_bytes must be >= 0")
+	}
+
+	// Timeouts: normalize the zero value to the documented defaults, then
+	// reject combinations that would make the failover contract incoherent.
+	t := &c.Timeouts
+	if t.CandidateSeconds == 0 {
+		t.CandidateSeconds = 45
+	}
+	if t.RequestSeconds == 0 {
+		t.RequestSeconds = 180
+	}
+	if t.HeaderSeconds == 0 {
+		t.HeaderSeconds = 120
+	}
+	if t.GenerationSeconds == 0 {
+		t.GenerationSeconds = 300
+	}
+	if t.CandidateSeconds < 0 || t.RequestSeconds < 0 || t.HeaderSeconds < 0 ||
+		t.ExtensionSeconds < 0 || t.GenerationSeconds < 0 {
+		return errors.New("config: timeouts values must be >= 0")
+	}
+	if t.RequestSeconds < t.CandidateSeconds {
+		return errors.New("config: timeouts.request_seconds must be >= timeouts.candidate_seconds")
+	}
+	if t.HeaderSeconds < t.CandidateSeconds {
+		return errors.New("config: timeouts.header_seconds must be >= timeouts.candidate_seconds")
+	}
+
+	if c.Persist.IntervalSeconds == 0 {
+		c.Persist.IntervalSeconds = 60
+	}
+	if c.Persist.IntervalSeconds < 0 {
+		return errors.New("config: persist.interval_seconds must be >= 0")
 	}
 	return nil
 }

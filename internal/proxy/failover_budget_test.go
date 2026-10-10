@@ -12,6 +12,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/mariobgsp/routre/internal/config"
 	"github.com/mariobgsp/routre/internal/router"
 )
 
@@ -24,17 +25,24 @@ func setBudgets(t *testing.T, candidate, request time.Duration) {
 	t.Cleanup(func() { candidateFailoverBudget, requestFailoverBudget = oldC, oldR })
 }
 
-// TestFailoverBudgetsAreHardcoded pins the shipped numbers (decision: no
-// config keys).
-func TestFailoverBudgetsAreHardcoded(t *testing.T) {
-	if candidateFailoverBudget != 30*time.Second {
-		t.Errorf("candidateFailoverBudget = %v, want 30s", candidateFailoverBudget)
+// TestFailoverBudgetsPinShippedDefaults pins the shipped fallback budgets. The
+// live values come from config.TimeoutsConfig (timeouts.*); these vars are the
+// documented defaults and the test hook setBudgets swaps.
+func TestFailoverBudgetsPinShippedDefaults(t *testing.T) {
+	if candidateFailoverBudget != DefaultCandidateFailoverBudget {
+		t.Errorf("candidateFailoverBudget = %v, want %v", candidateFailoverBudget, DefaultCandidateFailoverBudget)
 	}
-	if requestFailoverBudget != 30*time.Second {
-		t.Errorf("requestFailoverBudget = %v, want 30s", requestFailoverBudget)
+	if requestFailoverBudget != DefaultRequestFailoverBudget {
+		t.Errorf("requestFailoverBudget = %v, want %v", requestFailoverBudget, DefaultRequestFailoverBudget)
 	}
 	if generationBackstop != 5*time.Minute {
 		t.Errorf("generationBackstop = %v, want 5m", generationBackstop)
+	}
+	if got := config.Default().Timeouts.Candidate(); got != DefaultCandidateFailoverBudget {
+		t.Errorf("config default candidate budget = %v, want %v", got, DefaultCandidateFailoverBudget)
+	}
+	if got := config.Default().Timeouts.Request(); got != DefaultRequestFailoverBudget {
+		t.Errorf("config default request budget = %v, want %v", got, DefaultRequestFailoverBudget)
 	}
 }
 
@@ -182,7 +190,16 @@ func TestFirstByteBudgetIsSpentOncePerCandidate(t *testing.T) {
 	}
 }
 
+// gatewayAgainst builds a gateway against the given upstreams with the
+// adaptive extension DISABLED, so these tests exercise the hard per-candidate
+// bound they are about. The adaptive path has its own tests in timeouts_test.go.
 func gatewayAgainst(t *testing.T, kind string, urls ...string) string {
+	return gatewayAgainstTimeouts(t, `"extension_seconds":0`, kind, urls...)
+}
+
+// gatewayAgainstTimeouts is gatewayAgainst with an explicit timeouts fragment,
+// e.g. `"candidate_seconds":1,"extension_seconds":1,"header_seconds":2`.
+func gatewayAgainstTimeouts(t *testing.T, timeouts string, kind string, urls ...string) string {
 	t.Helper()
 	keys := []string{"TEST_KEY_A", "TEST_KEY_B", "TEST_KEY_C"}
 	providers := make([]string, 0, len(urls))
@@ -192,7 +209,7 @@ func gatewayAgainst(t *testing.T, kind string, urls ...string) string {
 			`{"name":"p%d","kind":"%s","base_url":"%s/v1","api_key_env":"%s","models":["m"]}`, i, kind, u, keys[i]))
 	}
 	cfg := `{"listen":"127.0.0.1:0","tiers":[{"name":"t","providers":[` + strings.Join(providers, ",") +
-		`]}],"rtk":{"enabled":false},"cache":{"enabled":false}}`
+		`]}],"rtk":{"enabled":false},"cache":{"enabled":false},"timeouts":{` + timeouts + `}}`
 	base, _ := testEnv(t, cfg)
 	return base
 }

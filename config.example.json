@@ -4,8 +4,11 @@
   "forward_unknown": true,
   "rtk": {
     "enabled": true,
+    "level": "routre",
     "min_bytes": 0,
-    "max_bytes": 10485760
+    "max_bytes": 10485760,
+    "scan_bytes": 524288,
+    "budget_ms": 150
   },
   "cache": {
     "enabled": true,
@@ -13,7 +16,20 @@
     "ttl_seconds": 86400,
     "prefix_order": true,
     "max_bytes": 67108864,
+    "canonical_keys": true,
+    "sliding_ttl": true,
     "prompt_cache": false
+  },
+  "timeouts": {
+    "candidate_seconds": 45,
+    "request_seconds": 180,
+    "header_seconds": 120,
+    "extension_seconds": 45,
+    "generation_seconds": 300
+  },
+  "persist": {
+    "enabled": true,
+    "interval_seconds": 60
   },
   "tiers": [
     {

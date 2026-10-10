@@ -106,6 +106,9 @@ func (p *Pipeline) processInternal(ctx context.Context, req Request) (Response, 
 		p.metrics.RTKApplied()
 	}
 	p.metrics.RTKSaved(int64(env.rtkSaved))
+	if env.rtkPartial {
+		p.metrics.RTKPartial()
+	}
 	processed := env.body
 	if !streaming && cacheableRequest(clientFmt, processed) {
 		e, got, missReason := p.cache.GetWithReason(env.key)
@@ -152,6 +155,7 @@ func (p *Pipeline) processInternal(ctx context.Context, req Request) (Response, 
 	}
 	if !streaming {
 		runner := newRunner(p.router, p.handlers.refreshCredentials)
+		runner.SetTimeouts(p.cfg.Get().Timeouts)
 		result := runner.Run(ctx, cands, func(ctx context.Context, cand router.Candidate, attempt int, budget time.Duration) evalResult {
 			return p.tryEval(ctx, cand, req, api, requested, body, env, streaming, client, clientFmt, budget)
 		})

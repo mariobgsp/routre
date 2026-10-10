@@ -44,6 +44,9 @@ type envelope struct {
 	key        string
 	rtkSaved   int
 	rtkChanged bool
+	// rtkPartial is true when RTK stopped early because its per-request time
+	// budget elapsed; the body is still valid and never larger.
+	rtkPartial bool
 	reordered  bool
 }
 
@@ -77,9 +80,10 @@ func (e *envelope) applyRTK(r *rtk.RTK) bool {
 	if e.doc == nil {
 		return false // RTK's byte path also refuses non-objects
 	}
-	changed, saved := r.ApplyDoc(e.doc)
+	changed, saved, partial := r.ApplyDocBudget(e.doc)
 	e.rtkChanged = e.rtkChanged || changed
 	e.rtkSaved += saved
+	e.rtkPartial = e.rtkPartial || partial
 	return changed
 }
 
