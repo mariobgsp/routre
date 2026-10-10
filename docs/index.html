@@ -845,6 +845,16 @@
         text-wrap: balance;
       }
 
+      /* ===== HERO VIDEO ===== */
+      .hero-video {
+        display: block;
+        width: 100%;
+        max-width: 960px;
+        margin: 0 0 20px;
+        border: 1px solid var(--hairline-soft);
+        background: var(--paper-3);
+      }
+
       /* ===== TERMINAL ===== */
       .terminal {
         max-width: 520px;
@@ -2366,6 +2376,18 @@
               power strip. One address, less cost, stays online when a provider
               is busy. 10 MiB, runs quietly on your computer.
             </p>
+            <video
+              class="hero-video"
+              src="../assets/routre-promo-64s-master-embed.mp4"
+              poster="../assets/routre-promo-64s-master.jpg"
+              width="960"
+              autoplay
+              muted
+              loop
+              playsinline
+              controls
+              preload="metadata"
+            ></video>
             <div class="terminal plate reveal" aria-label="Install command">
               <div class="term-head">
                 <span class="term-dots" aria-hidden="true"
@@ -2405,7 +2427,7 @@
                 <b>127.0.0.1:20128</b></span
               >
               <span class="hud-item">UPTIME <b id="uptime">00:00:00</b></span>
-              <span class="hud-item">BENCH <b>91.5%</b></span>
+              <span class="hud-item">BENCH <b>94.8%</b></span>
             </div>
           </div>
         </div>
@@ -2468,7 +2490,7 @@
                 <span class="spec-note">per request</span>
               </div>
               <div class="spec-row">
-                <span class="spec-value">91.5%</span>
+                <span class="spec-value">94.8%</span>
                 <span class="spec-label">Bench, tool reduction</span>
                 <span class="spec-note">pass 90% gate</span>
               </div>
@@ -2501,7 +2523,7 @@
               <span class="prj-index">QST-03</span>
               <h3 class="prj-name">Failover · RTK · Cache</h3>
               <p class="prj-desc">
-                Tiered providers with cooldown 2s→30m. Heuristic tool_result
+                Tiered providers with cooldown 2s→5m. Heuristic tool_result
                 filter — no LM, no DB. sha256 LRU cache + per-agent token/cost
                 ledger.
               </p>
@@ -2853,7 +2875,7 @@ routre bench -target 90   <span class="c"># gated metric, fails build on regress
           </p>
           <p class="sec-note reveal" style="margin-top: 8px">
             Need every model at once? Copy
-            <strong>config.all.json</strong> over config.json — 506 models
+            <strong>config.all.json</strong> over config.json — 509 models
             through one endpoint.
           </p>
         </div>
@@ -2911,7 +2933,7 @@ routre bench -target 90   <span class="c"># gated metric, fails build on regress
           </div>
           <p class="sec-note reveal" style="margin-top: 16px">
             Full history in <strong>CHANGELOG.md</strong> — bench-gated ≥90%
-            tool-token savings, 10.6 MiB binary, ~10 MiB idle.
+            tool-token savings, 10.9 MiB binary, 12.6 MiB idle.
           </p>
         </div>
       </section>
@@ -3097,7 +3119,7 @@ routre bench -target 90   <span class="c"># gated metric, fails build on regress
         "curl -fsSL .../install.sh | sh",
         "routre setup — ok",
         "routre serve — 127.0.0.1:20128",
-        "gate 91.5% — pass 90%",
+        "gate 94.8% — pass 90%",
         "cache hit — saved $0.42",
       ];
 
